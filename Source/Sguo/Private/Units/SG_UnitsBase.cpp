@@ -8,7 +8,13 @@
 #include "AbilitySystem/SG_AttributeSet.h"
 #include "GameFramework/CharacterMovementComponent.h"  // 必须包含
 #include "Components/CapsuleComponent.h"                // 必须包含
-#include "Kismet/GameplayStatics.h"     
+#include "Kismet/GameplayStatics.h"
+// ✨ 新增 - DataTable 相关头文件
+#include "Data/Type/SG_UnitDataTable.h"
+#include "Engine/DataTable.h"
+// ✨ 新增 - Gameplay Ability 相关头文件
+#include "AbilitySystemGlobals.h"
+#include "Abilities/GameplayAbility.h"     
 
 // 构造函数
 ASG_UnitsBase::ASG_UnitsBase()
@@ -41,6 +47,17 @@ void ASG_UnitsBase::BeginPlay()
 	Super::BeginPlay();
 	
 	UE_LOG(LogTemp, Log, TEXT("角色生成：%s"), *GetName());
+	
+	// ✨ 新增 - 从 DataTable 加载配置
+	// 如果启用了 DataTable 配置，在初始化前加载数据
+	if (bUseDataTable && UnitDataTable && !UnitDataRowName.IsNone())
+	{
+		LoadUnitDataFromTable();
+	}
+	
+	// ✨ 新增 - 授予攻击能力
+	// 在初始化后授予攻击能力
+	GrantAttackAbility();
 }
 
 // 被控制时调用
@@ -321,4 +338,355 @@ void ASG_UnitsBase::SetTarget(AActor* NewTarget)
 			UE_LOG(LogTemp, Log, TEXT("%s 清空目标"), *GetName());
 		}
 	}
+}
+
+// ========== ✨ 新增 - DataTable 相关函数实现 ==========
+
+/**
+ * @brief 从 DataTable 加载单位配置
+ * @details
+ * 功能说明：
+ * - 从 DataTable 读取指定行的数据
+ * - 应用属性到 BaseHealth、BaseAttackDamage 等
+ * - 应用攻击配置（攻击动画、投射物类等）
+ * 详细流程：
+ * 1. 检查 DataTable 和行名称是否有效
+ * 2. 从 DataTable 查找指定行
+ * 3. 读取属性值并覆盖基础属性
+ * 4. 读取攻击配置
+ * 注意事项：
+ * - 在 InitializeCharacter() 之前调用
+ * - 如果 bUseDataTable = false，不会执行
+ */
+void ASG_UnitsBase::LoadUnitDataFromTable()
+{
+	// ========== 步骤1：检查有效性 ==========
+	// 检查 DataTable 是否有效
+	if (!UnitDataTable)
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("✗ %s: UnitDataTable 为空！"), *GetName());
+		return;
+	}
+	
+	// 检查行名称是否有效
+	if (UnitDataRowName.IsNone())
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("✗ %s: UnitDataRowName 为空！"), *GetName());
+		return;
+	}
+	
+	// ========== 步骤2：查找 DataTable 行 ==========
+	// 从 DataTable 查找指定行
+	// FindRow 是 UDataTable 的模板函数，返回指定行的数据指针
+	FSGUnitDataRow* RowData = UnitDataTable->FindRow<FSGUnitDataRow>(
+		UnitDataRowName,
+		TEXT("LoadUnitDataFromTable")  // 用于错误日志的上下文
+	);
+	
+	// 检查是否找到数据
+	if (!RowData)
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("✗ %s: 在 DataTable 中找不到行 '%s'！"), 
+			*GetName(), *UnitDataRowName.ToString());
+		return;
+	}
+	
+	// 输出日志
+	UE_LOG(LogSGGameplay, Log, TEXT("========== 从 DataTable 加载单位配置 =========="));
+	UE_LOG(LogSGGameplay, Log, TEXT("  单位：%s"), *GetName());
+	UE_LOG(LogSGGameplay, Log, TEXT("  数据行：%s"), *UnitDataRowName.ToString());
+	UE_LOG(LogSGGameplay, Log, TEXT("  单位名称：%s"), *RowData->UnitName.ToString());
+	
+	// ========== 步骤3：应用属性值 ==========
+	// 从 DataTable 读取的值会覆盖 Blueprint 中设置的 Base 值
+	BaseHealth = RowData->BaseHealth;
+	BaseAttackDamage = RowData->BaseAttackDamage;
+	BaseMoveSpeed = RowData->BaseMoveSpeed;
+	BaseAttackSpeed = RowData->BaseAttackSpeed;
+	BaseAttackRange = RowData->BaseAttackRange;
+	
+	// 输出日志
+	UE_LOG(LogSGGameplay, Log, TEXT("  属性配置："));
+	UE_LOG(LogSGGameplay, Log, TEXT("    生命值：%.0f"), BaseHealth);
+	UE_LOG(LogSGGameplay, Log, TEXT("    攻击力：%.0f"), BaseAttackDamage);
+	UE_LOG(LogSGGameplay, Log, TEXT("    移动速度：%.0f"), BaseMoveSpeed);
+	UE_LOG(LogSGGameplay, Log, TEXT("    攻击速度：%.2f"), BaseAttackSpeed);
+	UE_LOG(LogSGGameplay, Log, TEXT("    攻击范围：%.0f"), BaseAttackRange);
+	
+	// ========== 步骤4：应用攻击配置 ==========
+	// 应用单位类型标签
+	if (RowData->UnitTypeTag.IsValid())
+	{
+		UnitTypeTag = RowData->UnitTypeTag;
+		UE_LOG(LogSGGameplay, Log, TEXT("  单位类型：%s"), *UnitTypeTag.ToString());
+	}
+	
+	// 应用攻击动画
+	if (RowData->AttackMontage)
+	{
+		AttackMontage = RowData->AttackMontage;
+		UE_LOG(LogSGGameplay, Log, TEXT("  攻击动画：%s"), *AttackMontage->GetName());
+	}
+	
+	// 应用投射物类（仅远程单位）
+	if (RowData->AttackType != ESGUnitAttackType::Melee && RowData->ProjectileClass)
+	{
+		ProjectileClass = RowData->ProjectileClass;
+		UE_LOG(LogSGGameplay, Log, TEXT("  投射物类：%s"), *ProjectileClass->GetName());
+	}
+	
+	// 输出日志
+	UE_LOG(LogSGGameplay, Log, TEXT("✓ 单位配置加载完成"));
+	UE_LOG(LogSGGameplay, Log, TEXT("==============================================="));
+}
+
+// ========== ✨ 新增 - 攻击系统函数实现 ==========
+
+/**
+ * @brief 授予攻击能力
+ * @details
+ * 功能说明：
+ * - 根据单位类型授予对应的攻击 Gameplay Ability
+ * - 近战单位使用 GA_Attack_Melee
+ * - 远程单位使用 GA_Attack_Ranged
+ * 详细流程：
+ * 1. 检查 ASC 是否有效
+ * 2. 根据 UnitTypeTag 确定攻击类型
+ * 3. 创建 Ability Spec 并授予能力
+ * 4. 缓存 Ability Handle 供后续使用
+ * 注意事项：
+ * - 在 BeginPlay 中自动调用
+ * - 需要先配置 UnitTypeTag
+ */
+void ASG_UnitsBase::GrantAttackAbility()
+{
+	// ========== 步骤1：检查 ASC 是否有效 ==========
+	if (!AbilitySystemComponent)
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("✗ %s: AbilitySystemComponent 为空，无法授予攻击能力！"), *GetName());
+		return;
+	}
+	
+	// ========== 步骤2：确定攻击能力类 ==========
+	// 🔧 修改 - 从 Blueprint 加载攻击能力类
+	// 根据单位类型标签确定攻击能力
+	// - Unit.Type.Infantry -> GA_Attack_Melee
+	// - Unit.Type.Cavalry -> GA_Attack_Melee
+	// - Unit.Type.Archer -> GA_Attack_Ranged
+	// - Unit.Type.Crossbow -> GA_Attack_Ranged
+	TSubclassOf<UGameplayAbility> AttackAbilityClass = nullptr;
+	
+	// 🔧 修改 - 使用可选的 GameplayTag（避免未配置时报错）
+	// 根据单位类型标签确定攻击能力
+	// 注意：第二个参数 false 表示标签不存在时不报错
+	FGameplayTag InfantryTag = FGameplayTag::RequestGameplayTag(FName("Unit.Type.Infantry"), false);
+	FGameplayTag CavalryTag = FGameplayTag::RequestGameplayTag(FName("Unit.Type.Cavalry"), false);
+	FGameplayTag ArcherTag = FGameplayTag::RequestGameplayTag(FName("Unit.Type.Archer"), false);
+	FGameplayTag CrossbowTag = FGameplayTag::RequestGameplayTag(FName("Unit.Type.Crossbow"), false);
+	
+	if ((InfantryTag.IsValid() && UnitTypeTag.MatchesTag(InfantryTag)) ||
+		(CavalryTag.IsValid() && UnitTypeTag.MatchesTag(CavalryTag)))
+	{
+		// 近战单位
+		// 从 Blueprint 加载 GA_Attack_Melee
+		UE_LOG(LogSGGameplay, Log, TEXT("  %s 为近战单位，加载 GA_Attack_Melee"), *GetName());
+		
+		// 🔧 修改 - 加载近战攻击能力 Blueprint
+		// 路径说明：/Game/Blueprints/GAS/Abilities/GA_Attack_Melee.GA_Attack_Melee_C
+		// - /Game/Blueprints/GAS/Abilities/ 是蓝图资产路径
+		// - GA_Attack_Melee 是蓝图资产名称
+		// - _C 后缀表示这是编译后的 Blueprint 类
+		AttackAbilityClass = LoadClass<UGameplayAbility>(
+			nullptr,
+			TEXT("/Game/Blueprints/GAS/Abilities/GA_Attack_Melee.GA_Attack_Melee_C")
+		);
+		
+		// 检查是否加载成功
+		if (!AttackAbilityClass)
+		{
+			UE_LOG(LogSGGameplay, Error, TEXT("✗ %s: 加载 GA_Attack_Melee 失败！请确保蓝图资产存在：/Game/Blueprints/GAS/Abilities/GA_Attack_Melee"), *GetName());
+		}
+	}
+	else if ((ArcherTag.IsValid() && UnitTypeTag.MatchesTag(ArcherTag)) ||
+			 (CrossbowTag.IsValid() && UnitTypeTag.MatchesTag(CrossbowTag)))
+	{
+		// 远程单位
+		// 从 Blueprint 加载 GA_Attack_Ranged
+		UE_LOG(LogSGGameplay, Log, TEXT("  %s 为远程单位，加载 GA_Attack_Ranged"), *GetName());
+		
+		// 🔧 修改 - 加载远程攻击能力 Blueprint
+		// 路径说明：/Game/Blueprints/GAS/Abilities/GA_Attack_Ranged.GA_Attack_Ranged_C
+		AttackAbilityClass = LoadClass<UGameplayAbility>(
+			nullptr,
+			TEXT("/Game/Blueprints/GAS/Abilities/GA_Attack_Ranged.GA_Attack_Ranged_C")
+		);
+		
+		// 检查是否加载成功
+		if (!AttackAbilityClass)
+		{
+			UE_LOG(LogSGGameplay, Error, TEXT("✗ %s: 加载 GA_Attack_Ranged 失败！请确保蓝图资产存在：/Game/Blueprints/GAS/Abilities/GA_Attack_Ranged"), *GetName());
+		}
+	}
+	else
+	{
+		// 未知单位类型
+		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 未知的单位类型 '%s'，无法授予攻击能力"), 
+			*GetName(), *UnitTypeTag.ToString());
+		return;
+	}
+	
+	// ========== 步骤3：授予能力 ==========
+	// 🔧 修改 - 授予能力（如果加载成功）
+	if (AttackAbilityClass)
+	{
+		// 创建 Ability Spec
+		// FGameplayAbilitySpec 包含能力类、等级、输入ID等信息
+		FGameplayAbilitySpec AbilitySpec(
+			AttackAbilityClass,  // 能力类
+			1,                   // 能力等级
+			INDEX_NONE,          // 输入ID（不使用输入绑定）
+			this                 // 能力的 Source Object
+		);
+		
+		// 授予能力并缓存 Handle
+		GrantedAttackAbilityHandle = AbilitySystemComponent->GiveAbility(AbilitySpec);
+		
+		// 输出日志
+		UE_LOG(LogSGGameplay, Log, TEXT("✓ %s: 授予攻击能力成功 (Handle: %s)"), 
+			*GetName(), *GrantedAttackAbilityHandle.ToString());
+	}
+	else
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 攻击能力类加载失败，跳过授予"), *GetName());
+	}
+}
+
+/**
+ * @brief 执行攻击
+ * @details
+ * 功能说明：
+ * - 触发已授予的攻击能力
+ * - 供 AI 或玩家输入调用
+ * 详细流程：
+ * 1. 检查 ASC 和攻击能力是否有效
+ * 2. 检查能力是否可以激活（冷却、成本等）
+ * 3. 激活攻击能力
+ * 注意事项：
+ * - 在 StateTree AI 中调用
+ * - 需要先调用 GrantAttackAbility()
+ * @return 是否成功触发攻击
+ */
+bool ASG_UnitsBase::PerformAttack()
+{
+	// ========== 步骤1：检查 ASC 是否有效 ==========
+	if (!AbilitySystemComponent)
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("✗ %s: AbilitySystemComponent 为空，无法执行攻击！"), *GetName());
+		return false;
+	}
+	
+	// ========== 步骤2：检查攻击能力是否已授予 ==========
+	if (!GrantedAttackAbilityHandle.IsValid())
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 攻击能力未授予，无法执行攻击！"), *GetName());
+		return false;
+	}
+	
+	// ========== 步骤3：检查能力是否可以激活 ==========
+	// FindAbilitySpecFromHandle 查找能力规格
+	FGameplayAbilitySpec* AbilitySpec = AbilitySystemComponent->FindAbilitySpecFromHandle(GrantedAttackAbilityHandle);
+	if (!AbilitySpec)
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("✗ %s: 找不到攻击能力 Spec！"), *GetName());
+		return false;
+	}
+	
+	// 检查能力是否可以激活（检查冷却、成本、Tag 限制等）
+	if (!AbilitySpec->Ability->CanActivateAbility(
+		GrantedAttackAbilityHandle,
+		AbilitySystemComponent->AbilityActorInfo.Get()))
+	{
+		UE_LOG(LogSGGameplay, Verbose, TEXT("⚠️ %s: 攻击能力无法激活（可能在冷却中）"), *GetName());
+		return false;
+	}
+	
+	// ========== 步骤4：激活攻击能力 ==========
+	// TryActivateAbility 尝试激活能力
+	bool bSuccess = AbilitySystemComponent->TryActivateAbility(GrantedAttackAbilityHandle);
+	
+	// 输出日志
+	if (bSuccess)
+	{
+		UE_LOG(LogSGGameplay, Verbose, TEXT("✓ %s: 触发攻击"), *GetName());
+	}
+	else
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 触发攻击失败"), *GetName());
+	}
+	
+	return bSuccess;
+}
+
+/**
+ * @brief 检查当前目标是否有效
+ * @details
+ * 功能说明：
+ * - 检查目标是否存在、是否存活、是否在范围内
+ * 详细流程：
+ * 1. 检查 CurrentTarget 是否为空
+ * 2. 检查目标是否已死亡
+ * 3. 检查目标是否仍在攻击范围内
+ * 注意事项：
+ * - 在 AI 中每帧检查
+ * - 如果无效，需要重新查找目标
+ * @return 目标是否有效
+ */
+bool ASG_UnitsBase::IsTargetValid() const
+{
+	// ========== 步骤1：检查目标是否为空 ==========
+	if (!CurrentTarget)
+	{
+		return false;
+	}
+	
+	// ========== 步骤2：检查目标是否已死亡 ==========
+	// 尝试转换为 ASG_UnitsBase
+	const ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(CurrentTarget);
+	if (TargetUnit)
+	{
+		// 如果目标已死亡，返回 false
+		if (TargetUnit->bIsDead)
+		{
+			return false;
+		}
+		
+		// 如果目标生命值 <= 0，返回 false
+		if (TargetUnit->AttributeSet && TargetUnit->AttributeSet->GetHealth() <= 0.0f)
+		{
+			return false;
+		}
+	}
+	
+	// ========== 步骤3：检查目标是否在攻击范围内 ==========
+	// 计算与目标的距离
+	float DistanceToTarget = FVector::Dist(GetActorLocation(), CurrentTarget->GetActorLocation());
+	
+	// 获取攻击范围（从 AttributeSet 获取）
+	float AttackRange = BaseAttackRange;
+	if (AttributeSet)
+	{
+		AttackRange = AttributeSet->GetAttackRange();
+	}
+	
+	// 添加一些容差（避免边界抖动）
+	float RangeTolerance = 50.0f;
+	
+	// 如果距离超出攻击范围 + 容差，返回 false
+	if (DistanceToTarget > AttackRange + RangeTolerance)
+	{
+		return false;
+	}
+	
+	// ========== 所有检查通过，目标有效 ==========
+	return true;
 }

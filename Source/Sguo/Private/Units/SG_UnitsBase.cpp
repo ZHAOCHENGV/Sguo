@@ -468,96 +468,90 @@ void ASG_UnitsBase::GrantAttackAbility()
 	}
 	
 	// ========== 步骤2：确定攻击能力类 ==========
-	// 🔧 修改 - 从 Blueprint 加载攻击能力类
-	// 根据单位类型标签确定攻击能力
-	// - Unit.Type.Infantry -> GA_Attack_Melee
-	// - Unit.Type.Cavalry -> GA_Attack_Melee
-	// - Unit.Type.Archer -> GA_Attack_Ranged
-	// - Unit.Type.Crossbow -> GA_Attack_Ranged
-	TSubclassOf<UGameplayAbility> AttackAbilityClass = nullptr;
+	// ✨ 新增 - 支持多种方式配置攻击能力类
+	// 优先级：
+	// 1. AttackAbilityClass（Blueprint 中直接配置）
+	// 2. 根据 UnitTypeTag 自动选择（默认行为）
+	TSubclassOf<UGameplayAbility> AbilityClassToGrant = AttackAbilityClass;
 	
-	// 🔧 修改 - 使用可选的 GameplayTag（避免未配置时报错）
-	// 根据单位类型标签确定攻击能力
-	// 注意：第二个参数 false 表示标签不存在时不报错
-	FGameplayTag InfantryTag = FGameplayTag::RequestGameplayTag(FName("Unit.Type.Infantry"), false);
-	FGameplayTag CavalryTag = FGameplayTag::RequestGameplayTag(FName("Unit.Type.Cavalry"), false);
-	FGameplayTag ArcherTag = FGameplayTag::RequestGameplayTag(FName("Unit.Type.Archer"), false);
-	FGameplayTag CrossbowTag = FGameplayTag::RequestGameplayTag(FName("Unit.Type.Crossbow"), false);
-	
-	if ((InfantryTag.IsValid() && UnitTypeTag.MatchesTag(InfantryTag)) ||
-		(CavalryTag.IsValid() && UnitTypeTag.MatchesTag(CavalryTag)))
+	// 如果没有在 Blueprint 中配置，则根据单位类型自动选择
+	if (!AbilityClassToGrant)
 	{
-		// 近战单位
-		// 从 Blueprint 加载 GA_Attack_Melee
-		UE_LOG(LogSGGameplay, Log, TEXT("  %s 为近战单位，加载 GA_Attack_Melee"), *GetName());
+		UE_LOG(LogSGGameplay, Log, TEXT("  %s: 未配置 AttackAbilityClass，根据 UnitTypeTag 自动选择"), *GetName());
 		
-		// 🔧 修改 - 加载近战攻击能力 Blueprint
-		// 路径说明：/Game/Blueprints/GAS/Abilities/GA_Attack_Melee.GA_Attack_Melee_C
-		// - /Game/Blueprints/GAS/Abilities/ 是蓝图资产路径
-		// - GA_Attack_Melee 是蓝图资产名称
-		// - _C 后缀表示这是编译后的 Blueprint 类
-		AttackAbilityClass = LoadClass<UGameplayAbility>(
-			nullptr,
-			TEXT("/Game/Blueprints/GAS/Abilities/GA_Attack_Melee.GA_Attack_Melee_C")
-		);
+		// 🔧 修改 - 使用可选的 GameplayTag（避免未配置时报错）
+		FGameplayTag InfantryTag = FGameplayTag::RequestGameplayTag(FName("Unit.Type.Infantry"), false);
+		FGameplayTag CavalryTag = FGameplayTag::RequestGameplayTag(FName("Unit.Type.Cavalry"), false);
+		FGameplayTag ArcherTag = FGameplayTag::RequestGameplayTag(FName("Unit.Type.Archer"), false);
+		FGameplayTag CrossbowTag = FGameplayTag::RequestGameplayTag(FName("Unit.Type.Crossbow"), false);
 		
-		// 检查是否加载成功
-		if (!AttackAbilityClass)
+		if ((InfantryTag.IsValid() && UnitTypeTag.MatchesTag(InfantryTag)) ||
+			(CavalryTag.IsValid() && UnitTypeTag.MatchesTag(CavalryTag)))
 		{
-			UE_LOG(LogSGGameplay, Error, TEXT("✗ %s: 加载 GA_Attack_Melee 失败！请确保蓝图资产存在：/Game/Blueprints/GAS/Abilities/GA_Attack_Melee"), *GetName());
+			// 近战单位 - 尝试加载默认近战攻击能力
+			UE_LOG(LogSGGameplay, Log, TEXT("  %s 为近战单位，尝试加载默认 GA_Attack_Melee"), *GetName());
+			
+			AbilityClassToGrant = LoadClass<UGameplayAbility>(
+				nullptr,
+				TEXT("/Game/Blueprints/GAS/Abilities/GA_Attack_Melee.GA_Attack_Melee_C")
+			);
+			
+			if (!AbilityClassToGrant)
+			{
+				UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 默认 GA_Attack_Melee 不存在，请在 Blueprint 中手动配置 AttackAbilityClass"), *GetName());
+			}
 		}
-	}
-	else if ((ArcherTag.IsValid() && UnitTypeTag.MatchesTag(ArcherTag)) ||
-			 (CrossbowTag.IsValid() && UnitTypeTag.MatchesTag(CrossbowTag)))
-	{
-		// 远程单位
-		// 从 Blueprint 加载 GA_Attack_Ranged
-		UE_LOG(LogSGGameplay, Log, TEXT("  %s 为远程单位，加载 GA_Attack_Ranged"), *GetName());
-		
-		// 🔧 修改 - 加载远程攻击能力 Blueprint
-		// 路径说明：/Game/Blueprints/GAS/Abilities/GA_Attack_Ranged.GA_Attack_Ranged_C
-		AttackAbilityClass = LoadClass<UGameplayAbility>(
-			nullptr,
-			TEXT("/Game/Blueprints/GAS/Abilities/GA_Attack_Ranged.GA_Attack_Ranged_C")
-		);
-		
-		// 检查是否加载成功
-		if (!AttackAbilityClass)
+		else if ((ArcherTag.IsValid() && UnitTypeTag.MatchesTag(ArcherTag)) ||
+				 (CrossbowTag.IsValid() && UnitTypeTag.MatchesTag(CrossbowTag)))
 		{
-			UE_LOG(LogSGGameplay, Error, TEXT("✗ %s: 加载 GA_Attack_Ranged 失败！请确保蓝图资产存在：/Game/Blueprints/GAS/Abilities/GA_Attack_Ranged"), *GetName());
+			// 远程单位 - 尝试加载默认远程攻击能力
+			UE_LOG(LogSGGameplay, Log, TEXT("  %s 为远程单位，尝试加载默认 GA_Attack_Ranged"), *GetName());
+			
+			AbilityClassToGrant = LoadClass<UGameplayAbility>(
+				nullptr,
+				TEXT("/Game/Blueprints/GAS/Abilities/GA_Attack_Ranged.GA_Attack_Ranged_C")
+			);
+			
+			if (!AbilityClassToGrant)
+			{
+				UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 默认 GA_Attack_Ranged 不存在，请在 Blueprint 中手动配置 AttackAbilityClass"), *GetName());
+			}
+		}
+		else
+		{
+			UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 未知的单位类型 '%s'，且未配置 AttackAbilityClass"), 
+				*GetName(), *UnitTypeTag.ToString());
 		}
 	}
 	else
 	{
-		// 未知单位类型
-		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 未知的单位类型 '%s'，无法授予攻击能力"), 
-			*GetName(), *UnitTypeTag.ToString());
-		return;
+		// 使用 Blueprint 中配置的攻击能力类
+		UE_LOG(LogSGGameplay, Log, TEXT("  %s: 使用 Blueprint 配置的 AttackAbilityClass: %s"), 
+			*GetName(), *AbilityClassToGrant->GetName());
 	}
 	
 	// ========== 步骤3：授予能力 ==========
-	// 🔧 修改 - 授予能力（如果加载成功）
-	if (AttackAbilityClass)
+	if (AbilityClassToGrant)
 	{
 		// 创建 Ability Spec
-		// FGameplayAbilitySpec 包含能力类、等级、输入ID等信息
 		FGameplayAbilitySpec AbilitySpec(
-			AttackAbilityClass,  // 能力类
-			1,                   // 能力等级
-			INDEX_NONE,          // 输入ID（不使用输入绑定）
-			this                 // 能力的 Source Object
+			AbilityClassToGrant,  // 能力类
+			1,                    // 能力等级
+			INDEX_NONE,           // 输入ID（不使用输入绑定）
+			this                  // 能力的 Source Object
 		);
 		
 		// 授予能力并缓存 Handle
 		GrantedAttackAbilityHandle = AbilitySystemComponent->GiveAbility(AbilitySpec);
 		
 		// 输出日志
-		UE_LOG(LogSGGameplay, Log, TEXT("✓ %s: 授予攻击能力成功 (Handle: %s)"), 
-			*GetName(), *GrantedAttackAbilityHandle.ToString());
+		UE_LOG(LogSGGameplay, Log, TEXT("✓ %s: 授予攻击能力成功 (类: %s, Handle: %s)"), 
+			*GetName(), *AbilityClassToGrant->GetName(), *GrantedAttackAbilityHandle.ToString());
 	}
 	else
 	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 攻击能力类加载失败，跳过授予"), *GetName());
+		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 无法确定攻击能力类，跳过授予"), *GetName());
+		UE_LOG(LogSGGameplay, Warning, TEXT("  提示：请在单位 Blueprint 中配置 'Attack Config → 攻击能力类'"));
 	}
 }
 

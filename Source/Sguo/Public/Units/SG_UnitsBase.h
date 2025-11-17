@@ -8,8 +8,8 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "AbilitySystemInterface.h"
-#include "GameplayTagContainer.h"
 #include "AbilitySystemComponent.h"
+#include "GameplayTagContainer.h"
 #include "SG_UnitsBase.generated.h"
 
 // 前置声明
@@ -128,6 +128,26 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack Config", meta = (DisplayName = "投射物类"))
 	TSubclassOf<AActor> ProjectileClass;
+	
+	// ========== ✨ 新增 - 可配置的攻击能力 ==========
+	
+	/**
+	 * @brief 攻击能力类（可在 Blueprint 中配置）
+	 * @details
+	 * 功能说明：
+	 * - 可以在单位 Blueprint 中直接指定攻击能力类
+	 * - 如果设置了此属性，将使用指定的能力类
+	 * - 如果未设置，将根据 UnitTypeTag 自动选择默认能力
+	 * 使用方式：
+	 * - 在 Blueprint 中设置为 GA_Attack_Melee 或 GA_Attack_Ranged
+	 * - 或者自定义的攻击能力类
+	 * 优先级：
+	 * 1. AttackAbilityClass（如果设置）
+	 * 2. DataTable 配置（如果 bUseDataTable = true）
+	 * 3. 根据 UnitTypeTag 自动选择（默认行为）
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack Config", meta = (DisplayName = "攻击能力类"))
+	TSubclassOf<UGameplayAbility> AttackAbilityClass;
 	
 	/**
 	 * @brief 当前已授予的攻击能力

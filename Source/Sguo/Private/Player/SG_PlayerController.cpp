@@ -306,61 +306,98 @@ void ASG_PlayerController::OnCancelInput()
 	}
 }
 
-// 🔧 MODIFIED - 修改函数参数名避免冲突
+/**
+ * @brief 根据卡牌数据生成单位
+ * @param CardData 卡牌数据
+ * @param UnitSpawnLocation 单位生成位置
+ * @param UnitSpawnRotation 单位生成旋转
+ * @details
+ * 功能说明：
+ * - 根据卡牌类型生成单位或计谋效果
+ * - 🔧 修改 - 使用 SpawnActorDeferred 在 BeginPlay 前设置 SourceCardData
+ * 详细流程：
+ * 1. 检查卡牌类型（角色卡/计谋卡）
+ * 2. 使用 SpawnActorDeferred 延迟生成单位
+ * 3. 设置 SourceCardData 引用
+ * 4. 调用 FinishSpawning 触发 BeginPlay
+ * 5. BeginPlay 中自动读取倍率并初始化
+ * 注意事项：
+ * - 必须使用 SpawnActorDeferred + FinishSpawning
+ * - 否则 BeginPlay 会在设置 SourceCardData 之前执行
+ */
 void ASG_PlayerController::SpawnUnitFromCard(USG_CardDataBase* CardData, const FVector& UnitSpawnLocation, const FRotator& UnitSpawnRotation)
 {
+	// ========== 步骤1：检查卡牌数据有效性 ==========
 	if (!CardData)
 	{
 		UE_LOG(LogTemp, Error, TEXT("SpawnUnitFromCard 失败：CardData 为空"));
 		return;
 	}
 
+	// 输出日志
 	UE_LOG(LogTemp, Log, TEXT("========== 生成单位：%s =========="), *CardData->CardName.ToString());
 
+	// ========== 步骤2：处理角色卡 ==========
 	if (USG_CharacterCardData* CharacterCard = Cast<USG_CharacterCardData>(CardData))
 	{
+		// 检查角色类是否设置
 		if (!CharacterCard->CharacterClass)
 		{
 			UE_LOG(LogTemp, Error, TEXT("❌ 角色卡没有设置 CharacterClass"));
 			return;
 		}
 
+		// ✨ 新增 - 输出卡牌倍率信息
+		UE_LOG(LogSGGameplay, Log, TEXT("卡牌倍率配置："));
+		UE_LOG(LogSGGameplay, Log, TEXT("  生命值倍率：%.2f"), CharacterCard->HealthMultiplier);
+		UE_LOG(LogSGGameplay, Log, TEXT("  伤害倍率：%.2f"), CharacterCard->DamageMultiplier);
+		UE_LOG(LogSGGameplay, Log, TEXT("  速度倍率：%.2f"), CharacterCard->SpeedMultiplier);
+
+		// ========== 分支1：生成兵团 ==========
 		if (CharacterCard->bIsTroopCard)
 		{
+			// 输出日志
 			UE_LOG(LogTemp, Log, TEXT("生成兵团 - 阵型: %dx%d, 间距: %.0f"), 
 				CharacterCard->TroopFormation.X, 
 				CharacterCard->TroopFormation.Y,
 				CharacterCard->TroopSpacing);
 
+			// 获取阵型参数
 			int32 Rows = CharacterCard->TroopFormation.Y;
 			int32 Cols = CharacterCard->TroopFormation.X;
 			float Spacing = CharacterCard->TroopSpacing;
 
+			// 计算起始偏移（使阵型中心对齐）
 			FVector StartOffset = FVector(
 				-(Cols - 1) * Spacing / 2.0f,
 				-(Rows - 1) * Spacing / 2.0f,
 				0.0f
 			);
 
+			// 遍历阵型位置
 			for (int32 Row = 0; Row < Rows; ++Row)
 			{
 				for (int32 Col = 0; Col < Cols; ++Col)
 				{
+					// 计算单位偏移
 					FVector UnitOffset = FVector(
 						Col * Spacing,
 						Row * Spacing,
 						0.0f
 					);
 
-					// 🔧 MODIFIED - 使用新的变量名
+					// 计算最终位置
 					FVector FinalUnitLocation = UnitSpawnLocation + StartOffset + UnitOffset;
 
+					// 🔧 修改 - 使用延迟生成模式
+					// 设置生成参数
 					FActorSpawnParameters SpawnParams;
 					SpawnParams.Owner = this;
 					SpawnParams.Instigator = GetPawn();
-					//生成时碰撞设置
-					//SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+					// ✨ 关键 - 延迟生成，不立即调用 BeginPlay
+					SpawnParams.bDeferConstruction = true;
 
+					// 延迟生成单位 Actor（不会触发 BeginPlay）
 					AActor* SpawnedUnit = GetWorld()->SpawnActor<AActor>(
 						CharacterCard->CharacterClass,
 						FinalUnitLocation,
@@ -368,40 +405,58 @@ void ASG_PlayerController::SpawnUnitFromCard(USG_CardDataBase* CardData, const F
 						SpawnParams
 					);
 
+					// 检查生成是否成功
 					if (SpawnedUnit)
 					{
-						UE_LOG(LogTemp, Verbose, TEXT("  ✓ 生成单位 [%d,%d] 于 %s"), Row, Col, *FinalUnitLocation.ToString());
+						// 输出日志
+						UE_LOG(LogTemp, Verbose, TEXT("  ✓ 延迟生成单位 [%d,%d] 于 %s"), Row, Col, *FinalUnitLocation.ToString());
 
+						// 转换为 ASG_UnitsBase
 						if (ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(SpawnedUnit))
 						{
-							Unit->InitializeCharacter(
-								FGameplayTag::RequestGameplayTag(TEXT("Unit.Faction.Player")),
-								1.0f,
-								1.0f,
-								1.0f
-							);
+							// ✨ 关键步骤 - 在 BeginPlay 之前设置 SourceCardData
+							Unit->SourceCardData = CharacterCard;
+							UE_LOG(LogSGGameplay, Verbose, TEXT("    已设置 SourceCardData（BeginPlay 前）"));
+							
+							// ✨ 关键步骤 - 完成生成，触发 BeginPlay
+							// 此时 SourceCardData 已经设置，BeginPlay 可以正确读取
+							Unit->FinishSpawning(FTransform(UnitSpawnRotation, FinalUnitLocation));
+							UE_LOG(LogSGGameplay, Verbose, TEXT("    已完成生成，BeginPlay 已触发"));
+						}
+						else
+						{
+							// 如果转换失败，也需要完成生成
+							UE_LOG(LogTemp, Warning, TEXT("  ⚠️ 单位不是 ASG_UnitsBase 类型，仍完成生成"));
+							SpawnedUnit->FinishSpawning(FTransform(UnitSpawnRotation, FinalUnitLocation));
 						}
 					}
 					else
 					{
+						// 输出错误日志
 						UE_LOG(LogTemp, Error, TEXT("  ❌ 单位生成失败 [%d,%d]"), Row, Col);
 					}
 				}
 			}
 
+			// 输出日志
 			UE_LOG(LogTemp, Log, TEXT("✓ 兵团生成完成，共 %d 个单位"), Rows * Cols);
+			UE_LOG(LogSGGameplay, Log, TEXT("  所有单位已在 BeginPlay 前设置 SourceCardData"));
 		}
+		// ========== 分支2：生成英雄 ==========
 		else
 		{
+			// 输出日志
 			UE_LOG(LogTemp, Log, TEXT("生成英雄"));
 
+			// 🔧 修改 - 使用延迟生成模式
+			// 设置生成参数
 			FActorSpawnParameters SpawnParams;
 			SpawnParams.Owner = this;
 			SpawnParams.Instigator = GetPawn();
-			//生成时碰撞设置
-			//SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+			// ✨ 关键 - 延迟生成，不立即调用 BeginPlay
+			SpawnParams.bDeferConstruction = true;
 
-			// 🔧 MODIFIED - 使用新的变量名
+			// 延迟生成单位 Actor（不会触发 BeginPlay）
 			AActor* SpawnedUnit = GetWorld()->SpawnActor<AActor>(
 				CharacterCard->CharacterClass,
 				UnitSpawnLocation,
@@ -409,36 +464,55 @@ void ASG_PlayerController::SpawnUnitFromCard(USG_CardDataBase* CardData, const F
 				SpawnParams
 			);
 
+			// 检查生成是否成功
 			if (SpawnedUnit)
 			{
-				UE_LOG(LogTemp, Log, TEXT("✓ 英雄生成成功"));
+				// 输出日志
+				UE_LOG(LogTemp, Log, TEXT("✓ 英雄延迟生成成功"));
 
+				// 转换为 ASG_UnitsBase
 				if (ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(SpawnedUnit))
 				{
-					Unit->InitializeCharacter(
-						FGameplayTag::RequestGameplayTag(TEXT("Unit.Faction.Player")),
-						1.0f,
-						1.0f,
-						1.0f
-					);
+					// ✨ 关键步骤 - 在 BeginPlay 之前设置 SourceCardData
+					Unit->SourceCardData = CharacterCard;
+					UE_LOG(LogSGGameplay, Log, TEXT("  已设置 SourceCardData（BeginPlay 前）"));
+					
+					// ✨ 关键步骤 - 完成生成，触发 BeginPlay
+					// 此时 SourceCardData 已经设置，BeginPlay 可以正确读取
+					Unit->FinishSpawning(FTransform(UnitSpawnRotation, UnitSpawnLocation));
+					UE_LOG(LogSGGameplay, Log, TEXT("  已完成生成，BeginPlay 已触发"));
+				}
+				else
+				{
+					// 如果转换失败，也需要完成生成
+					UE_LOG(LogTemp, Warning, TEXT("  ⚠️ 单位不是 ASG_UnitsBase 类型，仍完成生成"));
+					SpawnedUnit->FinishSpawning(FTransform(UnitSpawnRotation, UnitSpawnLocation));
 				}
 			}
 			else
 			{
+				// 输出错误日志
 				UE_LOG(LogTemp, Error, TEXT("❌ 英雄生成失败"));
 			}
 		}
 	}
+	// ========== 步骤3：处理计谋卡 ==========
 	else if (USG_StrategyCardData* StrategyCard = Cast<USG_StrategyCardData>(CardData))
 	{
+		// 输出日志
 		UE_LOG(LogTemp, Log, TEXT("生成计谋效果"));
 		UE_LOG(LogTemp, Warning, TEXT("⚠️ 计谋卡生成逻辑尚未实现"));
+		
+		// TODO: 实现计谋卡逻辑
 	}
+	// ========== 步骤4：未知卡牌类型 ==========
 	else
 	{
+		// 输出错误日志
 		UE_LOG(LogTemp, Error, TEXT("❌ 未知的卡牌类型"));
 	}
 
+	// 输出日志
 	UE_LOG(LogTemp, Log, TEXT("========================================"));
 }
 

@@ -16,7 +16,8 @@
 #include "AbilitySystemGlobals.h"
 #include "Abilities/GameplayAbility.h"
 // ✨ 新增 - 调试可视化相关头文件
-#include "DrawDebugHelpers.h"     
+#include "DrawDebugHelpers.h"
+#include "Data/SG_CharacterCardData.h"
 
 // 构造函数
 ASG_UnitsBase::ASG_UnitsBase()
@@ -53,14 +54,12 @@ void ASG_UnitsBase::BeginPlay()
 	// ========== 步骤1：检查是否已初始化 ==========
 	bool bNeedsInitialization = false;
 	
-	// 检查 AttributeSet 是否有效
 	if (!AttributeSet)
 	{
 		UE_LOG(LogSGGameplay, Error, TEXT("❌ %s: AttributeSet 为空！"), *GetName());
 		return;
 	}
 	
-	// 检查是否已初始化（MaxHealth > 0 表示已初始化）
 	if (AttributeSet->GetMaxHealth() <= 0.0f)
 	{
 		bNeedsInitialization = true;
@@ -75,28 +74,48 @@ void ASG_UnitsBase::BeginPlay()
 	// ========== 步骤2：根据配置选择初始化方式 ==========
 	if (bNeedsInitialization)
 	{
+		// ✨ 新增 - 从 CardData 读取倍率（优先级最高）
+		float HealthMult = 1.0f;
+		float DamageMult = 1.0f;
+		float SpeedMult = 1.0f;
+		
+		// 如果有卡牌数据，从卡牌读取倍率
+		if (SourceCardData)
+		{
+			HealthMult = SourceCardData->HealthMultiplier;
+			DamageMult = SourceCardData->DamageMultiplier;
+			SpeedMult = SourceCardData->SpeedMultiplier;
+			
+			UE_LOG(LogSGGameplay, Log, TEXT("  从卡牌数据读取倍率："));
+			UE_LOG(LogSGGameplay, Log, TEXT("    卡牌：%s"), *SourceCardData->GetName());
+			UE_LOG(LogSGGameplay, Log, TEXT("    生命值倍率：%.2f"), HealthMult);
+			UE_LOG(LogSGGameplay, Log, TEXT("    伤害倍率：%.2f"), DamageMult);
+			UE_LOG(LogSGGameplay, Log, TEXT("    速度倍率：%.2f"), SpeedMult);
+		}
+		else
+		{
+			UE_LOG(LogSGGameplay, Log, TEXT("  未设置卡牌数据，使用默认倍率（1.0）"));
+		}
+		
 		// 方式1：使用 DataTable 初始化
 		if (bUseDataTable)
 		{
 			UE_LOG(LogSGGameplay, Log, TEXT("  使用 DataTable 初始化"));
 			
-			// 从 DataTable 加载配置
 			bool bLoadSuccess = IsLoadUnitDataFromTable();
 			
 			if (bLoadSuccess)
 			{
-				// 获取阵营标签（从 DataTable 或默认值）
 				FGameplayTag InitFactionTag = DetermineFactionTag();
 				
-				// 使用 DataTable 的值初始化（倍率为 1.0）
-				InitializeCharacter(InitFactionTag, 1.0f, 1.0f, 1.0f);
+				// 🔧 修改 - 使用从 CardData 读取的倍率
+				InitializeCharacter(InitFactionTag, HealthMult, DamageMult, SpeedMult);
 				
 				UE_LOG(LogSGGameplay, Log, TEXT("  ✓ DataTable 初始化完成"));
 			}
 			else
 			{
 				UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ DataTable 加载失败，回退到默认初始化"));
-				// 回退到默认初始化
 				InitializeWithDefaults();
 			}
 		}
@@ -104,12 +123,14 @@ void ASG_UnitsBase::BeginPlay()
 		else
 		{
 			UE_LOG(LogSGGameplay, Log, TEXT("  使用默认值初始化"));
-			InitializeWithDefaults();
+			
+			// 🔧 修改 - 使用从 CardData 读取的倍率
+			FGameplayTag InitFactionTag = DetermineFactionTag();
+			InitializeCharacter(InitFactionTag, HealthMult, DamageMult, SpeedMult);
 		}
 	}
 	
 	// ========== 步骤3：授予攻击能力 ==========
-	// 在初始化后授予攻击能力
 	GrantAttackAbility();
 	
 	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
@@ -908,18 +929,35 @@ void ASG_UnitsBase::InitializeWithDefaults()
 	// 获取阵营标签
 	FGameplayTag InitFactionTag = DetermineFactionTag();
 	
-	// 使用默认值初始化（倍率全为 1.0）
+	// ✨ 新增 - 从 CardData 读取倍率
+	float HealthMult = 1.0f;
+	float DamageMult = 1.0f;
+	float SpeedMult = 1.0f;
+	
+	if (SourceCardData)
+	{
+		HealthMult = SourceCardData->HealthMultiplier;
+		DamageMult = SourceCardData->DamageMultiplier;
+		SpeedMult = SourceCardData->SpeedMultiplier;
+		
+		UE_LOG(LogSGGameplay, Log, TEXT("  应用卡牌倍率"));
+	}
+	
+	// 使用倍率初始化
 	InitializeCharacter(
 		InitFactionTag,
-		1.0f,  // 生命值倍率
-		1.0f,  // 攻击力倍率
-		1.0f   // 速度倍率
+		HealthMult,
+		DamageMult,
+		SpeedMult
 	);
 	
 	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 默认值初始化完成"));
-	UE_LOG(LogSGGameplay, Log, TEXT("    生命值：%.0f"), BaseHealth);
-	UE_LOG(LogSGGameplay, Log, TEXT("    攻击力：%.0f"), BaseAttackDamage);
-	UE_LOG(LogSGGameplay, Log, TEXT("    移动速度：%.0f"), BaseMoveSpeed);
+	UE_LOG(LogSGGameplay, Log, TEXT("    生命值：%.0f (基础: %.0f, 倍率: %.2f)"), 
+		BaseHealth * HealthMult, BaseHealth, HealthMult);
+	UE_LOG(LogSGGameplay, Log, TEXT("    攻击力：%.0f (基础: %.0f, 倍率: %.2f)"), 
+		BaseAttackDamage * DamageMult, BaseAttackDamage, DamageMult);
+	UE_LOG(LogSGGameplay, Log, TEXT("    移动速度：%.0f (基础: %.0f, 倍率: %.2f)"), 
+		BaseMoveSpeed * SpeedMult, BaseMoveSpeed, SpeedMult);
 	UE_LOG(LogSGGameplay, Log, TEXT("    视野范围：%.0f"), VisionRange);
 }
 

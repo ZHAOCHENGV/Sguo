@@ -19,6 +19,7 @@ class UGameplayAbility;
 class UAnimMontage;
 struct FOnAttributeChangeData;
 struct FSGUnitDataRow;
+class USG_CharacterCardData;
 // ✨ 新增 - 单位死亡委托声明
 /**
  * @brief 单位死亡委托
@@ -89,6 +90,22 @@ public:
 	// 基础攻击范围
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Base Attributes")
 	float BaseAttackRange = 150.0f;
+
+	// ========== ✨ 新增 - 卡牌数据引用 ==========
+	
+	/**
+	 * @brief 生成此单位的卡牌数据
+	 * @details
+	 * 功能说明：
+	 * - 存储生成此单位的卡牌数据引用
+	 * - 用于读取倍率配置
+	 * - 在生成单位时自动设置
+	 * 注意事项：
+	 * - 由 SpawnUnitFromCard 函数设置
+	 * - 初始化时自动读取倍率
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Unit Config", meta = (DisplayName = "源卡牌数据"))
+	TObjectPtr<USG_CharacterCardData> SourceCardData;
 
 	// ========== ✨ 新增 - DataTable 配置 ==========
 	

@@ -47,6 +47,63 @@ class SGUO_API USG_CharacterCardData : public USG_CardDataBase
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Troop", 
 		meta = (EditCondition = "bIsTroopCard", EditConditionHides))
 	float TroopSpacing;
+
+
+	// ========== ✨ 新增 - 倍率配置 ==========
+	
+	/**
+	 * @brief 生命值倍率
+	 * @details
+	 * 功能说明：
+	 * - 生成单位时的生命值倍率
+	 * - 最终生命值 = 基础生命值 * 倍率
+	 * 使用场景：
+	 * - 测试不同难度
+	 * - 调整单位强度
+	 * - 临时平衡性调整
+	 * 注意事项：
+	 * - 后续会迁移到 GameConfig 系统
+	 * - 当前仅用于快速测试
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Multipliers", 
+		meta = (DisplayName = "生命值倍率", ClampMin = "0.1", UIMin = "0.1"))
+	float HealthMultiplier = 1.0f;
+	
+	/**
+	 * @brief 伤害倍率
+	 * @details
+	 * 功能说明：
+	 * - 生成单位时的攻击伤害倍率
+	 * - 最终伤害 = 基础伤害 * 倍率
+	 * 使用场景：
+	 * - 测试不同难度
+	 * - 调整单位强度
+	 * - 临时平衡性调整
+	 * 注意事项：
+	 * - 后续会迁移到 GameConfig 系统
+	 * - 当前仅用于快速测试
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Multipliers", 
+		meta = (DisplayName = "伤害倍率", ClampMin = "0.1", UIMin = "0.1"))
+	float DamageMultiplier = 1.0f;
+	
+	/**
+	 * @brief 速度倍率
+	 * @details
+	 * 功能说明：
+	 * - 生成单位时的移动速度和攻击速度倍率
+	 * - 最终速度 = 基础速度 * 倍率
+	 * 使用场景：
+	 * - 测试不同难度
+	 * - 调整单位强度
+	 * - 临时平衡性调整
+	 * 注意事项：
+	 * - 后续会迁移到 GameConfig 系统
+	 * - 当前仅用于快速测试
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Multipliers", 
+		meta = (DisplayName = "速度倍率（移速+攻速）", ClampMin = "0.1", UIMin = "0.1"))
+	float SpeedMultiplier = 1.0f;
 };
 
 

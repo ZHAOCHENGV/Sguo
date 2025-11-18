@@ -358,6 +358,8 @@ void ASG_PlayerController::SpawnUnitFromCard(USG_CardDataBase* CardData, const F
 					FActorSpawnParameters SpawnParams;
 					SpawnParams.Owner = this;
 					SpawnParams.Instigator = GetPawn();
+					//生成时碰撞设置
+					//SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
 					AActor* SpawnedUnit = GetWorld()->SpawnActor<AActor>(
 						CharacterCard->CharacterClass,
@@ -396,6 +398,8 @@ void ASG_PlayerController::SpawnUnitFromCard(USG_CardDataBase* CardData, const F
 			FActorSpawnParameters SpawnParams;
 			SpawnParams.Owner = this;
 			SpawnParams.Instigator = GetPawn();
+			//生成时碰撞设置
+			//SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
 			// 🔧 MODIFIED - 使用新的变量名
 			AActor* SpawnedUnit = GetWorld()->SpawnActor<AActor>(

@@ -159,6 +159,7 @@ void USG_UnitDebugWidget::UpdateDisplay()
 	{
 		// 构建显示文本
 		FString DisplayName = BoundUnit->GetName();
+	
 		
 		// 如果显示阵营标签
 		if (bShowFactionTag)
@@ -177,6 +178,7 @@ void USG_UnitDebugWidget::UpdateDisplay()
 			
 			// 组合名称和阵营
 			DisplayName = FString::Printf(TEXT("%s %s"), *FactionStr, *DisplayName);
+			//DisplayName.RemoveFromEnd(TEXT("_c"));
 		}
 		
 		// 设置文本内容

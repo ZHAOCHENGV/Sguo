@@ -48,35 +48,71 @@ void ASG_UnitsBase::BeginPlay()
 {
 	Super::BeginPlay();
 	
-	UE_LOG(LogTemp, Log, TEXT("角色生成：%s"), *GetName());
+	UE_LOG(LogSGGameplay, Log, TEXT("========== 单位生成：%s =========="), *GetName());
 	
-	// ✨ 新增 - 从 DataTable 加载配置
-	// 如果启用了 DataTable 配置，在初始化前加载数据
-	if (bUseDataTable && UnitDataTable && !UnitDataRowName.IsNone())
+	// ========== 步骤1：检查是否已初始化 ==========
+	bool bNeedsInitialization = false;
+	
+	// 检查 AttributeSet 是否有效
+	if (!AttributeSet)
 	{
-		LoadUnitDataFromTable();
+		UE_LOG(LogSGGameplay, Error, TEXT("❌ %s: AttributeSet 为空！"), *GetName());
+		return;
 	}
 	
-	// 🔧 修复 - 自动初始化属性（如果直接拖放到场景）
-	// 检查是否已经初始化（AttributeSet 的 MaxHealth > 0）
-	if (AttributeSet && AttributeSet->GetMaxHealth() <= 0.0f)
+	// 检查是否已初始化（MaxHealth > 0 表示已初始化）
+	if (AttributeSet->GetMaxHealth() <= 0.0f)
 	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 检测到未初始化的单位，执行自动初始化"), *GetName());
-		
-		// 使用默认阵营标签（玩家阵营）
-		FGameplayTag DefaultFactionTag = FGameplayTag::RequestGameplayTag(FName("Unit.Faction.Player"), false);
-		if (!DefaultFactionTag.IsValid())
+		bNeedsInitialization = true;
+		UE_LOG(LogSGGameplay, Log, TEXT("  检测到未初始化的单位"));
+	}
+	else
+	{
+		UE_LOG(LogSGGameplay, Log, TEXT("  单位已初始化（MaxHealth: %.0f）"), 
+			AttributeSet->GetMaxHealth());
+	}
+	
+	// ========== 步骤2：根据配置选择初始化方式 ==========
+	if (bNeedsInitialization)
+	{
+		// 方式1：使用 DataTable 初始化
+		if (bUseDataTable)
 		{
-			UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ Unit.Faction.Player tag 未配置，使用空阵营标签"));
+			UE_LOG(LogSGGameplay, Log, TEXT("  使用 DataTable 初始化"));
+			
+			// 从 DataTable 加载配置
+			bool bLoadSuccess = IsLoadUnitDataFromTable();
+			
+			if (bLoadSuccess)
+			{
+				// 获取阵营标签（从 DataTable 或默认值）
+				FGameplayTag InitFactionTag = DetermineFactionTag();
+				
+				// 使用 DataTable 的值初始化（倍率为 1.0）
+				InitializeCharacter(InitFactionTag, 1.0f, 1.0f, 1.0f);
+				
+				UE_LOG(LogSGGameplay, Log, TEXT("  ✓ DataTable 初始化完成"));
+			}
+			else
+			{
+				UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ DataTable 加载失败，回退到默认初始化"));
+				// 回退到默认初始化
+				InitializeWithDefaults();
+			}
 		}
-		
-		// 调用初始化函数
-		InitializeCharacter(DefaultFactionTag, 1.0f, 1.0f, 1.0f);
+		// 方式2：使用默认值初始化
+		else
+		{
+			UE_LOG(LogSGGameplay, Log, TEXT("  使用默认值初始化"));
+			InitializeWithDefaults();
+		}
 	}
 	
-	// ✨ 新增 - 授予攻击能力
+	// ========== 步骤3：授予攻击能力 ==========
 	// 在初始化后授予攻击能力
 	GrantAttackAbility();
+	
+	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 }
 
 // 被控制时调用
@@ -817,4 +853,166 @@ void ASG_UnitsBase::ToggleVisionRangeVisualization()
 	bShowVisionRange = !bShowVisionRange;
 	UE_LOG(LogSGGameplay, Log, TEXT("%s: 视野范围可视化 %s"), 
 		*GetName(), bShowVisionRange ? TEXT("开启") : TEXT("关闭"));
+}
+
+
+/**
+ * @brief 确定单位的阵营标签
+ * @return 阵营标签
+ * @details
+ * 功能说明：
+ * - 优先使用已设置的 FactionTag
+ * - 如果未设置，使用默认阵营标签
+ * 默认阵营优先级：
+ * 1. FactionTag（如果已在 Blueprint 中设置）
+ * 2. Unit.Faction.Player（默认玩家阵营）
+ */
+FGameplayTag ASG_UnitsBase::DetermineFactionTag() const
+{
+	// 如果已经设置了阵营标签，直接使用
+	if (FactionTag.IsValid())
+	{
+		UE_LOG(LogSGGameplay, Log, TEXT("  使用已配置的阵营标签：%s"), *FactionTag.ToString());
+		return FactionTag;
+	}
+	
+	// 否则使用默认阵营标签（玩家阵营）
+	FGameplayTag DefaultFactionTag = FGameplayTag::RequestGameplayTag(
+		FName("Unit.Faction.Player"), 
+		false  // 不报错
+	);
+	
+	if (DefaultFactionTag.IsValid())
+	{
+		UE_LOG(LogSGGameplay, Log, TEXT("  使用默认阵营标签：%s"), *DefaultFactionTag.ToString());
+		return DefaultFactionTag;
+	}
+	else
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 默认阵营标签 'Unit.Faction.Player' 未配置"));
+		UE_LOG(LogSGGameplay, Warning, TEXT("  请在 Config/DefaultGameplayTags.ini 中添加此标签"));
+		return FGameplayTag();
+	}
+}
+
+/**
+ * @brief 使用默认值初始化单位
+ * @details
+ * 功能说明：
+ * - 使用 Blueprint 中配置的 Base 属性
+ * - 使用确定的阵营标签
+ * - 所有倍率为 1.0（不进行缩放）
+ */
+void ASG_UnitsBase::InitializeWithDefaults()
+{
+	// 获取阵营标签
+	FGameplayTag InitFactionTag = DetermineFactionTag();
+	
+	// 使用默认值初始化（倍率全为 1.0）
+	InitializeCharacter(
+		InitFactionTag,
+		1.0f,  // 生命值倍率
+		1.0f,  // 攻击力倍率
+		1.0f   // 速度倍率
+	);
+	
+	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 默认值初始化完成"));
+	UE_LOG(LogSGGameplay, Log, TEXT("    生命值：%.0f"), BaseHealth);
+	UE_LOG(LogSGGameplay, Log, TEXT("    攻击力：%.0f"), BaseAttackDamage);
+	UE_LOG(LogSGGameplay, Log, TEXT("    移动速度：%.0f"), BaseMoveSpeed);
+	UE_LOG(LogSGGameplay, Log, TEXT("    视野范围：%.0f"), VisionRange);
+}
+
+/**
+ * @brief 从 DataTable 加载单位配置
+ * @return 是否加载成功
+ * @details
+ * 功能说明：
+ * - 从 DataTable 读取指定行的数据
+ * - 应用属性到 BaseHealth、BaseAttackDamage 等
+ * - 应用攻击配置（攻击动画、投射物类等）
+ * 详细流程：
+ * 1. 检查 DataTable 和行名称是否有效
+ * 2. 从 DataTable 查找指定行
+ * 3. 读取属性值并覆盖基础属性
+ * 4. 读取攻击配置
+ * 注意事项：
+ * - 在 BeginPlay 中调用
+ * - 如果 bUseDataTable = false，不会执行
+ */
+bool ASG_UnitsBase::IsLoadUnitDataFromTable()
+{
+	// ========== 步骤1：检查有效性 ==========
+	if (!UnitDataTable)
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ UnitDataTable 为空！"));
+		return false;
+	}
+	
+	if (UnitDataRowName.IsNone())
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ UnitDataRowName 为空！"));
+		return false;
+	}
+	
+	// ========== 步骤2：查找 DataTable 行 ==========
+	FSGUnitDataRow* RowData = UnitDataTable->FindRow<FSGUnitDataRow>(
+		UnitDataRowName,
+		TEXT("LoadUnitDataFromTable")
+	);
+	
+	if (!RowData)
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 在 DataTable 中找不到行 '%s'！"), 
+			*UnitDataRowName.ToString());
+		return false;
+	}
+	
+	// 输出日志
+	UE_LOG(LogSGGameplay, Log, TEXT("  从 DataTable 加载配置"));
+	UE_LOG(LogSGGameplay, Log, TEXT("    数据行：%s"), *UnitDataRowName.ToString());
+	UE_LOG(LogSGGameplay, Log, TEXT("    单位名称：%s"), *RowData->UnitName.ToString());
+	
+	// ========== 步骤3：应用属性值 ==========
+	BaseHealth = RowData->BaseHealth;
+	BaseAttackDamage = RowData->BaseAttackDamage;
+	BaseMoveSpeed = RowData->BaseMoveSpeed;
+	BaseAttackSpeed = RowData->BaseAttackSpeed;
+	BaseAttackRange = RowData->BaseAttackRange;
+	// ✨ 新增 - 应用视野范围（从 DetectionRange）
+	VisionRange = RowData->DetectionRange;
+	
+	UE_LOG(LogSGGameplay, Log, TEXT("    属性配置："));
+	UE_LOG(LogSGGameplay, Log, TEXT("      生命值：%.0f"), BaseHealth);
+	UE_LOG(LogSGGameplay, Log, TEXT("      攻击力：%.0f"), BaseAttackDamage);
+	UE_LOG(LogSGGameplay, Log, TEXT("      移动速度：%.0f"), BaseMoveSpeed);
+	UE_LOG(LogSGGameplay, Log, TEXT("      攻击速度：%.2f"), BaseAttackSpeed);
+	UE_LOG(LogSGGameplay, Log, TEXT("      攻击范围：%.0f"), BaseAttackRange);
+	UE_LOG(LogSGGameplay, Log, TEXT("      视野范围：%.0f"), VisionRange);  // ✨ 新增日志
+	
+	// ========== 步骤4：应用单位类型标签 ==========
+	if (RowData->UnitTypeTag.IsValid())
+	{
+		UnitTypeTag = RowData->UnitTypeTag;
+		UE_LOG(LogSGGameplay, Log, TEXT("    单位类型：%s"), *UnitTypeTag.ToString());
+	}
+	
+	// ========== 步骤5：应用攻击配置 ==========
+	if (RowData->AttackMontage)
+	{
+		AttackMontage = RowData->AttackMontage;
+		UE_LOG(LogSGGameplay, Log, TEXT("    攻击动画：%s"), *AttackMontage->GetName());
+	}
+	
+	if (RowData->AttackType != ESGUnitAttackType::Melee && RowData->ProjectileClass)
+	{
+		ProjectileClass = RowData->ProjectileClass;
+		UE_LOG(LogSGGameplay, Log, TEXT("    投射物类：%s"), *ProjectileClass->GetName());
+	}
+	
+	// ========== 步骤6：应用攻击能力类（如果 DataTable 中有配置）==========
+	// 注意：需要在 FSGUnitDataRow 中添加 AttackAbilityClass 字段
+	// 这里暂时跳过，后续可以扩展
+	
+	return true;
 }

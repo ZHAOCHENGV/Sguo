@@ -329,9 +329,16 @@ public:
 
 	/**
 	 * @brief 视野范围（厘米）
-	 * @details 单位可以检测到敌人的最大距离
+	 * @details
+	 * 功能说明：
+	 * - 单位可以检测到敌人的最大距离
+	 * - 如果启用 DataTable，此值从 DataTable 读取
+	 * - 如果未启用 DataTable，使用此处配置的值
+	 * 注意事项：
+	 * - 当 bUseDataTable = true 时，此属性不可编辑
+	 * - 当 bUseDataTable = false 时，可以在 Blueprint 中修改
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Visualization", meta = (DisplayName = "视野范围"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Visualization", meta = (DisplayName = "视野范围", EditCondition = "!bUseDataTable", EditConditionHides))
 	float VisionRange = 1500.0f;
 
 	/**
@@ -367,4 +374,47 @@ public:
 	 * @details 在编辑器和运行时绘制攻击范围和视野范围
 	 */
 	virtual void Tick(float DeltaTime) override;
+
+
+	/**
+	 * @brief 从 DataTable 加载单位配置
+	 * @return 是否加载成功
+	 * @details
+	 * 功能说明：
+	 * - 从 DataTable 读取指定行的数据
+	 * - 应用属性到 BaseHealth、BaseAttackDamage 等
+	 * - 应用攻击配置（攻击动画、投射物类等）
+	 * 详细流程：
+	 * 1. 检查 DataTable 和行名称是否有效
+	 * 2. 从 DataTable 查找指定行
+	 * 3. 读取属性值并覆盖基础属性
+	 * 4. 读取攻击配置
+	 * 注意事项：
+	 * - 在 BeginPlay 中自动调用（如果 bUseDataTable = true）
+	 * - 如果加载失败，返回 false
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Character")
+	bool IsLoadUnitDataFromTable();
+	
+protected:
+	/**
+	 * @brief 确定单位的阵营标签
+	 * @return 阵营标签
+	 * @details
+	 * 功能说明：
+	 * - 如果 FactionTag 已设置，使用已设置的值
+	 * - 否则使用默认阵营标签（玩家阵营）
+	 */
+	FGameplayTag DetermineFactionTag() const;
+	
+	/**
+	 * @brief 使用默认值初始化单位
+	 * @details
+	 * 功能说明：
+	 * - 使用 Blueprint 中配置的 Base 属性
+	 * - 使用默认阵营标签
+	 */
+	void InitializeWithDefaults();
+
+	
 };

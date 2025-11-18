@@ -310,4 +310,61 @@ public:
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Character")
 	bool bIsDead = false;
+
+	// ========== ✨ 新增 - 调试可视化系统 ==========
+
+	/**
+	 * @brief 是否显示攻击范围
+	 * @details 在编辑器和运行时显示攻击范围的圆圈
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Visualization", meta = (DisplayName = "显示攻击范围"))
+	bool bShowAttackRange = false;
+
+	/**
+	 * @brief 是否显示视野范围
+	 * @details 在编辑器和运行时显示视野范围的圆圈
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Visualization", meta = (DisplayName = "显示视野范围"))
+	bool bShowVisionRange = false;
+
+	/**
+	 * @brief 视野范围（厘米）
+	 * @details 单位可以检测到敌人的最大距离
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Visualization", meta = (DisplayName = "视野范围"))
+	float VisionRange = 1500.0f;
+
+	/**
+	 * @brief 攻击范围可视化颜色
+	 * @details 攻击范围圆圈的颜色
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Visualization", meta = (DisplayName = "攻击范围颜色"))
+	FLinearColor AttackRangeColor = FLinearColor::Red;
+
+	/**
+	 * @brief 视野范围可视化颜色
+	 * @details 视野范围圆圈的颜色
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Visualization", meta = (DisplayName = "视野范围颜色"))
+	FLinearColor VisionRangeColor = FLinearColor::Yellow;
+
+	/**
+	 * @brief 切换攻击范围显示
+	 * @details 蓝图和控制台命令可调用此函数
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Debug Visualization")
+	void ToggleAttackRangeVisualization();
+
+	/**
+	 * @brief 切换视野范围显示
+	 * @details 蓝图和控制台命令可调用此函数
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Debug Visualization")
+	void ToggleVisionRangeVisualization();
+
+	/**
+	 * @brief 绘制调试可视化
+	 * @details 在编辑器和运行时绘制攻击范围和视野范围
+	 */
+	virtual void Tick(float DeltaTime) override;
 };

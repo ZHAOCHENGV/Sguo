@@ -14,12 +14,14 @@
 #include "Engine/DataTable.h"
 // ✨ 新增 - Gameplay Ability 相关头文件
 #include "AbilitySystemGlobals.h"
-#include "Abilities/GameplayAbility.h"     
+#include "Abilities/GameplayAbility.h"
+// ✨ 新增 - 调试可视化相关头文件
+#include "DrawDebugHelpers.h"     
 
 // 构造函数
 ASG_UnitsBase::ASG_UnitsBase()
 {
-	// 启用 Tick（如果需要的话）
+	// 🔧 修改 - 启用 Tick（用于调试可视化）
 	PrimaryActorTick.bCanEverTick = true;
 
 	// 创建 Ability System Component
@@ -53,6 +55,23 @@ void ASG_UnitsBase::BeginPlay()
 	if (bUseDataTable && UnitDataTable && !UnitDataRowName.IsNone())
 	{
 		LoadUnitDataFromTable();
+	}
+	
+	// 🔧 修复 - 自动初始化属性（如果直接拖放到场景）
+	// 检查是否已经初始化（AttributeSet 的 MaxHealth > 0）
+	if (AttributeSet && AttributeSet->GetMaxHealth() <= 0.0f)
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 检测到未初始化的单位，执行自动初始化"), *GetName());
+		
+		// 使用默认阵营标签（玩家阵营）
+		FGameplayTag DefaultFactionTag = FGameplayTag::RequestGameplayTag(FName("Unit.Faction.Player"), false);
+		if (!DefaultFactionTag.IsValid())
+		{
+			UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ Unit.Faction.Player tag 未配置，使用空阵营标签"));
+		}
+		
+		// 调用初始化函数
+		InitializeCharacter(DefaultFactionTag, 1.0f, 1.0f, 1.0f);
 	}
 	
 	// ✨ 新增 - 授予攻击能力
@@ -683,4 +702,119 @@ bool ASG_UnitsBase::IsTargetValid() const
 	
 	// ========== 所有检查通过，目标有效 ==========
 	return true;
+}
+
+// ========== ✨ 新增 - 调试可视化系统实现 ==========
+
+/**
+ * @brief Tick 函数
+ * @param DeltaTime 帧间隔时间
+ * @details
+ * 功能说明：
+ * - 每帧绘制攻击范围和视野范围的可视化
+ * 详细流程：
+ * 1. 检查是否启用可视化
+ * 2. 绘制攻击范围圆圈
+ * 3. 绘制视野范围圆圈
+ * 注意事项：
+ * - 使用 DrawDebugCircle 绘制水平圆圈
+ * - 仅在开启相应开关时绘制
+ */
+void ASG_UnitsBase::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+
+	// 获取角色位置
+	FVector ActorLocation = GetActorLocation();
+
+	// ========== 绘制攻击范围 ==========
+	if (bShowAttackRange && AttributeSet)
+	{
+		// 获取当前攻击范围
+		float CurrentAttackRange = AttributeSet->GetAttackRange();
+
+		// 绘制攻击范围圆圈
+		// DrawDebugCircle 参数说明：
+		// - GetWorld()：世界对象
+		// - ActorLocation：圆心位置
+		// - CurrentAttackRange：半径
+		// - 32：圆的分段数（越大越圆滑）
+		// - AttackRangeColor.ToFColor(true)：颜色
+		// - false：不持久绘制（每帧重绘）
+		// - -1.0f：生命周期（-1表示一帧）
+		// - 0：深度优先级
+		// - 3.0f：线条粗细
+		DrawDebugCircle(
+			GetWorld(),
+			ActorLocation,
+			CurrentAttackRange,
+			32,
+			AttackRangeColor.ToFColor(true),
+			false,
+			-1.0f,
+			0,
+			3.0f,
+			FVector(0, 1, 0),  // Y轴（用于旋转圆圈）
+			FVector(1, 0, 0),  // X轴（用于旋转圆圈）
+			false
+		);
+	}
+
+	// ========== 绘制视野范围 ==========
+	if (bShowVisionRange)
+	{
+		// 绘制视野范围圆圈
+		DrawDebugCircle(
+			GetWorld(),
+			ActorLocation,
+			VisionRange,
+			48,  // 视野范围更大，使用更多分段
+			VisionRangeColor.ToFColor(true),
+			false,
+			-1.0f,
+			0,
+			2.0f,  // 视野范围线条稍细
+			FVector(0, 1, 0),
+			FVector(1, 0, 0),
+			false
+		);
+	}
+}
+
+/**
+ * @brief 切换攻击范围显示
+ * @details
+ * 功能说明：
+ * - 开关攻击范围的可视化显示
+ * 详细流程：
+ * 1. 反转 bShowAttackRange 标志
+ * 2. 输出日志
+ * 注意事项：
+ * - 可在蓝图中调用
+ * - 可通过控制台命令调用
+ */
+void ASG_UnitsBase::ToggleAttackRangeVisualization()
+{
+	bShowAttackRange = !bShowAttackRange;
+	UE_LOG(LogSGGameplay, Log, TEXT("%s: 攻击范围可视化 %s"), 
+		*GetName(), bShowAttackRange ? TEXT("开启") : TEXT("关闭"));
+}
+
+/**
+ * @brief 切换视野范围显示
+ * @details
+ * 功能说明：
+ * - 开关视野范围的可视化显示
+ * 详细流程：
+ * 1. 反转 bShowVisionRange 标志
+ * 2. 输出日志
+ * 注意事项：
+ * - 可在蓝图中调用
+ * - 可通过控制台命令调用
+ */
+void ASG_UnitsBase::ToggleVisionRangeVisualization()
+{
+	bShowVisionRange = !bShowVisionRange;
+	UE_LOG(LogSGGameplay, Log, TEXT("%s: 视野范围可视化 %s"), 
+		*GetName(), bShowVisionRange ? TEXT("开启") : TEXT("关闭"));
 }

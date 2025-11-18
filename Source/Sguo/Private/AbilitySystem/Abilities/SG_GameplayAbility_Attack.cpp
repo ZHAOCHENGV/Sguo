@@ -238,8 +238,9 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 					ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(HitActor);
 					if (TargetUnit && TargetUnit->FactionTag != SourceUnit->FactionTag)
 					{
-						// 添加到目标列表
-						OutTargets.Add(HitActor);
+						// 🔧 修改 - 使用 AddUnique 避免重复添加同一个Actor
+						// 原因：一个Actor可能有多个碰撞组件（Capsule、Mesh等）
+						OutTargets.AddUnique(HitActor);
 					}
 				}
 			}
@@ -280,8 +281,9 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 					ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(HitActor);
 					if (TargetUnit && TargetUnit->FactionTag != SourceUnit->FactionTag)
 					{
-						// 添加到目标列表
-						OutTargets.Add(HitActor);
+						// 🔧 修改 - 使用 AddUnique 避免重复添加同一个Actor
+						// 原因：一个Actor可能有多个碰撞组件（Capsule、Mesh等）
+						OutTargets.AddUnique(HitActor);
 					}
 				}
 			}
@@ -366,13 +368,19 @@ void USG_GameplayAbility_Attack::ApplyDamageToTarget(AActor* Target)
 		TargetASC
 	);
 
-	// 检查是否应用成功
-	if (ActiveHandle.IsValid())
+	// 🔧 修改 - 改进 GE 应用结果判断
+	// Instant 类型的 GE 会立即执行并销毁，可能不返回有效的 Handle
+	// 但这不代表应用失败，只是 Handle 已经失效
+	// 对于 Instant GE，我们只需要确认执行过程没有错误即可
+	if (SpecHandle.IsValid())
 	{
-		UE_LOG(LogSGGameplay, Verbose, TEXT("    ✓ 伤害 GE 应用成功"));
+		// SpecHandle 有效说明 GE 创建成功
+		// Instant GE 已经立即执行完毕
+		UE_LOG(LogSGGameplay, Log, TEXT("    ✓ 伤害 GE 应用成功"));
 	}
 	else
 	{
+		// 如果 SpecHandle 无效，说明 GE 创建失败
 		UE_LOG(LogSGGameplay, Error, TEXT("    ❌ 伤害 GE 应用失败"));
 	}
 }

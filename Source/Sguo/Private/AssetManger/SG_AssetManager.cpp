@@ -3,7 +3,7 @@
 
 #include "AssetManger/SG_AssetManager.h"
 // 引入 GameplayTags 定义头文件，便于初始化原生标签
-#include "AbilitySystem/SG_GameplayTags.h"
+#include "Public/AbilitySystem/SG_GameplayTags.h"
 
 // 定义卡牌主资产类型常量
 // 定义卡牌主资产类型的实际值

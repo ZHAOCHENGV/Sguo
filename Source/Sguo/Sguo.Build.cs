@@ -16,8 +16,6 @@ public class Sguo : ModuleRules
 			"EnhancedInput",
 			"AIModule",
 			"NavigationSystem",
-			"StateTreeModule",
-			"GameplayStateTreeModule",
 			"Niagara",
 			"UMG",
 			"Slate",
@@ -27,7 +25,10 @@ public class Sguo : ModuleRules
 			"GameplayAbilities",
 			// 添加 MVVM 模块以使用 ViewModel API
 			"ModelViewViewModel",
-			"DeveloperSettings"
+			"DeveloperSettings",
+			"StateTreeModule",
+			"StateTreeEditorModule",
+			"GameplayStateTreeModule"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]

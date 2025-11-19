@@ -5,7 +5,7 @@
  */
 
 
-#include "SG_GameplayTags.h"
+#include "../../Public/AbilitySystem/SG_GameplayTags.h"
 #include "GameplayTagsManager.h"
 
 

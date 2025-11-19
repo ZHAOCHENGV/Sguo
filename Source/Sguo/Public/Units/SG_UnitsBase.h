@@ -14,7 +14,10 @@
 // 前置声明
 class USG_AbilitySystemComponent;
 class USG_AttributeSet;
-struct FOnAttributeChangeData;  // 添加这个前置声明
+class UGameplayAbility;
+class UAnimMontage;
+struct FOnAttributeChangeData;
+struct FSGUnitDataRow;
 // ✨ 新增 - 单位死亡委托声明
 /**
  * @brief 单位死亡委托
@@ -86,6 +89,72 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Base Attributes")
 	float BaseAttackRange = 150.0f;
 
+	// ========== ✨ 新增 - DataTable 配置 ==========
+	
+	/**
+	 * @brief 单位数据表引用
+	 * @details 存储所有单位的属性配置（生命值、攻击力、移动速度等）
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Unit Config", meta = (DisplayName = "单位数据表"))
+	TObjectPtr<UDataTable> UnitDataTable;
+	
+	/**
+	 * @brief 单位数据表行名称
+	 * @details 指定在 DataTable 中使用哪一行的数据来初始化此单位
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Unit Config", meta = (DisplayName = "数据表行名称"))
+	FName UnitDataRowName;
+	
+	/**
+	 * @brief 是否从 DataTable 加载配置
+	 * @details 如果为 true，将从 DataTable 读取配置覆盖基础属性
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Unit Config", meta = (DisplayName = "使用数据表配置"))
+	bool bUseDataTable = false;
+
+	// ========== ✨ 新增 - 攻击配置 ==========
+	
+	/**
+	 * @brief 攻击动画蒙太奇
+	 * @details 播放攻击动画时使用的蒙太奇资源
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack Config", meta = (DisplayName = "攻击动画"))
+	TObjectPtr<UAnimMontage> AttackMontage;
+	
+	/**
+	 * @brief 投射物类（远程攻击使用）
+	 * @details 弓箭手和弩兵等远程单位的投射物 Actor 类
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack Config", meta = (DisplayName = "投射物类"))
+	TSubclassOf<AActor> ProjectileClass;
+	
+	// ========== ✨ 新增 - 可配置的攻击能力 ==========
+	
+	/**
+	 * @brief 攻击能力类（可在 Blueprint 中配置）
+	 * @details
+	 * 功能说明：
+	 * - 可以在单位 Blueprint 中直接指定攻击能力类
+	 * - 如果设置了此属性，将使用指定的能力类
+	 * - 如果未设置，将根据 UnitTypeTag 自动选择默认能力
+	 * 使用方式：
+	 * - 在 Blueprint 中设置为 GA_Attack_Melee 或 GA_Attack_Ranged
+	 * - 或者自定义的攻击能力类
+	 * 优先级：
+	 * 1. AttackAbilityClass（如果设置）
+	 * 2. DataTable 配置（如果 bUseDataTable = true）
+	 * 3. 根据 UnitTypeTag 自动选择（默认行为）
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack Config", meta = (DisplayName = "攻击能力类"))
+	TSubclassOf<UGameplayAbility> AttackAbilityClass;
+	
+	/**
+	 * @brief 当前已授予的攻击能力
+	 * @details 缓存已授予的攻击 GA，用于后续移除或管理
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Attack")
+	FGameplayAbilitySpecHandle GrantedAttackAbilityHandle;
+
 	// ========== GAS 接口实现 ==========
 	
 	/**
@@ -106,6 +175,66 @@ public:
 		float SpeedMultiplier = 1.0f
 	);
 
+	// ========== ✨ 新增 - DataTable 相关函数 ==========
+	
+	/**
+	 * @brief 从 DataTable 加载单位配置
+	 * @details
+	 * 功能说明：
+	 * - 从 DataTable 读取指定行的数据
+	 * - 应用属性到 BaseHealth、BaseAttackDamage 等
+	 * - 应用攻击配置（攻击动画、投射物类等）
+	 * 详细流程：
+	 * 1. 检查 DataTable 和行名称是否有效
+	 * 2. 从 DataTable 查找指定行
+	 * 3. 读取属性值并覆盖基础属性
+	 * 4. 读取攻击配置
+	 * 注意事项：
+	 * - 在 InitializeCharacter() 之前调用
+	 * - 如果 bUseDataTable = false，不会执行
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Character")
+	void LoadUnitDataFromTable();
+
+	// ========== ✨ 新增 - 攻击系统函数 ==========
+	
+	/**
+	 * @brief 授予攻击能力
+	 * @details
+	 * 功能说明：
+	 * - 根据单位类型授予对应的攻击 Gameplay Ability
+	 * - 近战单位使用 GA_Attack_Melee
+	 * - 远程单位使用 GA_Attack_Ranged
+	 * 详细流程：
+	 * 1. 检查 ASC 是否有效
+	 * 2. 根据 UnitTypeTag 确定攻击类型
+	 * 3. 创建 Ability Spec 并授予能力
+	 * 4. 缓存 Ability Handle 供后续使用
+	 * 注意事项：
+	 * - 在 BeginPlay 中自动调用
+	 * - 需要先配置 UnitTypeTag
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Attack")
+	void GrantAttackAbility();
+	
+	/**
+	 * @brief 执行攻击
+	 * @details
+	 * 功能说明：
+	 * - 触发已授予的攻击能力
+	 * - 供 AI 或玩家输入调用
+	 * 详细流程：
+	 * 1. 检查 ASC 和攻击能力是否有效
+	 * 2. 检查能力是否可以激活（冷却、成本等）
+	 * 3. 激活攻击能力
+	 * 注意事项：
+	 * - 在 StateTree AI 中调用
+	 * - 需要先调用 GrantAttackAbility()
+	 * @return 是否成功触发攻击
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Attack")
+	bool PerformAttack();
+
 	// ========== 战斗相关函数 ==========
 	
 	/**
@@ -119,6 +248,23 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Combat")
 	void SetTarget(AActor* NewTarget);
+	
+	/**
+	 * @brief 检查当前目标是否有效
+	 * @details
+	 * 功能说明：
+	 * - 检查目标是否存在、是否存活、是否在范围内
+	 * 详细流程：
+	 * 1. 检查 CurrentTarget 是否为空
+	 * 2. 检查目标是否已死亡
+	 * 3. 检查目标是否仍在攻击范围内
+	 * 注意事项：
+	 * - 在 AI 中每帧检查
+	 * - 如果无效，需要重新查找目标
+	 * @return 目标是否有效
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Combat")
+	bool IsTargetValid() const;
 
 protected:
 	// ========== 生命周期函数 ==========
@@ -163,4 +309,20 @@ public:
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Character")
 	bool bIsDead = false;
+
+	// ========== ✨ 新增 - AI 相关 ==========
+	
+	/**
+	 * @brief AI控制器类
+	 * @details 指定此单位使用的AI控制器类型
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI")
+	TSubclassOf<AAIController> AIControllerClass;
+	
+	/**
+	 * @brief 是否自动生成AI控制器
+	 * @details 如果为true且没有Controller，在BeginPlay时自动生成AI控制器
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI")
+	bool bUseAIController = true;
 };

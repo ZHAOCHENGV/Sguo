@@ -37,7 +37,7 @@ struct SGUO_API FSG_StateTreeTask_PerformAttackInstanceData
 /**
  * @brief StateTree任务：执行攻击
  */
-USTRUCT()
+USTRUCT(meta = (DisplayName = "Perform Attack", Category = "AI|Combat"))
 struct SGUO_API FSG_StateTreeTask_PerformAttack : public FStateTreeTaskBase
 {
 	GENERATED_BODY()

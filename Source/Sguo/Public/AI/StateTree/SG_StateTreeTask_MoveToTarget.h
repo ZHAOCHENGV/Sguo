@@ -37,7 +37,7 @@ struct SGUO_API FSG_StateTreeTask_MoveToTargetInstanceData
 /**
  * @brief StateTree任务：移动到目标
  */
-USTRUCT()
+USTRUCT(meta = (DisplayName = "Move To Target", Category = "AI|Movement"))
 struct SGUO_API FSG_StateTreeTask_MoveToTarget : public FStateTreeTaskBase
 {
 	GENERATED_BODY()

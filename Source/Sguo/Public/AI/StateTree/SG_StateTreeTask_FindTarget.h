@@ -37,7 +37,7 @@ struct SGUO_API FSG_StateTreeTask_FindTargetInstanceData
 /**
  * @brief StateTree任务：查找目标
  */
-USTRUCT()
+USTRUCT(meta = (DisplayName = "Find Target", Category = "AI|Combat"))
 struct SGUO_API FSG_StateTreeTask_FindTarget : public FStateTreeTaskBase
 {
 	GENERATED_BODY()

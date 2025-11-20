@@ -139,20 +139,7 @@ public:
 		meta = (DisplayName = "伤害倍率", ClampMin = "0.1", UIMin = "0.1", UIMax = "10.0"))
 	float DamageMultiplier = 1.0f;
 
-	/**
-	 * @brief 动画通知名称
-	 * @details
-	 * 功能说明：
-	 * - 在动画中触发攻击判定的 AnimNotify 名称
-	 * - 当动画播放到此通知时，执行攻击判定
-	 * 默认值：
-	 * - "AttackHit"
-	 * 注意事项：
-	 * - 必须与动画中的 AnimNotify 名称完全匹配（区分大小写）
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack Config", 
-		meta = (DisplayName = "攻击判定通知名称"))
-	FName AttackNotifyName = TEXT("AttackHit");
+	
 
 	// ========== ✨ 新增 - 调试可视化配置 ==========
 
@@ -452,4 +439,48 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent, Category = "Attack", 
 		meta = (DisplayName = "攻击命中时"))
 	void OnAttackHit(const TArray<AActor*>& Targets);
+	
+
+	// ✨ 新增 - 多段攻击配置
+	/**
+	 * @brief 攻击通知名称列表
+	 * @details
+	 * 功能说明：
+	 * - 支持多段攻击
+	 * - 每个通知名称对应一次攻击判定
+	 * 使用示例：
+	 * - 单段攻击：["AttackHit"]
+	 * - 二连击：["AttackHit_1", "AttackHit_2"]
+	 * - 三连击：["AttackHit_1", "AttackHit_2", "AttackHit_3"]
+	 * 注意事项：
+	 * - 动画蒙太奇中的 AnimNotify 名称必须匹配
+	 * - 每个通知会触发一次攻击判定
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack Config", meta = (DisplayName = "攻击通知名称列表"))
+	TArray<FName> AttackNotifyNames;
+
+	// ✨ 新增 - 已触发的攻击段数
+	/**
+	 * @brief 已触发的攻击段数
+	 * @details 用于跟踪当前是第几段攻击
+	 */
+	int32 CurrentAttackIndex = 0;
+
+
+	/**
+	 * @brief 每段攻击的伤害倍率
+	 * @details
+	 * 功能说明：
+	 * - 每段攻击可以有不同的伤害倍率
+	 * - 数组索引对应攻击段数（从 0 开始）
+	 * 使用示例：
+	 * - 单段攻击：[1.0]
+	 * - 二连击：[0.8, 1.2]
+	 * - 三连击：[0.7, 1.0, 1.5]
+	 * 注意事项：
+	 * - 如果数组为空，所有攻击使用 DamageMultiplier
+	 * - 如果数组长度不够，后面的攻击使用 DamageMultiplier
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack Config", meta = (DisplayName = "每段攻击伤害倍率"))
+	TArray<float> AttackDamageMultipliers;
 };

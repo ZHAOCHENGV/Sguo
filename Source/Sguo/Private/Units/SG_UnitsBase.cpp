@@ -16,7 +16,9 @@
 #include "AbilitySystemGlobals.h"
 #include "Abilities/GameplayAbility.h"
 // ✨ 新增 - 调试可视化相关头文件
+#include "AIController.h"
 #include "DrawDebugHelpers.h"
+#include "BehaviorTree/BlackboardComponent.h"
 #include "Data/SG_CharacterCardData.h"
 
 // 构造函数
@@ -337,9 +339,9 @@ void ASG_UnitsBase::OnDeath_Implementation()
 	// TODO: 生成掉落物
 
 	// 延迟销毁（给动画播放时间）
-	SetLifeSpan(5.0f);
+	SetLifeSpan(2.0f);
 	// 输出日志
-	UE_LOG(LogSGGameplay, Log, TEXT("  将在 5 秒后销毁"));
+	UE_LOG(LogSGGameplay, Log, TEXT("  将在 2 秒后销毁"));
 }
 
 // 查找最近的目标
@@ -648,52 +650,104 @@ void ASG_UnitsBase::GrantAttackAbility()
  */
 bool ASG_UnitsBase::PerformAttack()
 {
-	// ========== 步骤1：检查 ASC 是否有效 ==========
+	// ========== 步骤1：输出调试信息 ==========
+	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+	UE_LOG(LogSGGameplay, Log, TEXT("🔫 %s 尝试执行攻击"), *GetName());
+	
+	// ========== 步骤2：检查 ASC 是否有效 ==========
 	if (!AbilitySystemComponent)
 	{
-		UE_LOG(LogSGGameplay, Error, TEXT("✗ %s: AbilitySystemComponent 为空，无法执行攻击！"), *GetName());
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ AbilitySystemComponent 为空"));
+		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 		return false;
 	}
+	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ AbilitySystemComponent 有效"));
 	
-	// ========== 步骤2：检查攻击能力是否已授予 ==========
+	// ========== 步骤3：检查攻击能力是否已授予 ==========
 	if (!GrantedAttackAbilityHandle.IsValid())
 	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 攻击能力未授予，无法执行攻击！"), *GetName());
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 攻击能力未授予"));
+		UE_LOG(LogSGGameplay, Error, TEXT("  提示：检查 GrantAttackAbility() 是否被调用"));
+		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 		return false;
 	}
+	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 攻击能力已授予（Handle: %s）"), *GrantedAttackAbilityHandle.ToString());
 	
-	// ========== 步骤3：检查能力是否可以激活 ==========
-	// FindAbilitySpecFromHandle 查找能力规格
+	// ========== 步骤4：查找能力规格 ==========
 	FGameplayAbilitySpec* AbilitySpec = AbilitySystemComponent->FindAbilitySpecFromHandle(GrantedAttackAbilityHandle);
 	if (!AbilitySpec)
 	{
-		UE_LOG(LogSGGameplay, Error, TEXT("✗ %s: 找不到攻击能力 Spec！"), *GetName());
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 找不到攻击能力 Spec"));
+		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 		return false;
 	}
+	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 找到攻击能力 Spec"));
 	
-	// 检查能力是否可以激活（检查冷却、成本、Tag 限制等）
-	if (!AbilitySpec->Ability->CanActivateAbility(
-		GrantedAttackAbilityHandle,
-		AbilitySystemComponent->AbilityActorInfo.Get()))
+	// ========== 步骤5：检查能力对象是否有效 ==========
+	if (!AbilitySpec->Ability)
 	{
-		UE_LOG(LogSGGameplay, Verbose, TEXT("⚠️ %s: 攻击能力无法激活（可能在冷却中）"), *GetName());
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 攻击能力对象为空"));
+		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 		return false;
 	}
+	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 攻击能力对象有效：%s"), *AbilitySpec->Ability->GetName());
 	
-	// ========== 步骤4：激活攻击能力 ==========
-	// TryActivateAbility 尝试激活能力
+	// ========== 步骤6：检查能力是否正在激活 ==========
+	if (AbilitySpec->IsActive())
+	{
+		UE_LOG(LogSGGameplay, Log, TEXT("  ⏳ 能力正在激活中"));
+		UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 视为成功（攻击动画播放中）"));
+		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+		return true;
+	}
+	
+	// ========== 步骤7：检查能力是否可以激活 ==========
+	bool bCanActivate = AbilitySpec->Ability->CanActivateAbility(
+		GrantedAttackAbilityHandle,
+		AbilitySystemComponent->AbilityActorInfo.Get()
+	);
+	
+	if (!bCanActivate)
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 能力无法激活"));
+		
+		// 🔧 新增 - 详细检查失败原因
+		FGameplayTagContainer FailureTags;
+		AbilitySpec->Ability->CanActivateAbility(
+			GrantedAttackAbilityHandle,
+			AbilitySystemComponent->AbilityActorInfo.Get(),
+			nullptr,
+			nullptr,
+			&FailureTags
+		);
+		
+		if (FailureTags.Num() > 0)
+		{
+			UE_LOG(LogSGGameplay, Warning, TEXT("  失败原因（Tags）："));
+			for (const FGameplayTag& Tag : FailureTags)
+			{
+				UE_LOG(LogSGGameplay, Warning, TEXT("    - %s"), *Tag.ToString());
+			}
+		}
+		
+		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+		return false;
+	}
+	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 能力可以激活"));
+	
+	// ========== 步骤8：激活攻击能力 ==========
 	bool bSuccess = AbilitySystemComponent->TryActivateAbility(GrantedAttackAbilityHandle);
 	
-	// 输出日志
 	if (bSuccess)
 	{
-		UE_LOG(LogSGGameplay, Verbose, TEXT("✓ %s: 触发攻击"), *GetName());
+		UE_LOG(LogSGGameplay, Log, TEXT("  ✅ 攻击能力激活成功"));
 	}
 	else
 	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 触发攻击失败"), *GetName());
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 攻击能力激活失败"));
 	}
 	
+	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 	return bSuccess;
 }
 
@@ -836,6 +890,42 @@ void ASG_UnitsBase::Tick(float DeltaTime)
 			false
 		);
 	}
+
+	// ========== ✨ 新增 - 输出 AI 调试信息 ==========
+	if (bAIDebugging)
+	{
+#if !UE_BUILD_SHIPPING  // 只在非发布版本中启用
+		static float DebugTimer = 0.0f;
+		DebugTimer += DeltaTime;
+		if (DebugTimer >= 1.0f)
+		{
+			DebugTimer = 0.0f;
+		
+			// 检查是否有 AI Controller
+			if (AAIController* AIController = Cast<AAIController>(GetController()))
+			{
+				// 获取黑板组件
+				if (UBlackboardComponent* BlackboardComp = AIController->GetBlackboardComponent())
+				{
+					// 输出黑板信息
+					AActor* TargetActor  = Cast<AActor>(BlackboardComp->GetValueAsObject(FName("CurrentTarget")));
+					bool bIsInRange = BlackboardComp->GetValueAsBool(FName("IsInAttackRange"));
+				
+					UE_LOG(LogSGGameplay, Log, TEXT("📊 AI 状态：%s"), *GetName());
+					UE_LOG(LogSGGameplay, Log, TEXT("  当前目标：%s"), TargetActor  ? *TargetActor ->GetName() : TEXT("无"));
+					UE_LOG(LogSGGameplay, Log, TEXT("  是否在攻击范围内：%s"), bIsInRange ? TEXT("是") : TEXT("否"));
+				
+					if (TargetActor)
+					{
+						float Distance = FVector::Dist(GetActorLocation(), TargetActor->GetActorLocation());
+						float AttackRange = GetAttackRangeForAI();
+						UE_LOG(LogSGGameplay, Log, TEXT("  距离：%.2f / %.2f"), Distance, AttackRange);
+					}
+				}
+			}
+		}
+	}
+#endif
 }
 
 /**
@@ -974,6 +1064,7 @@ void ASG_UnitsBase::InitializeWithDefaults()
  * 2. 从 DataTable 查找指定行
  * 3. 读取属性值并覆盖基础属性
  * 4. 读取攻击配置
+ * 5.🔧 新增：缓存 AI 配置（寻敌范围、追击范围）
  * 注意事项：
  * - 在 BeginPlay 中调用
  * - 如果 bUseDataTable = false，不会执行
@@ -1017,7 +1108,12 @@ bool ASG_UnitsBase::IsLoadUnitDataFromTable()
 	BaseMoveSpeed = RowData->BaseMoveSpeed;
 	BaseAttackSpeed = RowData->BaseAttackSpeed;
 	BaseAttackRange = RowData->BaseAttackRange;
-	// ✨ 新增 - 应用视野范围（从 DetectionRange）
+	
+	// ✨ 新增 - 缓存 AI 配置
+	CachedDetectionRange = RowData->DetectionRange;
+	CachedChaseRange = RowData->ChaseRange;
+	
+	// ✨ 新增 - 同步 VisionRange（用于调试可视化）
 	VisionRange = RowData->DetectionRange;
 	
 	UE_LOG(LogSGGameplay, Log, TEXT("    属性配置："));
@@ -1026,7 +1122,10 @@ bool ASG_UnitsBase::IsLoadUnitDataFromTable()
 	UE_LOG(LogSGGameplay, Log, TEXT("      移动速度：%.0f"), BaseMoveSpeed);
 	UE_LOG(LogSGGameplay, Log, TEXT("      攻击速度：%.2f"), BaseAttackSpeed);
 	UE_LOG(LogSGGameplay, Log, TEXT("      攻击范围：%.0f"), BaseAttackRange);
-	UE_LOG(LogSGGameplay, Log, TEXT("      视野范围：%.0f"), VisionRange);  // ✨ 新增日志
+	// ✨ 新增 - 输出 AI 配置日志
+	UE_LOG(LogSGGameplay, Log, TEXT("    AI 配置："));
+	UE_LOG(LogSGGameplay, Log, TEXT("      寻敌范围：%.0f"), CachedDetectionRange);
+	UE_LOG(LogSGGameplay, Log, TEXT("      追击范围：%.0f"), CachedChaseRange);
 	
 	// ========== 步骤4：应用单位类型标签 ==========
 	if (RowData->UnitTypeTag.IsValid())
@@ -1048,9 +1147,72 @@ bool ASG_UnitsBase::IsLoadUnitDataFromTable()
 		UE_LOG(LogSGGameplay, Log, TEXT("    投射物类：%s"), *ProjectileClass->GetName());
 	}
 	
-	// ========== 步骤6：应用攻击能力类（如果 DataTable 中有配置）==========
-	// 注意：需要在 FSGUnitDataRow 中添加 AttackAbilityClass 字段
-	// 这里暂时跳过，后续可以扩展
-	
 	return true;
+}
+
+
+
+// ========== ✨ 新增 - AI 配置接口实现 ==========
+
+/**
+ * @brief 获取寻敌范围
+ * @return 寻敌范围（厘米）
+ * @details
+ * 功能说明：
+ * - 从 DataTable 读取寻敌范围
+ * - 如果未使用 DataTable，使用 VisionRange
+ * - AI 用此值查找目标
+ */
+float ASG_UnitsBase::GetDetectionRange() const
+{
+	// 如果使用 DataTable，返回缓存的值
+	if (bUseDataTable)
+	{
+		return CachedDetectionRange;
+	}
+	
+	// 否则使用 VisionRange
+	return VisionRange;
+}
+
+/**
+ * @brief 获取追击范围
+ * @return 追击范围（厘米）
+ * @details
+ * 功能说明：
+ * - 从 DataTable 读取追击范围
+ * - 如果未使用 DataTable，使用 VisionRange * 1.5
+ * - AI 用此值决定是否放弃追击
+ */
+float ASG_UnitsBase::GetChaseRange() const
+{
+	// 如果使用 DataTable，返回缓存的值
+	if (bUseDataTable)
+	{
+		return CachedChaseRange;
+	}
+	
+	// 否则使用 VisionRange * 1.5
+	return VisionRange * 1.5f;
+}
+
+/**
+ * @brief 获取攻击范围
+ * @return 攻击范围（厘米）
+ * @details
+ * 功能说明：
+ * - 从 AttributeSet 读取攻击范围
+ * - 如果 AttributeSet 无效，使用 BaseAttackRange
+ * - AI 用此值决定是否可以攻击
+ */
+float ASG_UnitsBase::GetAttackRangeForAI() const
+{
+	// 优先从 AttributeSet 读取
+	if (AttributeSet)
+	{
+		return AttributeSet->GetAttackRange();
+	}
+	
+	// 否则使用基础攻击范围
+	return BaseAttackRange;
 }

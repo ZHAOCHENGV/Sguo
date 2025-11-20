@@ -200,7 +200,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "AI|Main City")
 	void ResumeAttack();
 
-protected:
+
 	// ========== 黑板键名称（常量）==========
 	
 	/**

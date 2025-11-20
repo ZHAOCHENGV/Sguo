@@ -55,6 +55,9 @@ USG_GameplayAbility_Attack::USG_GameplayAbility_Attack()
 	// 设置技能的网络执行策略
 	// LocalPredicted：客户端预测，服务器确认
 	NetExecutionPolicy = EGameplayAbilityNetExecutionPolicy::LocalPredicted;
+
+	// ✨ 新增 - 初始化默认的攻击通知列表
+	AttackNotifyNames.Add(TEXT("AttackHit"));
 }
 
 // ========== 激活技能 ==========
@@ -74,58 +77,78 @@ void USG_GameplayAbility_Attack::ActivateAbility(
 	const FGameplayEventData* TriggerEventData
 )
 {
-	// 调用父类方法
 	Super::ActivateAbility(Handle, ActorInfo, ActivationInfo, TriggerEventData);
 
-	// 输出日志：技能激活
+	// ✨ 新增 - 重置攻击段数计数器
+	CurrentAttackIndex = 0;
+
 	UE_LOG(LogSGGameplay, Log, TEXT("========== 攻击技能激活 =========="));
 	UE_LOG(LogSGGameplay, Log, TEXT("  施放者：%s"), 
 		ActorInfo->AvatarActor.IsValid() ? *ActorInfo->AvatarActor->GetName() : TEXT("None"));
 	UE_LOG(LogSGGameplay, Log, TEXT("  攻击类型：%s"), 
 		*UEnum::GetValueAsString(AttackType));
+	UE_LOG(LogSGGameplay, Log, TEXT("  攻击段数：%d"), AttackNotifyNames.Num());
 
-	// 如果有攻击动画，播放动画
 	if (AttackMontage && ActorInfo->AvatarActor.IsValid())
 	{
-		// 获取角色的动画实例
 		if (ACharacter* Character = Cast<ACharacter>(ActorInfo->AvatarActor.Get()))
 		{
 			if (UAnimInstance* AnimInstance = Character->GetMesh()->GetAnimInstance())
 			{
-				// 播放攻击动画蒙太奇
-				AnimInstance->Montage_Play(AttackMontage);
+				float MontageLength = AnimInstance->Montage_Play(AttackMontage);
 				
-				// 绑定动画通知回调
-				// 注意：AnimNotify 会在动画的特定帧自动触发 OnMontageNotifyBegin
 				AnimInstance->OnPlayMontageNotifyBegin.AddDynamic(
 					this, 
 					&USG_GameplayAbility_Attack::OnMontageNotifyBegin
 				);
 
-				// 输出日志：动画播放
 				UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 攻击动画已播放：%s"), *AttackMontage->GetName());
+				UE_LOG(LogSGGameplay, Log, TEXT("  动画长度：%.2f 秒"), MontageLength);
+				
+				// 设置定时器，确保能力在动画结束后结束
+				FTimerHandle TimerHandle;
+				FTimerDelegate TimerDelegate;
+				TimerDelegate.BindLambda([this, Handle, ActorInfo, ActivationInfo, AnimInstance]()
+				{
+					if (AnimInstance)
+					{
+						AnimInstance->OnPlayMontageNotifyBegin.RemoveDynamic(
+							this, 
+							&USG_GameplayAbility_Attack::OnMontageNotifyBegin
+						);
+						UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 解绑动画通知回调"));
+					}
+					
+					UE_LOG(LogSGGameplay, Log, TEXT("  ⏰ 攻击动画结束，结束能力"));
+					EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
+				});
+				
+				ActorInfo->AvatarActor->GetWorldTimerManager().SetTimer(
+					TimerHandle,
+					TimerDelegate,
+					MontageLength,
+					false
+				);
 			}
 			else
 			{
 				UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 无法获取 AnimInstance"));
+				EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 			}
 		}
 		else
 		{
 			UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 施放者不是 Character 类型"));
+			EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 		}
 	}
 	else
 	{
-		// 如果没有动画，直接执行攻击判定
 		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 无攻击动画，直接执行攻击判定"));
 		PerformAttack();
-		
-		// 结束技能
 		EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 	}
 
-	// 输出日志：技能激活结束
 	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 }
 
@@ -146,11 +169,12 @@ void USG_GameplayAbility_Attack::EndAbility(
 	bool bWasCancelled
 )
 {
-	// 输出日志：技能结束
+	// ✨ 新增 - 重置攻击段数计数器
+	CurrentAttackIndex = 0;
+
 	UE_LOG(LogSGGameplay, Verbose, TEXT("攻击技能结束 (取消: %s)"), 
 		bWasCancelled ? TEXT("是") : TEXT("否"));
 
-	// 调用父类方法
 	Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
 }
 
@@ -171,20 +195,44 @@ void USG_GameplayAbility_Attack::OnMontageNotifyBegin(
 	const FBranchingPointNotifyPayload& BranchingPointPayload
 )
 {
-	// 检查通知名称是否匹配
-	if (NotifyName == AttackNotifyName)
+	// ✨ 新增 - 检查通知名称是否在列表中
+	int32 NotifyIndex = AttackNotifyNames.IndexOfByKey(NotifyName);
+	
+	if (NotifyIndex != INDEX_NONE)
 	{
-		// 输出日志：攻击判定触发
-		UE_LOG(LogSGGameplay, Log, TEXT("  🎯 攻击判定帧触发 (通知: %s)"), *NotifyName.ToString());
+		UE_LOG(LogSGGameplay, Log, TEXT("  🎯 攻击判定帧触发 (通知: %s, 第 %d 段)"), 
+			*NotifyName.ToString(), NotifyIndex + 1);
+		
+		// ✨ 新增 - 获取当前段的伤害倍率
+		float CurrentDamageMultiplier = DamageMultiplier;
+		if (AttackDamageMultipliers.IsValidIndex(NotifyIndex))
+		{
+			CurrentDamageMultiplier = AttackDamageMultipliers[NotifyIndex];
+			UE_LOG(LogSGGameplay, Log, TEXT("    使用第 %d 段伤害倍率：%.2f"), 
+				NotifyIndex + 1, CurrentDamageMultiplier);
+		}
+		else
+		{
+			UE_LOG(LogSGGameplay, Log, TEXT("    使用默认伤害倍率：%.2f"), CurrentDamageMultiplier);
+		}
+		
+		// ✨ 新增 - 临时修改伤害倍率
+		float OriginalMultiplier = DamageMultiplier;
+		DamageMultiplier = CurrentDamageMultiplier;
 		
 		// 执行攻击判定
 		PerformAttack();
+		
+		// ✨ 新增 - 恢复原始倍率
+		DamageMultiplier = OriginalMultiplier;
+		
+		// 增加攻击段数计数
+		CurrentAttackIndex++;
 	}
 	else
 	{
-		// 输出日志：通知名称不匹配
-		UE_LOG(LogSGGameplay, Verbose, TEXT("  AnimNotify: %s (跳过，不匹配 %s)"), 
-			*NotifyName.ToString(), *AttackNotifyName.ToString());
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  AnimNotify: %s (不在攻击通知列表中)"), 
+			*NotifyName.ToString());
 	}
 }
 

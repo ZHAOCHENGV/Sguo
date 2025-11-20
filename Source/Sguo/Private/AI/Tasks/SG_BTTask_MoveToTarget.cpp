@@ -40,7 +40,7 @@ USG_BTTask_MoveToTarget::USG_BTTask_MoveToTarget()
  * @details
  * 功能说明：
  * - 移动到目标位置
- * - 考虑攻击范围
+ * - 🔧 修改：使用单位的攻击范围作为停止距离
  */
 EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
 {
@@ -76,19 +76,12 @@ EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent&
 		return EBTNodeResult::Failed;
 	}
 	
-	// 计算可接受半径（使用攻击范围）
+	// 🔧 修改 - 使用单位的攻击范围作为可接受半径
 	float Radius = AcceptableRadius;
 	if (Radius < 0.0f)
 	{
-		// 从 AttributeSet 读取攻击范围
-		if (ControlledUnit->AttributeSet)
-		{
-			Radius = ControlledUnit->AttributeSet->GetAttackRange();
-		}
-		else
-		{
-			Radius = ControlledUnit->BaseAttackRange;
-		}
+		// 从单位获取攻击范围
+		Radius = ControlledUnit->GetAttackRangeForAI();
 		
 		// 减去一些余量，避免边界抖动
 		Radius = FMath::Max(Radius - 50.0f, 50.0f);
@@ -108,7 +101,8 @@ EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent&
 	// 检查移动请求结果
 	if (Result == EPathFollowingRequestResult::RequestSuccessful)
 	{
-		UE_LOG(LogSGGameplay, Verbose, TEXT("✓ 移动到目标任务：开始移动到 %s"), *Target->GetName());
+		UE_LOG(LogSGGameplay, Verbose, TEXT("✓ 移动到目标任务：开始移动到 %s（停止距离：%.0f）"), 
+			*Target->GetName(), Radius);
 		return EBTNodeResult::InProgress;
 	}
 	else if (Result == EPathFollowingRequestResult::AlreadyAtGoal)

@@ -105,13 +105,14 @@ void ASG_AIControllerBase::OnPossess(APawn* InPawn)
  * 1. 获取所有敌方单位
  * 2. 计算距离，找到最近的
  * 3. 如果没有单位，查找主城
+ * 4. 🔧 修改：使用单位的寻敌范围（DetectionRange）
  * 注意事项：
  * - 只查找不同阵营的目标
  * - 排除已死亡的单位
  */
 AActor* ASG_AIControllerBase::FindNearestTarget()
 {
-	// 获取控制的单位
+// 获取控制的单位
 	ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
 	if (!ControlledUnit)
 	{
@@ -120,6 +121,13 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
 	
 	// 获取单位的阵营标签
 	FGameplayTag MyFaction = ControlledUnit->FactionTag;
+	
+	// 🔧 修改 - 获取寻敌范围
+	float DetectionRange = ControlledUnit->GetDetectionRange();
+	
+	// 输出日志
+	UE_LOG(LogSGGameplay, Verbose, TEXT("%s 开始查找目标（寻敌范围：%.0f）"), 
+		*ControlledUnit->GetName(), DetectionRange);
 	
 	// 获取所有单位
 	TArray<AActor*> AllUnits;
@@ -156,6 +164,12 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
 			// 计算距离
 			float Distance = FVector::Dist(ControlledUnit->GetActorLocation(), Unit->GetActorLocation());
 			
+			// 🔧 修改 - 只查找寻敌范围内的目标
+			if (Distance > DetectionRange)
+			{
+				continue;
+			}
+			
 			// 更新最近敌人
 			if (Distance < MinDistance)
 			{
@@ -173,7 +187,7 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
 		return NearestEnemy;
 	}
 	
-	// ✨ 新增 - 如果没有敌方单位，查找敌方主城
+	// 如果没有敌方单位，查找敌方主城
 	UE_LOG(LogSGGameplay, Verbose, TEXT("%s 未找到敌方单位，尝试查找敌方主城"), *ControlledUnit->GetName());
 	
 	// 获取所有主城
@@ -199,15 +213,25 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
 				continue;
 			}
 			
-			// 找到敌方主城
-			UE_LOG(LogSGGameplay, Log, TEXT("%s 找到敌方主城：%s"), 
-				*ControlledUnit->GetName(), *MainCity->GetName());
-			return MainCity;
+			// 🔧 修改 - 检查主城是否在寻敌范围内
+			float DistanceToMainCity = FVector::Dist(
+				ControlledUnit->GetActorLocation(), 
+				MainCity->GetActorLocation()
+			);
+			
+			if (DistanceToMainCity <= DetectionRange)
+			{
+				// 找到敌方主城
+				UE_LOG(LogSGGameplay, Log, TEXT("%s 找到敌方主城：%s (距离: %.0f)"), 
+					*ControlledUnit->GetName(), *MainCity->GetName(), DistanceToMainCity);
+				return MainCity;
+			}
 		}
 	}
 	
 	// 如果连主城都没找到
-	UE_LOG(LogSGGameplay, Warning, TEXT("%s 未找到任何目标（单位或主城）"), *ControlledUnit->GetName());
+	UE_LOG(LogSGGameplay, Verbose, TEXT("%s 未找到任何目标（寻敌范围：%.0f）"), 
+		*ControlledUnit->GetName(), DetectionRange);
 	return nullptr;
 }
 

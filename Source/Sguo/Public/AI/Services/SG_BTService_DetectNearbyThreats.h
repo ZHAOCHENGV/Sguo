@@ -50,15 +50,24 @@ public:
 	virtual void TickNode(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds) override;
 
 protected:
+	// ❌ 删除 - 不再需要手动配置检测半径
+	// UPROPERTY(EditAnywhere, Category = "Detection")
+	// float DetectionRadius = 800.0f;
+	
+	// ✨ 新增 - 检测半径倍率
 	/**
-	 * @brief 检测半径
+	 * @brief 检测半径倍率
 	 * @details
 	 * 功能说明：
-	 * - 检测周边威胁的范围（厘米）
-	 * - 默认 800（8 米）
+	 * - 基于单位的攻击范围计算检测半径
+	 * - 检测半径 = 攻击范围 * 倍率
+	 * - 默认 2.0（攻击范围的 2 倍）
+	 * 使用场景：
+	 * - 近战单位：2.0 - 3.0（检测范围较小）
+	 * - 远程单位：1.5 - 2.0（检测范围适中）
 	 */
-	UPROPERTY(EditAnywhere, Category = "Detection", meta = (DisplayName = "检测半径", ClampMin = "100.0", UIMin = "100.0", UIMax = "2000.0"))
-	float DetectionRadius = 800.0f;
+	UPROPERTY(EditAnywhere, Category = "Detection", meta = (DisplayName = "检测半径倍率", ClampMin = "1.0", UIMin = "1.0", UIMax = "5.0"))
+	float DetectionRadiusMultiplier = 2.0f;
 
 	/**
 	 * @brief 黑板键：目标

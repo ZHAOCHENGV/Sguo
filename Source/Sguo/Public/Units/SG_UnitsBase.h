@@ -136,7 +136,7 @@ public:
 	 * @brief 攻击动画蒙太奇
 	 * @details 播放攻击动画时使用的蒙太奇资源
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack Config", meta = (DisplayName = "攻击动画"))
+	UPROPERTY(BlueprintReadOnly, Category = "Attack Config", meta = (DisplayName = "攻击动画"))
 	TObjectPtr<UAnimMontage> AttackMontage;
 	
 	/**
@@ -345,6 +345,12 @@ public:
 	bool bShowVisionRange = false;
 
 	/**
+	 * @brief 是否输出 AI 调试信息
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Visualization", meta = (DisplayName = "显示AI调试信息"))
+	bool bAIDebugging = false;
+
+	/**
 	 * @brief 视野范围（厘米）
 	 * @details
 	 * 功能说明：
@@ -433,5 +439,59 @@ protected:
 	 */
 	void InitializeWithDefaults();
 
+
+public:
+	// ========== ✨ 新增 - AI 配置接口 ==========
+	
+	/**
+	 * @brief 获取寻敌范围
+	 * @return 寻敌范围（厘米）
+	 * @details
+	 * 功能说明：
+	 * - 从 DataTable 读取寻敌范围
+	 * - 如果未使用 DataTable，使用 VisionRange
+	 * - AI 用此值查找目标
+	 */
+	UFUNCTION(BlueprintPure, Category = "AI")
+	float GetDetectionRange() const;
+	
+	/**
+	 * @brief 获取追击范围
+	 * @return 追击范围（厘米）
+	 * @details
+	 * 功能说明：
+	 * - 从 DataTable 读取追击范围
+	 * - 如果未使用 DataTable，使用 VisionRange * 1.5
+	 * - AI 用此值决定是否放弃追击
+	 */
+	UFUNCTION(BlueprintPure, Category = "AI")
+	float GetChaseRange() const;
+	
+	/**
+	 * @brief 获取攻击范围
+	 * @return 攻击范围（厘米）
+	 * @details
+	 * 功能说明：
+	 * - 从 AttributeSet 读取攻击范围
+	 * - 如果 AttributeSet 无效，使用 BaseAttackRange
+	 * - AI 用此值决定是否可以攻击
+	 */
+	UFUNCTION(BlueprintPure, Category = "AI")
+	float GetAttackRangeForAI() const;
+
+protected:
+	// ========== ✨ 新增 - DataTable 中的 AI 配置缓存 ==========
+	
+	/**
+	 * @brief 寻敌范围（从 DataTable 加载）
+	 * @details 在 LoadUnitDataFromTable 中设置
+	 */
+	float CachedDetectionRange = 1500.0f;
+	
+	/**
+	 * @brief 追击范围（从 DataTable 加载）
+	 * @details 在 LoadUnitDataFromTable 中设置
+	 */
+	float CachedChaseRange = 2000.0f;
 	
 };

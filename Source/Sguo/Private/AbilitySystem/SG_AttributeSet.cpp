@@ -12,6 +12,7 @@
 #include "AbilitySystem/SG_AttributeSet.h"
 #include "Net/UnrealNetwork.h"
 #include "GameplayEffectExtension.h"
+#include "Debug/SG_LogCategories.h"
 
 
 // 构造函数
@@ -107,45 +108,71 @@ void USG_AttributeSet::PreAttributeChange(const FGameplayAttribute& Attribute, f
 // 在GameplayEffect修改属性后调用，处理副作用
 void USG_AttributeSet::PostGameplayEffectExecute(const FGameplayEffectModCallbackData& Data)
 {
-	// 调用父类实现
 	Super::PostGameplayEffectExecute(Data);
 
 	// 处理即将受到的伤害
-	// IncomingDamage是一个Meta属性，用于传递伤害值
 	if (Data.EvaluatedData.Attribute == GetIncomingDamageAttribute())
 	{
-		// 获取伤害值
-		const float LocalIncomingDamage = GetIncomingDamage();
+		// ✨ 新增 - 输出详细调试信息
+		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+		UE_LOG(LogSGGameplay, Log, TEXT("💥 伤害处理：%s"), *GetOwningActor()->GetName());
 		
-		// 清空IncomingDamage（它只是临时存储）
-		// 为什么要清空：避免重复应用伤害
+		// 获取伤害值（修改前）
+		const float IncomingDamageBefore = GetIncomingDamage();
+		UE_LOG(LogSGGameplay, Log, TEXT("  IncomingDamage（修改前）：%.2f"), IncomingDamageBefore);
+		
+		// 获取当前生命值
+		const float HealthBefore = GetHealth();
+		UE_LOG(LogSGGameplay, Log, TEXT("  生命值（修改前）：%.2f / %.2f"), HealthBefore, GetMaxHealth());
+		
+		// 保存伤害值到局部变量
+		const float LocalIncomingDamage = IncomingDamageBefore;
+		
+		// ✅ 关键：立即清空 IncomingDamage
 		SetIncomingDamage(0.0f);
+		
+		// ✨ 新增 - 验证是否清空成功
+		const float IncomingDamageAfter = GetIncomingDamage();
+		UE_LOG(LogSGGameplay, Log, TEXT("  IncomingDamage（清空后）：%.2f"), IncomingDamageAfter);
+		
+		if (IncomingDamageAfter != 0.0f)
+		{
+			UE_LOG(LogSGGameplay, Error, TEXT("  ❌ IncomingDamage 清空失败！"));
+		}
 
 		// 只处理正数伤害
 		if (LocalIncomingDamage > 0.0f)
 		{
 			// 计算新的生命值
-			// 当前生命值 - 伤害值
-			const float NewHealth = GetHealth() - LocalIncomingDamage;
+			const float NewHealth = HealthBefore - LocalIncomingDamage;
 			
-			// 设置生命值，并Clamp在有效范围内
+			// 设置生命值
 			SetHealth(FMath::Clamp(NewHealth, 0.0f, GetMaxHealth()));
+			
+			// 获取修改后的生命值
+			const float HealthAfter = GetHealth();
+			
+			// 输出日志
+			UE_LOG(LogSGGameplay, Log, TEXT("  实际伤害：%.2f"), LocalIncomingDamage);
+			UE_LOG(LogSGGameplay, Log, TEXT("  生命值（修改后）：%.2f / %.2f"), HealthAfter, GetMaxHealth());
+			UE_LOG(LogSGGameplay, Log, TEXT("  生命值变化：%.2f → %.2f (-%0.2f)"), 
+				HealthBefore, HealthAfter, HealthBefore - HealthAfter);
 
-			// 如果生命值归零，角色死亡
-			// 注意：这里只是检测，实际的死亡处理在蓝图中
-			// 为什么在蓝图中处理：
-			// - 死亡逻辑可能涉及动画、特效、掉落等
-			// - 蓝图更容易调整和测试
-			// - 不同角色可能有不同的死亡表现
-			if (GetHealth() <= 0.0f)
+			// 检测死亡
+			if (HealthAfter <= 0.0f && HealthBefore > 0.0f)
 			{
-				// 可以在这里广播死亡事件
-				// 蓝图可以监听Health属性变化来检测死亡
+				UE_LOG(LogSGGameplay, Warning, TEXT("  ✗ 单位死亡"));
+				// ✅ 死亡检测在 ASG_UnitsBase::OnHealthChanged 中处理
 			}
 		}
+		else
+		{
+			UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 伤害值为 0，跳过处理"));
+		}
+		
+		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 	}
 	// 确保Health不超过MaxHealth
-	// 例如：治疗效果可能会使Health超过上限
 	else if (Data.EvaluatedData.Attribute == GetHealthAttribute())
 	{
 		SetHealth(FMath::Clamp(GetHealth(), 0.0f, GetMaxHealth()));

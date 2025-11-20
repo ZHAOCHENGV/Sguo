@@ -8,6 +8,7 @@
 #include "AI/SG_AIControllerBase.h"
 #include "BehaviorTree/BlackboardComponent.h"
 #include "Debug/SG_LogCategories.h"
+#include "Units/SG_UnitsBase.h"
 
 /**
  * @brief 构造函数
@@ -37,7 +38,7 @@ USG_BTService_DetectNearbyThreats::USG_BTService_DetectNearbyThreats()
  * @details
  * 功能说明：
  * - 检测周边威胁
- * - 发现新目标时转移仇恨
+ * - 🔧 修改：使用单位的攻击范围 * 倍率作为检测半径
  */
 void USG_BTService_DetectNearbyThreats::TickNode(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds)
 {
@@ -50,11 +51,22 @@ void USG_BTService_DetectNearbyThreats::TickNode(UBehaviorTreeComponent& OwnerCo
 		return;
 	}
 	
+	// 🔧 修改 - 获取控制的单位
+	ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
+	if (!ControlledUnit)
+	{
+		return;
+	}
+	
+	// 🔧 修改 - 计算检测半径（攻击范围 * 倍率）
+	float AttackRange = ControlledUnit->GetAttackRangeForAI();
+	float DetectionRadius = AttackRange * DetectionRadiusMultiplier;
+	
 	// 检测周边威胁
 	bool bFoundThreat = AIController->DetectNearbyThreats(DetectionRadius);
 	
 	if (bFoundThreat)
 	{
-		UE_LOG(LogSGGameplay, Verbose, TEXT("🔄 检测到周边威胁，已转移目标"));
+		UE_LOG(LogSGGameplay, Verbose, TEXT("🔄 检测到周边威胁，已转移目标（检测半径：%.0f）"), DetectionRadius);
 	}
 }

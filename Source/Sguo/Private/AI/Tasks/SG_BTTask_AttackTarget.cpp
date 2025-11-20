@@ -48,8 +48,8 @@ EBTNodeResult::Type USG_BTTask_AttackTarget::ExecuteTask(UBehaviorTreeComponent&
 	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 	UE_LOG(LogSGGameplay, Log, TEXT("🎯 攻击目标任务：开始执行"));
 	
-	// 获取 AI Controller
-	ASG_AIControllerBase* AIController = Cast<ASG_AIControllerBase>(OwnerComp.GetAIOwner());
+	// ========== 步骤1：检查 AI Controller 是否有效 ==========
+	AAIController* AIController = OwnerComp.GetAIOwner();
 	if (!AIController)
 	{
 		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ AI Controller 无效"));
@@ -58,15 +58,7 @@ EBTNodeResult::Type USG_BTTask_AttackTarget::ExecuteTask(UBehaviorTreeComponent&
 	}
 	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ AI Controller 有效"));
 	
-	// 检查主城是否被打断
-	if (AIController->bIsMainCity && AIController->bAttackInterrupted)
-	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 主城攻击被打断"));
-		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-		return EBTNodeResult::Failed;
-	}
-	
-	// 获取控制的单位
+	// ========== 步骤2：获取控制的单位 ==========
 	ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
 	if (!ControlledUnit)
 	{
@@ -75,6 +67,37 @@ EBTNodeResult::Type USG_BTTask_AttackTarget::ExecuteTask(UBehaviorTreeComponent&
 		return EBTNodeResult::Failed;
 	}
 	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 控制的单位：%s"), *ControlledUnit->GetName());
+	
+	// ✨ 新增 - 步骤3：检查是否真的在攻击范围内
+	UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
+	if (BlackboardComp)
+	{
+		AActor* Target = Cast<AActor>(BlackboardComp->GetValueAsObject(FName("CurrentTarget")));
+		if (Target)
+		{
+			float Distance = FVector::Dist(ControlledUnit->GetActorLocation(), Target->GetActorLocation());
+			float AttackRange = ControlledUnit->GetAttackRangeForAI();
+			
+			UE_LOG(LogSGGameplay, Log, TEXT("  距离检查：%.2f / %.2f"), Distance, AttackRange);
+			
+			// 如果不在攻击范围内，任务失败
+			if (Distance > AttackRange + 50.0f)
+			{
+				UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 不在攻击范围内，任务失败"));
+				UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+				return EBTNodeResult::Failed;
+			}
+		}
+	}
+	
+	// 检查主城是否被打断
+	ASG_AIControllerBase* SGAIController = Cast<ASG_AIControllerBase>(AIController);
+	if (SGAIController && SGAIController->bIsMainCity && SGAIController->bAttackInterrupted)
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 主城攻击被打断"));
+		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+		return EBTNodeResult::Failed;
+	}
 	
 	// 触发攻击
 	UE_LOG(LogSGGameplay, Log, TEXT("  调用 PerformAttack()..."));

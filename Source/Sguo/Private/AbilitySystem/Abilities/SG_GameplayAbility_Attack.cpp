@@ -18,6 +18,8 @@
 #include "Engine/OverlapResult.h"
 #include "AbilitySystemGlobals.h"
 #include "DrawDebugHelpers.h"
+#include "Buildings/SG_MainCityBase.h"
+#include "Components/BoxComponent.h"  // ✨ 新增 - 必须包含完整定义
 
 // ========== 构造函数 ==========
 
@@ -322,10 +324,11 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 		return 0;
 	}
 
-	// 获取攻击范围
+	// 获取阵营和攻击范围
+	FGameplayTag MyFaction = SourceUnit->FactionTag;
 	float AttackRange = GetAttackRange();
 
-	// 输出日志：查找目标
+	// 输出日志
 	UE_LOG(LogSGGameplay, Verbose, TEXT("  查找范围：%.1f"), AttackRange);
 
 	// 根据攻击类型执行不同的查找逻辑
@@ -333,7 +336,7 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 	{
 	case ESGAttackAbilityType::Melee:
 		{
-			// 近战攻击：球形范围检测
+			// ========== 近战攻击：球形范围检测 ==========
 			
 			// 获取施放者位置
 			FVector SourceLocation = AvatarActor->GetActorLocation();
@@ -354,7 +357,7 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 				QueryParams
 			);
 
-			// ✨ 绘制近战攻击检测可视化
+			// 绘制调试可视化
 			if (bShowAttackDetection)
 			{
 				DrawMeleeAttackDetection(SourceLocation, AttackRange, bHit);
@@ -373,12 +376,42 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 						continue;
 					}
 
-					// 检查是否是敌方单位
+					// ========== 检查是否是敌方单位 ==========
 					ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(HitActor);
-					if (TargetUnit && TargetUnit->FactionTag != SourceUnit->FactionTag)
+					if (TargetUnit && TargetUnit->FactionTag != MyFaction)
 					{
 						// 使用 AddUnique 避免重复添加同一个 Actor
 						OutTargets.AddUnique(HitActor);
+						UE_LOG(LogSGGameplay, Verbose, TEXT("    找到敌方单位：%s"), *HitActor->GetName());
+						continue;
+					}
+
+					// ========== ✨ 新增 - 检查是否是主城的攻击检测盒 ==========
+					// 获取碰撞组件
+					UPrimitiveComponent* HitComponent = Result.GetComponent();
+					if (HitComponent)
+					{
+						// 尝试获取组件的 Owner（主城）
+						AActor* ComponentOwner = HitComponent->GetOwner();
+						ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(ComponentOwner);
+						
+						if (MainCity && MainCity->FactionTag != MyFaction)
+						{
+							// 🔧 修复 - 正确的类型转换
+							// 将 UPrimitiveComponent 转换为 UBoxComponent
+							UBoxComponent* HitBoxComponent = Cast<UBoxComponent>(HitComponent);
+							// 获取主城的攻击检测盒
+							UBoxComponent* MainCityDetectionBox = MainCity->GetAttackDetectionBox();
+							
+							// 比较是否是同一个组件
+							if (HitBoxComponent && MainCityDetectionBox && HitBoxComponent == MainCityDetectionBox)
+							{
+								OutTargets.AddUnique(MainCity);
+								UE_LOG(LogSGGameplay, Log, TEXT("    找到敌方主城（通过攻击检测盒）：%s"), 
+									*MainCity->GetName());
+								continue;
+							}
+						}
 					}
 				}
 			}
@@ -387,7 +420,7 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 
 	case ESGAttackAbilityType::Ranged:
 		{
-			// 远程攻击：射线检测
+			// ========== 远程攻击：射线检测 ==========
 			
 			// 获取施放者的前方方向
 			FVector StartLocation = AvatarActor->GetActorLocation();
@@ -408,7 +441,7 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 				QueryParams
 			);
 
-			// ✨ 绘制远程攻击检测可视化
+			// 绘制调试可视化
 			if (bShowAttackDetection)
 			{
 				FVector HitLocation = bHit ? HitResult.Location : EndLocation;
@@ -424,9 +457,32 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 				{
 					// 检查是否是敌方单位
 					ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(HitActor);
-					if (TargetUnit && TargetUnit->FactionTag != SourceUnit->FactionTag)
+					if (TargetUnit && TargetUnit->FactionTag != MyFaction)
 					{
 						OutTargets.AddUnique(HitActor);
+						UE_LOG(LogSGGameplay, Verbose, TEXT("    找到敌方单位：%s"), *HitActor->GetName());
+					}
+					
+					// ========== ✨ 新增 - 检查是否是主城的攻击检测盒 ==========
+					UPrimitiveComponent* HitComponent = HitResult.GetComponent();
+					if (HitComponent)
+					{
+						AActor* ComponentOwner = HitComponent->GetOwner();
+						ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(ComponentOwner);
+						
+						if (MainCity && MainCity->FactionTag != MyFaction)
+						{
+							// 🔧 修复 - 正确的类型转换
+							UBoxComponent* HitBoxComponent = Cast<UBoxComponent>(HitComponent);
+							UBoxComponent* MainCityDetectionBox = MainCity->GetAttackDetectionBox();
+							
+							if (HitBoxComponent && MainCityDetectionBox && HitBoxComponent == MainCityDetectionBox)
+							{
+								OutTargets.AddUnique(MainCity);
+								UE_LOG(LogSGGameplay, Log, TEXT("    找到敌方主城（通过攻击检测盒）：%s"), 
+									*MainCity->GetName());
+							}
+						}
 					}
 				}
 			}
@@ -441,7 +497,7 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 		break;
 	}
 
-	// ✨ 绘制目标标记
+	// 绘制目标标记
 	if (bShowAttackDetection && OutTargets.Num() > 0)
 	{
 		DrawTargetMarkers(OutTargets);

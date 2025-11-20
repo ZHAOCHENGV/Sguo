@@ -19,20 +19,22 @@ USG_BTDecorator_IsInAttackRange::USG_BTDecorator_IsInAttackRange()
 	// 设置装饰器名称
 	NodeName = TEXT("是否在攻击范围内");
 	
-	// 🔧 关键：启用 Tick，定期检查条件
+	// ✨ 新增 - 启用 Tick，定期检查条件
 	bNotifyTick = true;
 	
-	// 🔧 关键：设置为观察者模式
+	// ✨ 新增 - 设置为观察者模式
 	bNotifyBecomeRelevant = true;
 	bNotifyCeaseRelevant = true;
 	
-	// 🔧 关键：不自动中断，由 Tick 控制
-	FlowAbortMode = EBTFlowAbortMode::None;
+	// 🔧 修改 - 设置中断模式
+	// 原来：FlowAbortMode = EBTFlowAbortMode::None;
+	// 修改为：LowerPriority（当条件满足时，中断优先级更低的节点）
+	FlowAbortMode = EBTFlowAbortMode::LowerPriority;
 	
 	// 配置黑板键过滤器
 	TargetKey.AddObjectFilter(this, GET_MEMBER_NAME_CHECKED(USG_BTDecorator_IsInAttackRange, TargetKey), AActor::StaticClass());
 	
-	// 🔧 新增：设置默认黑板键名称
+	// 设置默认黑板键名称
 	TargetKey.SelectedKeyName = FName("CurrentTarget");
 }
 
@@ -112,10 +114,13 @@ bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeCo
 
 /**
  * @brief Tick 更新
+ * @param OwnerComp 行为树组件
+ * @param NodeMemory 节点内存
+ * @param DeltaSeconds 时间间隔
  * @details
  * 功能说明：
  * - 定期检查条件是否变化
- * - 条件变化时通知行为树重新评估
+ * - 🔧 修改：条件变化时强制重新评估整个行为树
  */
 void USG_BTDecorator_IsInAttackRange::TickNode(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds)
 {
@@ -130,24 +135,47 @@ void USG_BTDecorator_IsInAttackRange::TickNode(UBehaviorTreeComponent& OwnerComp
 		// 计算当前条件
 		bool CurrentConditionResult = CalculateRawConditionValue(OwnerComp, NodeMemory);
 		
-		// 🔧 新增 - 强制更新黑板值
+		// 🔧 修改 - 强制更新黑板值
 		UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
 		if (BlackboardComp)
 		{
 			BlackboardComp->SetValueAsBool(FName("IsInAttackRange"), CurrentConditionResult);
 		}
 		
-		// 条件变化时，请求重新评估
+		// 🔧 修改 - 条件变化时，强制重新评估
 		if (CurrentConditionResult != LastConditionResult)
 		{
 			LastConditionResult = CurrentConditionResult;
 			
-			// 通知行为树条件已变化
-			OwnerComp.RequestExecution(this);
+			// ✨ 新增 - 强制中断当前执行的节点
+			if (CurrentConditionResult)  // 进入攻击范围
+			{
+				// 中断优先级更低的节点（移动任务）
+				OwnerComp.RequestExecution(this);
+				
+				UE_LOG(LogSGGameplay, Warning, TEXT("🔄 IsInAttackRange 条件变化：进入攻击范围，请求重新评估"));
+			}
+			else  // 离开攻击范围
+			{
+				UE_LOG(LogSGGameplay, Log, TEXT("🔄 IsInAttackRange 条件变化：离开攻击范围"));
+			}
+		}
+		
+		// ✨ 新增 - 即使条件没变化，如果一直在范围内，也定期请求评估
+		// 这是为了解决"卡在移动任务"的问题
+		if (CurrentConditionResult)
+		{
+			static int32 ForceEvaluateCounter = 0;
+			ForceEvaluateCounter++;
 			
-			UE_LOG(LogSGGameplay, Log, TEXT("🔄 IsInAttackRange 条件变化：%s → %s"),
-				!LastConditionResult ? TEXT("不在范围内") : TEXT("在范围内"),
-				CurrentConditionResult ? TEXT("在范围内") : TEXT("不在范围内"));
+			// 每5次检查（0.5秒）强制请求一次评估
+			if (ForceEvaluateCounter >= 5)
+			{
+				ForceEvaluateCounter = 0;
+				OwnerComp.RequestExecution(this);
+				
+				UE_LOG(LogSGGameplay, Verbose, TEXT("🔄 IsInAttackRange 强制请求评估（防止卡住）"));
+			}
 		}
 	}
 }

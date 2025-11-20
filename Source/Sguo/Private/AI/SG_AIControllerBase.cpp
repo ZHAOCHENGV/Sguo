@@ -11,7 +11,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Buildings/SG_MainCityBase.h"
 #include "Debug/SG_LogCategories.h"
-
+#include "Components/BoxComponent.h"  // ✨ 新增
 // ========== 黑板键名称定义 ==========
 const FName ASG_AIControllerBase::BB_CurrentTarget = TEXT("CurrentTarget");
 const FName ASG_AIControllerBase::BB_IsInAttackRange = TEXT("IsInAttackRange");
@@ -122,18 +122,17 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
 	// 获取单位的阵营标签
 	FGameplayTag MyFaction = ControlledUnit->FactionTag;
 	
-	// 🔧 修改 - 获取寻敌范围
+	// 获取寻敌范围
 	float DetectionRange = ControlledUnit->GetDetectionRange();
 	
 	// 输出日志
 	UE_LOG(LogSGGameplay, Verbose, TEXT("%s 开始查找目标（寻敌范围：%.0f）"), 
 		*ControlledUnit->GetName(), DetectionRange);
 	
-	// 获取所有单位
+	// ========== 查找敌方单位 ==========
 	TArray<AActor*> AllUnits;
 	UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_UnitsBase::StaticClass(), AllUnits);
 	
-	// 查找最近的敌方单位
 	AActor* NearestEnemy = nullptr;
 	float MinDistance = FLT_MAX;
 	
@@ -164,7 +163,7 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
 			// 计算距离
 			float Distance = FVector::Dist(ControlledUnit->GetActorLocation(), Unit->GetActorLocation());
 			
-			// 🔧 修改 - 只查找寻敌范围内的目标
+			// 只查找寻敌范围内的目标
 			if (Distance > DetectionRange)
 			{
 				continue;
@@ -187,7 +186,7 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
 		return NearestEnemy;
 	}
 	
-	// 如果没有敌方单位，查找敌方主城
+	// ========== 🔧 修改 - 查找敌方主城（使用攻击检测盒位置）==========
 	UE_LOG(LogSGGameplay, Verbose, TEXT("%s 未找到敌方单位，尝试查找敌方主城"), *ControlledUnit->GetName());
 	
 	// 获取所有主城
@@ -213,10 +212,27 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
 				continue;
 			}
 			
-			// 🔧 修改 - 检查主城是否在寻敌范围内
+			// ✨ 新增 - 使用攻击检测盒的位置计算距离
+			UBoxComponent* DetectionBox = MainCity->GetAttackDetectionBox();
+			FVector TargetLocation;
+			
+			if (DetectionBox)
+			{
+				// 使用检测盒的世界位置
+				TargetLocation = DetectionBox->GetComponentLocation();
+				UE_LOG(LogSGGameplay, Verbose, TEXT("  使用主城攻击检测盒位置：%s"), *TargetLocation.ToString());
+			}
+			else
+			{
+				// 回退到主城 Actor 位置
+				TargetLocation = MainCity->GetActorLocation();
+				UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 主城没有攻击检测盒，使用 Actor 位置"));
+			}
+			
+			// 计算距离
 			float DistanceToMainCity = FVector::Dist(
 				ControlledUnit->GetActorLocation(), 
-				MainCity->GetActorLocation()
+				TargetLocation
 			);
 			
 			if (DistanceToMainCity <= DetectionRange)
@@ -467,3 +483,4 @@ void ASG_AIControllerBase::ResumeAttack()
 	
 	UE_LOG(LogSGGameplay, Log, TEXT("▶️ 主城恢复攻击"));
 }
+

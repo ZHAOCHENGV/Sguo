@@ -310,6 +310,11 @@ bool ASG_AIControllerBase::DetectNearbyThreats(float DetectionRadius)
 			if (Distance <= DetectionRadius)
 			{
 				SetCurrentTarget(Unit);
+				
+				// ✨ 新增 - 立即停止当前移动，强迫行为树重新评估
+				// 这会导致 MoveToTarget 任务检测到移动停止而结束，从而进入下一次决策循环
+				StopMovement();
+
 				UE_LOG(LogSGGameplay, Log, TEXT("🔄 %s 检测到周边威胁，从主城转移目标到单位：%s"), 
 					*ControlledUnit->GetName(), *Unit->GetName());
 				return true;

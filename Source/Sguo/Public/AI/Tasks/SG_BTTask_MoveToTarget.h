@@ -49,6 +49,9 @@ public:
 	 */
 	virtual EBTNodeResult::Type ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) override;
 
+	// ✨ 新增 - 重写 TickTask 以每帧检查移动状态
+	virtual void TickTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds) override;
+	
 protected:
 	/**
 	 * @brief 黑板键：目标

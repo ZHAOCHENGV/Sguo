@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "GameplayTagContainer.h"
 #include "GameFramework/Actor.h"
 #include "SG_FrontLineManager.generated.h"
 
@@ -462,4 +463,35 @@ private:
     // 缓存的敌人主城
     UPROPERTY(Transient)
     ASG_MainCityBase* CachedEnemyMainCity = nullptr;
+
+
+public:
+    // ========== 阵营配置 ==========
+
+    /**
+     * @brief 可推进前线的阵营标签
+     * @details 
+     * 功能说明：
+     * - 只有匹配此标签的单位才能推进前线
+     * - 支持部分匹配（例如：Unit.Faction 可以匹配 Unit.Faction.Player 和 Unit.Faction.Enemy）
+     * - 可以设置为具体阵营（Unit.Faction.Player）或通用标签（Unit.Faction）
+     * 
+     * 使用示例：
+     * - "Unit.Faction.Player" - 只有玩家单位可以推进
+     * - "Unit.Faction.Enemy" - 只有敌人单位可以推进
+     * - "Unit.Faction" - 所有阵营单位都可以推进
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Front Line", meta = (DisplayName = "可推进前线的阵营标签", Categories = "Unit.Faction"))
+    FGameplayTag ActiveFactionTag;
+
+    /**
+     * @brief 对立阵营标签
+     * @details 
+     * 功能说明：
+     * - 用于识别对立阵营的单位
+     * - 对立阵营的单位会被追踪但不会推进前线
+     * - 如果留空，则只追踪 ActiveFactionTag 的单位
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Front Line", meta = (DisplayName = "对立阵营标签", Categories = "Unit.Faction"))
+    FGameplayTag OpposingFactionTag;
 };

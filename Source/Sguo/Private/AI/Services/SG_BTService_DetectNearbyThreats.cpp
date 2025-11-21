@@ -51,17 +51,17 @@ void USG_BTService_DetectNearbyThreats::TickNode(UBehaviorTreeComponent& OwnerCo
 		return;
 	}
 	
-	// 🔧 修改 - 获取控制的单位
+	// 获取控制的单位
 	ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
 	if (!ControlledUnit)
 	{
 		return;
 	}
 	
-	// 🔧 修改 - 计算检测半径（攻击范围 * 倍率）
-	float AttackRange = ControlledUnit->GetAttackRangeForAI();
-	float DetectionRadius = AttackRange * DetectionRadiusMultiplier;
-	
+	// 🔧 修改 - 直接获取单位的寻敌范围（DetectionRange）
+	// 这个值通常从 SG_UnitDataTable 中加载
+	float DetectionRadius = ControlledUnit->GetDetectionRange();
+
 	// 检测周边威胁
 	bool bFoundThreat = AIController->DetectNearbyThreats(DetectionRadius);
 	

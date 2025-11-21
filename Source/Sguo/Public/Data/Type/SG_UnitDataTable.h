@@ -256,8 +256,8 @@ struct FSGUnitDataRow : public FTableRowBase
 	 * - 近战单位：1000 - 1500
 	 * - 远程单位：1500 - 2000
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Config", meta = (DisplayName = "寻敌范围", ClampMin = "100.0", UIMin = "100.0", UIMax = "5000.0"))
-	float DetectionRange = 1500.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Config", meta = (DisplayName = "寻敌范围", ClampMin = "100.0", UIMin = "100.0", UIMax = "999999.0"))
+	float DetectionRange = 99999.0f;
 
 	/**
 	 * @brief 追击范围
@@ -268,8 +268,8 @@ struct FSGUnitDataRow : public FTableRowBase
 	 * 建议值：
 	 * - 寻敌范围 * 1.5
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Config", meta = (DisplayName = "追击范围", ClampMin = "100.0", UIMin = "100.0", UIMax = "10000.0"))
-	float ChaseRange = 2000.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Config", meta = (DisplayName = "追击范围", ClampMin = "100.0", UIMin = "100.0", UIMax = "999999.0"))
+	float ChaseRange = 99999.0f;
 
 	// ========== 构造函数 ==========
 

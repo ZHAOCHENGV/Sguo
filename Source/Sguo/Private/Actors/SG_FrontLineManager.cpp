@@ -86,6 +86,10 @@ ASG_FrontLineManager::ASG_FrontLineManager()
     // 初始化前线位置为初始值
     CurrentPlayerFrontLineX = InitialFrontLineX;
     CurrentEnemyFrontLineX = InitialFrontLineX;
+
+    // 初始化默认阵营标签
+    ActiveFactionTag = FGameplayTag::RequestGameplayTag(TEXT("Unit.Faction.Player"));
+    OpposingFactionTag = FGameplayTag::RequestGameplayTag(TEXT("Unit.Faction.Enemy"));
 }
 
 /**
@@ -103,6 +107,11 @@ ASG_FrontLineManager::ASG_FrontLineManager()
 void ASG_FrontLineManager::BeginPlay()
 {
     Super::BeginPlay();
+    // ✨ 修复 - 考虑 Actor 在场景中的位置
+    // 将初始前线位置调整为相对于 Actor 位置的世界坐标
+    FVector ActorLocation = GetActorLocation();
+    InitialFrontLineX = ActorLocation.X + InitialFrontLineX;
+
     
     // 查找并缓存主城位置
     // 这一步必须最先执行，因为需要根据主城位置确定玩家方向
@@ -193,7 +202,6 @@ void ASG_FrontLineManager::Tick(float DeltaTime)
 void ASG_FrontLineManager::UpdateFrontLinePositionRealtime()
 {
     // 记录是否有变化
-    // 只有在前线位置改变时才更新可视化，避免不必要的计算
     bool bChanged = false;
     
     // ========== 更新玩家前线 ==========
@@ -202,17 +210,14 @@ void ASG_FrontLineManager::UpdateFrontLinePositionRealtime()
     float NewPlayerFrontLineX = InitialFrontLineX;
     
     // 检查缓存的玩家最前方单位是否有效
-    if (CachedPlayerFrontmostUnit &&          // 单位存在
-        !CachedPlayerFrontmostUnit->bIsDead &&// 单位未死亡
-        IsValid(CachedPlayerFrontmostUnit))   // 单位对象有效
+    if (CachedPlayerFrontmostUnit &&
+        !CachedPlayerFrontmostUnit->bIsDead &&
+        IsValid(CachedPlayerFrontmostUnit))
     {
         // 获取单位当前位置的 X 坐标
         float UnitX = CachedPlayerFrontmostUnit->GetActorLocation().X;
         
         // 检查是否越过初始线
-        // 根据玩家方向判断：
-        // - 玩家在左侧：单位 X > 初始线 X 表示越线
-        // - 玩家在右侧：单位 X < 初始线 X 表示越线
         bool bCrossedLine = bPlayerOnLeftSide ? 
             (UnitX > InitialFrontLineX) : 
             (UnitX < InitialFrontLineX);
@@ -224,13 +229,11 @@ void ASG_FrontLineManager::UpdateFrontLinePositionRealtime()
             if (bPlayerOnLeftSide)
             {
                 // 玩家在左侧，前线在单位右侧
-                // 前线位置 = 单位位置 + 偏移量
                 NewPlayerFrontLineX = UnitX + FrontLineOffset;
             }
             else
             {
                 // 玩家在右侧，前线在单位左侧
-                // 前线位置 = 单位位置 - 偏移量
                 NewPlayerFrontLineX = UnitX - FrontLineOffset;
             }
         }
@@ -242,17 +245,14 @@ void ASG_FrontLineManager::UpdateFrontLinePositionRealtime()
     float NewEnemyFrontLineX = InitialFrontLineX;
     
     // 检查缓存的敌人最前方单位是否有效
-    if (CachedEnemyFrontmostUnit &&          // 单位存在
-        !CachedEnemyFrontmostUnit->bIsDead &&// 单位未死亡
-        IsValid(CachedEnemyFrontmostUnit))   // 单位对象有效
+    if (CachedEnemyFrontmostUnit &&
+        !CachedEnemyFrontmostUnit->bIsDead &&
+        IsValid(CachedEnemyFrontmostUnit))
     {
         // 获取单位当前位置的 X 坐标
         float UnitX = CachedEnemyFrontmostUnit->GetActorLocation().X;
         
         // 检查是否越过初始线
-        // 根据玩家方向判断：
-        // - 玩家在左侧（敌人在右侧）：单位 X < 初始线 X 表示越线
-        // - 玩家在右侧（敌人在左侧）：单位 X > 初始线 X 表示越线
         bool bCrossedLine = bPlayerOnLeftSide ? 
             (UnitX < InitialFrontLineX) : 
             (UnitX > InitialFrontLineX);
@@ -264,47 +264,46 @@ void ASG_FrontLineManager::UpdateFrontLinePositionRealtime()
             if (bPlayerOnLeftSide)
             {
                 // 敌人在右侧，前线在单位左侧
-                // 前线位置 = 单位位置 - 偏移量
                 NewEnemyFrontLineX = UnitX - FrontLineOffset;
             }
             else
             {
                 // 敌人在左侧，前线在单位右侧
-                // 前线位置 = 单位位置 + 偏移量
                 NewEnemyFrontLineX = UnitX + FrontLineOffset;
             }
         }
     }
 
-    // ========== 应用新位置 ==========
+    // ========== 应用新位置（✨ 修改 - 移除误差判断，实现真正的实时跟随）==========
     
-    // 直接设置新位置（无插值）
-    // 检查玩家前线是否改变（允许1个单位的误差）
-    if (!FMath::IsNearlyEqual(CurrentPlayerFrontLineX, NewPlayerFrontLineX, 1.0f))
+    // ✨ 修改 - 直接比较，不使用 IsNearlyEqual，确保任何位置变化都会被捕获
+    if (CurrentPlayerFrontLineX != NewPlayerFrontLineX)
     {
         // 直接赋值，无插值，实现零延迟跟随
         CurrentPlayerFrontLineX = NewPlayerFrontLineX;
         bChanged = true;
+        
+        // 打印详细日志（可选，用于调试）
+        // UE_LOG(LogSGGameplay, VeryVerbose, TEXT("玩家前线更新：%.2f"), CurrentPlayerFrontLineX);
     }
 
-    // 检查敌人前线是否改变（允许1个单位的误差）
-    if (!FMath::IsNearlyEqual(CurrentEnemyFrontLineX, NewEnemyFrontLineX, 1.0f))
+    if (CurrentEnemyFrontLineX != NewEnemyFrontLineX)
     {
         // 直接赋值，无插值，实现零延迟跟随
         CurrentEnemyFrontLineX = NewEnemyFrontLineX;
         bChanged = true;
+        
+        // 打印详细日志（可选，用于调试）
+        // UE_LOG(LogSGGameplay, VeryVerbose, TEXT("敌人前线更新：%.2f"), CurrentEnemyFrontLineX);
     }
 
     // 只在位置改变时更新可视化
-    // 避免不必要的计算和绘制
     if (bChanged)
     {
         // 调整前线间距
-        // 确保双方前线不会过于接近
         AdjustFrontLineDistance();
         
         // 更新可视化
-        // 更新样条线和网格体位置
         UpdateFrontLineVisualization();
     }
 }
@@ -332,38 +331,28 @@ void ASG_FrontLineManager::UpdateFrontLinePositionRealtime()
  */
 void ASG_FrontLineManager::RescanFrontmostUnits()
 {
-    // 打印日志，标记开始重新扫描
-    UE_LOG(LogSGGameplay, Verbose, TEXT("========== 重新扫描最前方单位 =========="));
+       UE_LOG(LogSGGameplay, Verbose, TEXT("========== 重新扫描最前方单位 =========="));
     
     // 获取场景中所有单位
-    // 查找所有 ASG_UnitsBase 类型的 Actor
     TArray<AActor*> AllUnits;
     UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_UnitsBase::StaticClass(), AllUnits);
     
-    // 定义阵营标签
-    // 用于区分玩家和敌人单位
-    FGameplayTag PlayerFactionTag = FGameplayTag::RequestGameplayTag(TEXT("Unit.Faction.Player"));
-    FGameplayTag EnemyFactionTag = FGameplayTag::RequestGameplayTag(TEXT("Unit.Faction.Enemy"));
+    // 检查标签是否有效
+    if (!ActiveFactionTag.IsValid())
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("ActiveFactionTag 无效，无法扫描单位"));
+        return;
+    }
     
-    // ========== 查找玩家最前方单位 ==========
+    // 初始化极值位置
+    float ActiveExtremumX = InitialFrontLineX;
+    float OpposingExtremumX = InitialFrontLineX;
+    ASG_UnitsBase* ActiveFrontmost = nullptr;
+    ASG_UnitsBase* OpposingFrontmost = nullptr;
     
-    // 初始化玩家极值位置为初始线
-    float PlayerExtremumX = InitialFrontLineX;
-    // 初始化玩家最前方单位为空
-    ASG_UnitsBase* PlayerFrontmost = nullptr;
-    
-    // ========== 查找敌人最前方单位 ==========
-    
-    // 初始化敌人极值位置为初始线
-    float EnemyExtremumX = InitialFrontLineX;
-    // 初始化敌人最前方单位为空
-    ASG_UnitsBase* EnemyFrontmost = nullptr;
-    
-    // 一次遍历同时查找双方最前方单位
-    // 避免分两次遍历，提高性能
+    // 遍历所有单位
     for (AActor* Actor : AllUnits)
     {
-        // 转换为单位类型
         ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(Actor);
         
         // 跳过无效或已死亡的单位
@@ -372,13 +361,15 @@ void ASG_FrontLineManager::RescanFrontmostUnits()
             continue;
         }
         
-        // 获取单位的 X 坐标
         float UnitX = Unit->GetActorLocation().X;
         
-        // ========== 检查玩家单位 ==========
-        if (Unit->FactionTag.MatchesTag(PlayerFactionTag))
+        // 检查单位是否属于可推进阵营
+        bool bIsActiveFaction = Unit->FactionTag.MatchesTag(ActiveFactionTag);
+        bool bIsOpposingFaction = OpposingFactionTag.IsValid() && Unit->FactionTag.MatchesTag(OpposingFactionTag);
+        
+        // 处理可推进阵营的单位
+        if (bIsActiveFaction)
         {
-            // 判断是否是最前方单位
             bool bIsFrontmost = false;
             
             if (bPlayerOnLeftSide)
@@ -386,15 +377,11 @@ void ASG_FrontLineManager::RescanFrontmostUnits()
                 // 玩家在左侧，找最右边的单位
                 if (bOnlyTrackCrossedUnits)
                 {
-                    // 只追踪越过初始线的单位
-                    // 条件：单位 X > 初始线 X 且 单位 X > 当前极值 X
-                    bIsFrontmost = (UnitX > InitialFrontLineX) && (UnitX > PlayerExtremumX);
+                    bIsFrontmost = (UnitX > InitialFrontLineX) && (UnitX > ActiveExtremumX);
                 }
                 else
                 {
-                    // 追踪所有单位
-                    // 条件：单位 X > 当前极值 X
-                    bIsFrontmost = (UnitX > PlayerExtremumX);
+                    bIsFrontmost = (UnitX > ActiveExtremumX);
                 }
             }
             else
@@ -402,132 +389,156 @@ void ASG_FrontLineManager::RescanFrontmostUnits()
                 // 玩家在右侧，找最左边的单位
                 if (bOnlyTrackCrossedUnits)
                 {
-                    // 只追踪越过初始线的单位
-                    // 条件：单位 X < 初始线 X 且 单位 X < 当前极值 X
-                    bIsFrontmost = (UnitX < InitialFrontLineX) && (UnitX < PlayerExtremumX);
+                    bIsFrontmost = (UnitX < InitialFrontLineX) && (UnitX < ActiveExtremumX);
                 }
                 else
                 {
-                    // 追踪所有单位
-                    // 条件：单位 X < 当前极值 X
-                    bIsFrontmost = (UnitX < PlayerExtremumX);
+                    bIsFrontmost = (UnitX < ActiveExtremumX);
                 }
             }
             
-            // 如果是最前方单位，更新极值和缓存
             if (bIsFrontmost)
             {
-                PlayerExtremumX = UnitX;
-                PlayerFrontmost = Unit;
+                ActiveExtremumX = UnitX;
+                ActiveFrontmost = Unit;
             }
         }
-        // ========== 检查敌人单位 ==========
-        else if (Unit->FactionTag.MatchesTag(EnemyFactionTag))
+        // 处理对立阵营的单位
+        else if (bIsOpposingFaction)
         {
-            // 判断是否是最前方单位
             bool bIsFrontmost = false;
             
             if (bPlayerOnLeftSide)
             {
-                // 敌人在右侧，找最左边的单位
+                // 对立阵营在右侧，找最左边的单位
                 if (bOnlyTrackCrossedUnits)
                 {
-                    // 只追踪越过初始线的单位
-                    // 条件：单位 X < 初始线 X 且 单位 X < 当前极值 X
-                    bIsFrontmost = (UnitX < InitialFrontLineX) && (UnitX < EnemyExtremumX);
+                    bIsFrontmost = (UnitX < InitialFrontLineX) && (UnitX < OpposingExtremumX);
                 }
                 else
                 {
-                    // 追踪所有单位
-                    // 条件：单位 X < 当前极值 X
-                    bIsFrontmost = (UnitX < EnemyExtremumX);
+                    bIsFrontmost = (UnitX < OpposingExtremumX);
                 }
             }
             else
             {
-                // 敌人在左侧，找最右边的单位
+                // 对立阵营在左侧，找最右边的单位
                 if (bOnlyTrackCrossedUnits)
                 {
-                    // 只追踪越过初始线的单位
-                    // 条件：单位 X > 初始线 X 且 单位 X > 当前极值 X
-                    bIsFrontmost = (UnitX > InitialFrontLineX) && (UnitX > EnemyExtremumX);
+                    bIsFrontmost = (UnitX > InitialFrontLineX) && (UnitX > OpposingExtremumX);
                 }
                 else
                 {
-                    // 追踪所有单位
-                    // 条件：单位 X > 当前极值 X
-                    bIsFrontmost = (UnitX > EnemyExtremumX);
+                    bIsFrontmost = (UnitX > OpposingExtremumX);
                 }
             }
             
-            // 如果是最前方单位，更新极值和缓存
             if (bIsFrontmost)
             {
-                EnemyExtremumX = UnitX;
-                EnemyFrontmost = Unit;
+                OpposingExtremumX = UnitX;
+                OpposingFrontmost = Unit;
             }
         }
     }
     
-    // ========== 更新玩家最前方单位缓存 ==========
+    // ✨ 新增 - 记录是否需要立即更新前线位置
+    bool bNeedImmediateUpdate = false;
     
-    // 检查最前方单位是否改变
-    if (PlayerFrontmost != CachedPlayerFrontmostUnit)
+    // 更新可推进阵营的最前方单位缓存
+    if (ActiveFrontmost != CachedPlayerFrontmostUnit)
     {
-        // 解绑旧单位的死亡事件
         if (CachedPlayerFrontmostUnit)
         {
             UnbindUnitDeathEvent(CachedPlayerFrontmostUnit);
         }
         
-        // 绑定新单位的死亡事件
-        if (PlayerFrontmost)
+        if (ActiveFrontmost)
         {
-            BindUnitDeathEvent(PlayerFrontmost);
-            // 打印日志，记录新的最前方单位
-            UE_LOG(LogSGGameplay, Log, TEXT("✓ 玩家最前方单位更新：%s (X = %.0f)"), 
-                *PlayerFrontmost->GetName(), PlayerExtremumX);
+            BindUnitDeathEvent(ActiveFrontmost);
+            UE_LOG(LogSGGameplay, Log, TEXT("✓ 可推进阵营最前方单位更新：%s (X = %.0f)"), 
+                *ActiveFrontmost->GetName(), ActiveExtremumX);
         }
         else
         {
-            // 没有找到越过初始线的单位
-            UE_LOG(LogSGGameplay, Log, TEXT("玩家无越过初始线的单位"));
+            UE_LOG(LogSGGameplay, Log, TEXT("可推进阵营无越过初始线的单位"));
         }
         
-        // 更新缓存
-        CachedPlayerFrontmostUnit = PlayerFrontmost;
+        CachedPlayerFrontmostUnit = ActiveFrontmost;
+        bNeedImmediateUpdate = true;
     }
     
-    // ========== 更新敌人最前方单位缓存 ==========
-    
-    // 检查最前方单位是否改变
-    if (EnemyFrontmost != CachedEnemyFrontmostUnit)
+    // 更新对立阵营的最前方单位缓存
+    if (OpposingFrontmost != CachedEnemyFrontmostUnit)
     {
-        // 解绑旧单位的死亡事件
         if (CachedEnemyFrontmostUnit)
         {
             UnbindUnitDeathEvent(CachedEnemyFrontmostUnit);
         }
         
-        // 绑定新单位的死亡事件
-        if (EnemyFrontmost)
+        if (OpposingFrontmost)
         {
-            BindUnitDeathEvent(EnemyFrontmost);
-            // 打印日志，记录新的最前方单位
-            UE_LOG(LogSGGameplay, Log, TEXT("✓ 敌人最前方单位更新：%s (X = %.0f)"), 
-                *EnemyFrontmost->GetName(), EnemyExtremumX);
+            BindUnitDeathEvent(OpposingFrontmost);
+            UE_LOG(LogSGGameplay, Log, TEXT("✓ 对立阵营最前方单位更新：%s (X = %.0f)"), 
+                *OpposingFrontmost->GetName(), OpposingExtremumX);
         }
         else
         {
-            // 没有找到越过初始线的单位
-            UE_LOG(LogSGGameplay, Log, TEXT("敌人无越过初始线的单位"));
+            UE_LOG(LogSGGameplay, Log, TEXT("对立阵营无越过初始线的单位"));
         }
         
-        // 更新缓存
-        CachedEnemyFrontmostUnit = EnemyFrontmost;
+        CachedEnemyFrontmostUnit = OpposingFrontmost;
+        bNeedImmediateUpdate = true;
     }
     
-    // 打印日志，标记扫描结束
+    // ✨ 新增 - 如果最前方单位发生变化，立即更新前线位置
+    if (bNeedImmediateUpdate)
+    {
+        // 计算新的前线位置
+        float NewPlayerFrontLineX = InitialFrontLineX;
+        float NewEnemyFrontLineX = InitialFrontLineX;
+        
+        // 计算可推进阵营的前线位置
+        if (CachedPlayerFrontmostUnit)
+        {
+            float UnitX = CachedPlayerFrontmostUnit->GetActorLocation().X;
+            if (bPlayerOnLeftSide)
+            {
+                NewPlayerFrontLineX = UnitX + FrontLineOffset;
+            }
+            else
+            {
+                NewPlayerFrontLineX = UnitX - FrontLineOffset;
+            }
+        }
+        
+        // 计算对立阵营的前线位置
+        if (CachedEnemyFrontmostUnit)
+        {
+            float UnitX = CachedEnemyFrontmostUnit->GetActorLocation().X;
+            if (bPlayerOnLeftSide)
+            {
+                NewEnemyFrontLineX = UnitX - FrontLineOffset;
+            }
+            else
+            {
+                NewEnemyFrontLineX = UnitX + FrontLineOffset;
+            }
+        }
+        
+        // ✨ 关键 - 立即设置前线位置，不使用插值
+        CurrentPlayerFrontLineX = NewPlayerFrontLineX;
+        CurrentEnemyFrontLineX = NewEnemyFrontLineX;
+        
+        // 调整前线间距
+        AdjustFrontLineDistance();
+        
+        // 立即更新可视化
+        UpdateFrontLineVisualization();
+        
+        UE_LOG(LogSGGameplay, Log, TEXT("✓ 前线位置已立即更新 - 玩家：%.0f，敌人：%.0f"), 
+            CurrentPlayerFrontLineX, CurrentEnemyFrontLineX);
+    }
+    
     UE_LOG(LogSGGameplay, Verbose, TEXT("========================================"));
 }
 
@@ -784,53 +795,39 @@ void ASG_FrontLineManager::AdjustFrontLineDistance()
  */
 void ASG_FrontLineManager::FindAndCacheMainCities()
 {
-    // 打印日志，开始查找主城
     UE_LOG(LogSGGameplay, Log, TEXT("查找主城..."));
     
-    // 获取场景中所有主城
     TArray<AActor*> FoundMainCities;
     UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_MainCityBase::StaticClass(), FoundMainCities);
     
-    // 定义阵营标签
-    FGameplayTag PlayerFactionTag = FGameplayTag::RequestGameplayTag(TEXT("Unit.Faction.Player"));
-    FGameplayTag EnemyFactionTag = FGameplayTag::RequestGameplayTag(TEXT("Unit.Faction.Enemy"));
-    
-    // 遍历所有主城
+    // ✨ 修改 - 使用配置的阵营标签
     for (AActor* Actor : FoundMainCities)
     {
-        // 转换为主城类型
         ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(Actor);
         if (!MainCity)
         {
             continue;
         }
         
-        // 检查是否是玩家主城
-        if (MainCity->FactionTag.MatchesTag(PlayerFactionTag))
+        // 检查是否是可推进阵营的主城
+        if (MainCity->FactionTag.MatchesTag(ActiveFactionTag))
         {
-            // 缓存玩家主城引用
             CachedPlayerMainCity = MainCity;
-            // 缓存玩家主城 X 坐标
             PlayerMainCityX = MainCity->GetActorLocation().X;
-            // 打印日志
-            UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 玩家主城：X = %.0f"), PlayerMainCityX);
+            UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 可推进阵营主城：X = %.0f"), PlayerMainCityX);
         }
-        // 检查是否是敌人主城
-        else if (MainCity->FactionTag.MatchesTag(EnemyFactionTag))
+        // 检查是否是对立阵营的主城
+        else if (OpposingFactionTag.IsValid() && MainCity->FactionTag.MatchesTag(OpposingFactionTag))
         {
-            // 缓存敌人主城引用
             CachedEnemyMainCity = MainCity;
-            // 缓存敌人主城 X 坐标
             EnemyMainCityX = MainCity->GetActorLocation().X;
-            // 打印日志
-            UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 敌人主城：X = %.0f"), EnemyMainCityX);
+            UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 对立阵营主城：X = %.0f"), EnemyMainCityX);
         }
     }
     
-    // 如果双方主城都找到了，确定玩家方向
+    // 确定玩家方向
     if (CachedPlayerMainCity && CachedEnemyMainCity)
     {
-        // 玩家主城 X < 敌人主城 X，则玩家在左侧
         bPlayerOnLeftSide = (PlayerMainCityX < EnemyMainCityX);
     }
 }
@@ -948,21 +945,29 @@ void ASG_FrontLineManager::OnUnitDeath(ASG_UnitsBase* DeadUnit)
     if (DeadUnit == CachedPlayerFrontmostUnit)
     {
         // 打印警告日志
-        UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ 玩家最前方单位死亡，立即重新扫描"));
-        // 清除缓存
+        UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ 玩家最前方单位死亡：%s，立即重新扫描"), *DeadUnit->GetName());
+        
+        // ✨ 关键 - 立即清除缓存
         CachedPlayerFrontmostUnit = nullptr;
-        // 立即重新扫描
+        
+        // ✨ 关键 - 立即重新扫描（会在 RescanFrontmostUnits 中立即更新前线位置）
         RescanFrontmostUnits();
+        
+        UE_LOG(LogSGGameplay, Log, TEXT("✓ 玩家前线已回退到：%.0f"), CurrentPlayerFrontLineX);
     }
     // 检查是否是敌人最前方单位死亡
     else if (DeadUnit == CachedEnemyFrontmostUnit)
     {
         // 打印警告日志
-        UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ 敌人最前方单位死亡，立即重新扫描"));
-        // 清除缓存
+        UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ 敌人最前方单位死亡：%s，立即重新扫描"), *DeadUnit->GetName());
+        
+        // ✨ 关键 - 立即清除缓存
         CachedEnemyFrontmostUnit = nullptr;
-        // 立即重新扫描
+        
+        // ✨ 关键 - 立即重新扫描（会在 RescanFrontmostUnits 中立即更新前线位置）
         RescanFrontmostUnits();
+        
+        UE_LOG(LogSGGameplay, Log, TEXT("✓ 敌人前线已回退到：%.0f"), CurrentEnemyFrontLineX);
     }
 }
 

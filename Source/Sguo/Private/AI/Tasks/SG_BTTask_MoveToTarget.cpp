@@ -197,5 +197,30 @@ EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent&
 		UE_LOG(LogSGGameplay, Warning, TEXT("  实际距离：%.2f"), ActualDistance);
 		
 		return EBTNodeResult::Failed;
+	}	
+}
+
+void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds)
+{
+	Super::TickTask(OwnerComp, NodeMemory, DeltaSeconds);
+
+	AAIController* AIController = OwnerComp.GetAIOwner();
+	if (!AIController)
+	{
+		FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
+		return;
 	}
+
+	// 获取当前的移动状态
+	EPathFollowingStatus::Type Status = AIController->GetMoveStatus();
+
+	// 如果状态是 Idle，说明移动已经结束（可能到达了，也可能被 StopMovement 中断了）
+	if (Status == EPathFollowingStatus::Idle)
+	{
+		// 移动结束，任务完成
+		// 无论是因为到达还是被中断，我们都返回 Succeeded，让行为树进入下一个周期
+		// 如果是因为被中断（发现了新敌人），行为树会在下一个 Tick 重新评估，发现有新目标从而进入攻击状态
+		FinishLatentTask(OwnerComp, EBTNodeResult::Succeeded);
+	}
+	// 注意：如果状态是 Waiting 或 Moving，任务继续保持 InProgress
 }

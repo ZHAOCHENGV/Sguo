@@ -18,6 +18,7 @@
 #include "Engine/OverlapResult.h"
 #include "AbilitySystemGlobals.h"
 #include "DrawDebugHelpers.h"
+#include "Buildings/SG_BuildingAttributeSet.h"
 #include "Buildings/SG_MainCityBase.h"
 #include "Components/BoxComponent.h"  // ✨ 新增 - 必须包含完整定义
 
@@ -525,6 +526,9 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
  */
 void USG_GameplayAbility_Attack::ApplyDamageToTarget(AActor* Target)
 {
+	UE_LOG(LogSGGameplay, Error, TEXT("========================================"));
+	UE_LOG(LogSGGameplay, Error, TEXT("🔥 ApplyDamageToTarget 开始"));
+	UE_LOG(LogSGGameplay, Error, TEXT("========================================"));
 	// 检查目标是否有效
 	if (!Target)
 	{
@@ -554,6 +558,37 @@ void USG_GameplayAbility_Attack::ApplyDamageToTarget(AActor* Target)
 		UE_LOG(LogSGGameplay, Error, TEXT("ApplyDamageToTarget 失败：施放者没有 ASC"));
 		return;
 	}
+
+	// ========== ✨ 新增 - 验证目标的 AttributeSet ==========
+	UE_LOG(LogSGGameplay, Warning, TEXT("========== 验证目标 AttributeSet =========="));
+	UE_LOG(LogSGGameplay, Warning, TEXT("  目标：%s"), *Target->GetName());
+	UE_LOG(LogSGGameplay, Warning, TEXT("  目标 ASC：%s"), *TargetASC->GetName());
+	
+	// 获取目标的 AttributeSet
+	const UAttributeSet* TargetAttributeSet = TargetASC->GetAttributeSet(USG_BuildingAttributeSet::StaticClass());
+	if (TargetAttributeSet)
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("  ✓ 找到 BuildingAttributeSet：%s"), *TargetAttributeSet->GetName());
+		
+		// 检查 IncomingDamage 属性
+		FGameplayAttribute IncomingDamageAttr = USG_BuildingAttributeSet::GetIncomingDamageAttribute();
+		if (IncomingDamageAttr.IsValid())
+		{
+			UE_LOG(LogSGGameplay, Warning, TEXT("  ✓ IncomingDamage 属性有效"));
+			UE_LOG(LogSGGameplay, Warning, TEXT("    属性名称：%s"), *IncomingDamageAttr.GetName());
+			UE_LOG(LogSGGameplay, Warning, TEXT("    属性所属类：%s"), *IncomingDamageAttr.GetAttributeSetClass()->GetName());
+		}
+		else
+		{
+			UE_LOG(LogSGGameplay, Error, TEXT("  ❌ IncomingDamage 属性无效！"));
+		}
+	}
+	else
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 未找到 BuildingAttributeSet！"));
+		UE_LOG(LogSGGameplay, Error, TEXT("  目标可能使用了错误的 AttributeSet 类型"));
+	}
+	UE_LOG(LogSGGameplay, Warning, TEXT("========================================"));
 
 	// 创建 EffectContext
 	FGameplayEffectContextHandle EffectContext = SourceASC->MakeEffectContext();
@@ -588,6 +623,10 @@ void USG_GameplayAbility_Attack::ApplyDamageToTarget(AActor* Target)
 		UE_LOG(LogSGGameplay, Warning, TEXT("    ⚠️ Data.Damage 标签未找到，伤害倍率未设置"));
 	}
 
+	// ========== 步骤10：应用 GameplayEffect ==========
+	UE_LOG(LogSGGameplay, Error, TEXT("========== 应用 GE =========="));
+	UE_LOG(LogSGGameplay, Error, TEXT("施放者 ASC：%s"), *SourceASC->GetName());
+	UE_LOG(LogSGGameplay, Error, TEXT("目标 ASC：%s"), *TargetASC->GetName());
 	// 应用 GameplayEffect 到目标
 	FActiveGameplayEffectHandle ActiveHandle = SourceASC->ApplyGameplayEffectSpecToTarget(
 		*SpecHandle.Data.Get(),
@@ -598,12 +637,16 @@ void USG_GameplayAbility_Attack::ApplyDamageToTarget(AActor* Target)
 	// SpecHandle 有效说明 GE 创建和应用过程正常
 	if (SpecHandle.IsValid())
 	{
-		UE_LOG(LogSGGameplay, Log, TEXT("    ✓ 伤害 GE 应用成功"));
+		UE_LOG(LogSGGameplay, Log, TEXT("✓ GE 应用成功（Handle 有效）"));
 	}
 	else
 	{
-		UE_LOG(LogSGGameplay, Error, TEXT("    ❌ 伤害 GE 应用失败"));
+		UE_LOG(LogSGGameplay, Error, TEXT("❌ GE 应用失败（Handle 无效）"));
 	}
+
+	UE_LOG(LogSGGameplay, Error, TEXT("========================================"));
+	UE_LOG(LogSGGameplay, Error, TEXT("🔥 ApplyDamageToTarget 结束"));
+	UE_LOG(LogSGGameplay, Error, TEXT("========================================"));
 }
 
 // ========== 获取攻击范围 ==========

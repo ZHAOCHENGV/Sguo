@@ -23,6 +23,20 @@ class SGUO_API ASG_MainCityBase : public AActor, public IAbilitySystemInterface
 public:
 	ASG_MainCityBase();
 
+#if WITH_EDITOR
+	/**
+	 * @brief 编辑器中属性改变时调用
+	 * @details 用于验证检测盒位置是否正确
+	 */
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	
+	/**
+	 * @brief 编辑器中移动 Actor 后调用
+	 * @details 确保检测盒跟随主城移动
+	 */
+	virtual void PostEditMove(bool bFinished) override;
+#endif
+
 	// ========== GAS 组件 ==========
 	
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "GAS", meta = (DisplayName = "能力系统组件"))

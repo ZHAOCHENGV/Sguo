@@ -29,28 +29,45 @@ ASG_MainCityBase::ASG_MainCityBase()
 	// ========== 创建主城网格体作为根组件 ==========
 	CityMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CityMesh"));
 	RootComponent = CityMesh;
-	CityMesh->SetCollisionProfileName(TEXT("NoCollision"));
-	CityMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	CityMesh->SetCanEverAffectNavigation(false);
+	
+	// 🔧 修改 - 主城网格体碰撞设置
+	CityMesh->SetCollisionProfileName(TEXT("BlockAll"));  // 改为 BlockAll，防止单位穿过
+	CityMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	CityMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);  // 阻挡 Pawn
+	CityMesh->SetCanEverAffectNavigation(true);  // 影响导航（阻挡寻路）
 	CityMesh->SetMobility(EComponentMobility::Static);
 
-	// ========== 创建攻击检测盒 ==========
+	// ========== 🔧 修复 - 创建攻击检测盒 ==========
 	AttackDetectionBox = CreateDefaultSubobject<UBoxComponent>(TEXT("AttackDetectionBox"));
-	AttackDetectionBox->SetupAttachment(CityMesh);
+	
+	// 🔧 关键修复 1：确保正确附加到根组件
+	AttackDetectionBox->SetupAttachment(RootComponent);
+	
+	// 🔧 关键修复 2：设置为 Stationary（允许在编辑器中移动，运行时固定）
+	AttackDetectionBox->SetMobility(EComponentMobility::Stationary);
+	
+	// 设置默认尺寸
 	AttackDetectionBox->SetBoxExtent(FVector(800.0f, 800.0f, 500.0f));
+	
+	// 🔧 关键修复 3：使用 SetRelativeLocation（相对于父组件）
 	AttackDetectionBox->SetRelativeLocation(FVector(0.0f, 0.0f, 500.0f));
+	
+	// 碰撞设置
 	AttackDetectionBox->SetCollisionProfileName(TEXT("OverlapAllDynamic"));
 	AttackDetectionBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	AttackDetectionBox->SetCollisionResponseToAllChannels(ECR_Ignore);
 	AttackDetectionBox->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
 	AttackDetectionBox->SetCanEverAffectNavigation(false);
 	AttackDetectionBox->SetGenerateOverlapEvents(true);
-	AttackDetectionBox->SetMobility(EComponentMobility::Static);
 	
-	// ✨ 编辑器中显示碰撞盒
+	// ✨ 在编辑器和游戏中都显示碰撞盒
 	AttackDetectionBox->SetHiddenInGame(false);
 	AttackDetectionBox->SetVisibility(true);
 	AttackDetectionBox->ShapeColor = FColor::Orange;
+	
+	// 🔧 关键修复 4：设置为自动激活
+	AttackDetectionBox->SetActive(true);
+	AttackDetectionBox->bAutoActivate = true;
 
 	// ========== 创建 GAS 组件 ==========
 	AbilitySystemComponent = CreateDefaultSubobject<USG_AbilitySystemComponent>(TEXT("AbilitySystemComponent"));
@@ -78,29 +95,87 @@ void ASG_MainCityBase::BeginPlay()
 	
 	UE_LOG(LogSGGameplay, Log, TEXT("========== 主城 BeginPlay：%s =========="), *GetName());
 	UE_LOG(LogSGGameplay, Log, TEXT("  阵营：%s"), *FactionTag.ToString());
-	UE_LOG(LogSGGameplay, Log, TEXT("  位置：%s"), *GetActorLocation().ToString());
 	
-	// ✨ 简化 - 输出检测盒信息（使用原生属性）
+	// ========== 🔧 新增 - 验证主城位置 ==========
+	FVector ActorLocation = GetActorLocation();
+	UE_LOG(LogSGGameplay, Log, TEXT("  主城位置：%s"), *ActorLocation.ToString());
+	
+	// ========== 🔧 新增 - 验证检测盒位置 ==========
 	if (AttackDetectionBox)
 	{
+		// 获取检测盒的世界位置
+		FVector BoxWorldLocation = AttackDetectionBox->GetComponentLocation();
+		FVector BoxRelativeLocation = AttackDetectionBox->GetRelativeLocation();
 		FVector BoxExtent = AttackDetectionBox->GetScaledBoxExtent();
-		FVector BoxLocation = AttackDetectionBox->GetRelativeLocation();
-		FVector WorldLocation = AttackDetectionBox->GetComponentLocation();
 		
 		UE_LOG(LogSGGameplay, Log, TEXT("  攻击检测盒："));
+		UE_LOG(LogSGGameplay, Log, TEXT("    相对位置：%s"), *BoxRelativeLocation.ToString());
+		UE_LOG(LogSGGameplay, Log, TEXT("    世界位置：%s"), *BoxWorldLocation.ToString());
 		UE_LOG(LogSGGameplay, Log, TEXT("    尺寸：%s"), *BoxExtent.ToString());
-		UE_LOG(LogSGGameplay, Log, TEXT("    相对位置：%s"), *BoxLocation.ToString());
-		UE_LOG(LogSGGameplay, Log, TEXT("    世界位置：%s"), *WorldLocation.ToString());
+		
+		// 🔧 关键修复 - 检查检测盒是否在世界原点
+		if (BoxWorldLocation.Equals(FVector::ZeroVector, 10.0f))
+		{
+			UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 检测盒位置错误（在世界原点）！"));
+			UE_LOG(LogSGGameplay, Error, TEXT("  尝试修复..."));
+			
+			// 尝试重新附加
+			AttackDetectionBox->DetachFromComponent(FDetachmentTransformRules::KeepRelativeTransform);
+			AttackDetectionBox->AttachToComponent(
+				RootComponent, 
+				FAttachmentTransformRules::KeepRelativeTransform
+			);
+			
+			// 重新设置相对位置
+			AttackDetectionBox->SetRelativeLocation(FVector(0.0f, 0.0f, 500.0f));
+			
+			// 验证修复结果
+			FVector NewWorldLocation = AttackDetectionBox->GetComponentLocation();
+			UE_LOG(LogSGGameplay, Warning, TEXT("  修复后世界位置：%s"), *NewWorldLocation.ToString());
+			
+			if (!NewWorldLocation.Equals(FVector::ZeroVector, 10.0f))
+			{
+				UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 检测盒位置修复成功"));
+			}
+			else
+			{
+				UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 检测盒位置修复失败！"));
+				UE_LOG(LogSGGameplay, Error, TEXT("  请检查："));
+				UE_LOG(LogSGGameplay, Error, TEXT("    1. 主城蓝图中是否手动设置了检测盒位置"));
+				UE_LOG(LogSGGameplay, Error, TEXT("    2. 主城是否正确放置在场景中"));
+				UE_LOG(LogSGGameplay, Error, TEXT("    3. RootComponent 是否为 CityMesh"));
+			}
+		}
+		else
+		{
+			UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 检测盒位置正确"));
+		}
+		
+		// 🔧 新增 - 验证检测盒是否正确附加
+		USceneComponent* Parent = AttackDetectionBox->GetAttachParent();
+		if (Parent == RootComponent)
+		{
+			UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 检测盒正确附加到根组件"));
+		}
+		else
+		{
+			UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 检测盒未正确附加！"));
+			UE_LOG(LogSGGameplay, Error, TEXT("    当前父组件：%s"), Parent ? *Parent->GetName() : TEXT("None"));
+		}
+	}
+	else
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 攻击检测盒为空！"));
 	}
 	
-	// 初始化 ASC
+	// ========== 初始化 ASC ==========
 	if (AbilitySystemComponent)
 	{
 		AbilitySystemComponent->InitAbilityActorInfo(this, this);
 		UE_LOG(LogSGGameplay, Log, TEXT("  ✓ ASC 初始化完成"));
 	}
 	
-	// 初始化主城
+	// ========== 初始化主城 ==========
 	InitializeMainCity();
 	
 	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
@@ -130,7 +205,7 @@ void ASG_MainCityBase::InitializeMainCity()
 	
 	UE_LOG(LogSGGameplay, Log, TEXT("✓ 主城初始化完成"));
 	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-}
+ }
 
 /**
  * @brief 绑定属性变化委托
@@ -472,3 +547,64 @@ float ASG_MainCityBase::GetHealthPercentage() const
 	}
 	return 0.0f;
 }
+
+
+
+#if WITH_EDITOR
+/**
+ * @brief 编辑器中属性改变时调用
+ * @details
+ * 功能说明：
+ * - 验证检测盒位置是否正确
+ * - 如果位置错误，输出警告
+ */
+void ASG_MainCityBase::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+	
+	if (AttackDetectionBox)
+	{
+		FVector BoxWorldLocation = AttackDetectionBox->GetComponentLocation();
+		FVector ActorLocation = GetActorLocation();
+		
+		// 检查检测盒是否在世界原点
+		if (BoxWorldLocation.Equals(FVector::ZeroVector, 10.0f) && !ActorLocation.Equals(FVector::ZeroVector, 10.0f))
+		{
+			UE_LOG(LogSGGameplay, Error, TEXT("⚠️ 检测盒位置错误（在世界原点）！"));
+			UE_LOG(LogSGGameplay, Error, TEXT("  主城位置：%s"), *ActorLocation.ToString());
+			UE_LOG(LogSGGameplay, Error, TEXT("  检测盒位置：%s"), *BoxWorldLocation.ToString());
+			
+			// 尝试修复
+			AttackDetectionBox->SetRelativeLocation(FVector(0.0f, 0.0f, 500.0f));
+		}
+	}
+}
+
+/**
+ * @brief 编辑器中移动 Actor 后调用
+ * @details
+ * 功能说明：
+ * - 确保检测盒跟随主城移动
+ */
+void ASG_MainCityBase::PostEditMove(bool bFinished)
+{
+	Super::PostEditMove(bFinished);
+	
+	if (bFinished && AttackDetectionBox)
+	{
+		FVector BoxWorldLocation = AttackDetectionBox->GetComponentLocation();
+		FVector ActorLocation = GetActorLocation();
+		
+		UE_LOG(LogSGGameplay, Log, TEXT("主城移动完成："));
+		UE_LOG(LogSGGameplay, Log, TEXT("  主城位置：%s"), *ActorLocation.ToString());
+		UE_LOG(LogSGGameplay, Log, TEXT("  检测盒位置：%s"), *BoxWorldLocation.ToString());
+		
+		// 验证检测盒是否正确跟随
+		float Distance = FVector::Dist(BoxWorldLocation, ActorLocation);
+		if (Distance > 2000.0f)  // 如果距离过大，说明有问题
+		{
+			UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ 检测盒位置可能不正确（距离主城 %.2f）"), Distance);
+		}
+	}
+}
+#endif

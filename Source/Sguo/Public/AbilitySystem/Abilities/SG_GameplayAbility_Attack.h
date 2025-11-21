@@ -483,4 +483,9 @@ protected:
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack Config", meta = (DisplayName = "每段攻击伤害倍率"))
 	TArray<float> AttackDamageMultipliers;
+
+
+	// ✨ 新增 - 处理 GameplayEvent 回调
+	UFUNCTION()
+	void OnDamageGameplayEvent(FGameplayEventData Payload);
 };

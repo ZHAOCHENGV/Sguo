@@ -21,6 +21,7 @@
 #include "Buildings/SG_BuildingAttributeSet.h"
 #include "Buildings/SG_MainCityBase.h"
 #include "Components/BoxComponent.h"  // ✨ 新增 - 必须包含完整定义
+#include "Abilities/Tasks/AbilityTask_WaitGameplayEvent.h"
 
 // ========== 构造函数 ==========
 
@@ -98,15 +99,49 @@ void USG_GameplayAbility_Attack::ActivateAbility(
 		{
 			if (UAnimInstance* AnimInstance = Character->GetMesh()->GetAnimInstance())
 			{
-				float MontageLength = AnimInstance->Montage_Play(AttackMontage);
+				// ✨ 新增 - 获取攻击速度倍率
+				float PlayRate = 1.0f;
+				if (const USG_AbilitySystemComponent* SGASC = Cast<USG_AbilitySystemComponent>(GetAbilitySystemComponentFromActorInfo()))
+				{
+					if (const USG_AttributeSet* AttributeSet = SGASC->GetSet<USG_AttributeSet>())
+					{
+						PlayRate = AttributeSet->GetAttackSpeed();
+					}
+				}
+
+				// 🔧 修改 - 使用攻击速度播放蒙太奇
+				// 如果 PlayRate 是 2.0，动画播放速度就是 2 倍
+				float MontageLength = AnimInstance->Montage_Play(AttackMontage, PlayRate);
 				
+			
+				// 绑定传统的 AnimNotify 回调（兼容旧的配置）
 				AnimInstance->OnPlayMontageNotifyBegin.AddDynamic(
 					this, 
 					&USG_GameplayAbility_Attack::OnMontageNotifyBegin
 				);
+				// ✨ 新增 - 监听攻击命中事件 (配合新的 SG_ANS_MeleeDetection 使用)
+				// 监听 Tag: Event.Attack.Hit
+				UAbilityTask_WaitGameplayEvent* WaitEventTask = UAbilityTask_WaitGameplayEvent::WaitGameplayEvent(
+					this,
+					FGameplayTag::RequestGameplayTag(FName("Event.Attack.Hit")),
+					nullptr, // OptionalExternalTarget
+					false,   // OnlyTriggerOnce (设为 false 以便一次挥击击中多个敌人)
+					false    // OnlyMatchExact
+				);
+
+				if (WaitEventTask)
+				{
+					// 绑定到我们新写的 OnDamageGameplayEvent 函数
+					WaitEventTask->EventReceived.AddDynamic(this, &USG_GameplayAbility_Attack::OnDamageGameplayEvent);
+					WaitEventTask->ReadyForActivation();
+					UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 已启动 WaitGameplayEvent 监听任务"));
+				}
 
 				UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 攻击动画已播放：%s"), *AttackMontage->GetName());
-				UE_LOG(LogSGGameplay, Log, TEXT("  动画长度：%.2f 秒"), MontageLength);
+				// 🔧 修改 - 根据倍率计算实际持续时间
+				// Montage_Play 返回的是原始长度，实际播放时间 = 原始长度 / 播放速率
+				float ActualDuration = (PlayRate > 0.0f) ? (MontageLength / PlayRate) : MontageLength;
+				UE_LOG(LogSGGameplay, Log, TEXT("  实际动画时长：%.2f 秒"), ActualDuration);
 				
 				// 设置定时器，确保能力在动画结束后结束
 				FTimerHandle TimerHandle;
@@ -126,10 +161,11 @@ void USG_GameplayAbility_Attack::ActivateAbility(
 					EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 				});
 				
+				// 🔧 修改 - 使用计算后的实际时长设置定时器
 				ActorInfo->AvatarActor->GetWorldTimerManager().SetTimer(
 					TimerHandle,
 					TimerDelegate,
-					MontageLength,
+					ActualDuration, // 使用修正后的时间
 					false
 				);
 			}
@@ -949,4 +985,18 @@ void USG_GameplayAbility_Attack::DrawTargetMarkers(const TArray<AActor*>& Target
 		true,
 		2.0f  // 文字大小
 	);
+}
+
+void USG_GameplayAbility_Attack::OnDamageGameplayEvent(FGameplayEventData Payload)
+{
+	if (AActor* Target = const_cast<AActor*>(Payload.Target.Get()))
+	{
+		// 调用现有的应用伤害逻辑
+		ApplyDamageToTarget(Target);
+        
+		// 触发命中反馈
+		TArray<AActor*> HitActors;
+		HitActors.Add(Target);
+		OnAttackHit(HitActors); 
+	}
 }

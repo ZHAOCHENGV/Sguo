@@ -4,6 +4,7 @@
 #include "AbilitySystem/GameplayEffects/SG_DamageExecutionCalc.h"
 #include "AbilitySystem/SG_AttributeSet.h"
 #include "AbilitySystem/SG_AbilitySystemComponent.h"
+#include "Buildings/SG_BuildingAttributeSet.h"
 #include "Debug/SG_LogCategories.h"
 
 // ========== 属性捕获结构体 ==========
@@ -107,11 +108,32 @@ void USG_DamageExecutionCalc::Execute_Implementation(
 	// 如果最终伤害 > 0，则应用到 Target 的 IncomingDamage 属性
 	if (FinalDamage > 0.0f)
 	{
+		// 🔧 修改 - 动态选择正确的 IncomingDamage 属性
+		FGameplayAttribute IncomingDamageAttribute;
+
+		// 检查目标是否有建筑属性集 (BuildingAttributeSet)
+		if (TargetASC->GetAttributeSet(USG_BuildingAttributeSet::StaticClass()))
+		{
+			IncomingDamageAttribute = USG_BuildingAttributeSet::GetIncomingDamageAttribute();
+			UE_LOG(LogSGGameplay, Verbose, TEXT("  目标是建筑，使用 BuildingAttributeSet::IncomingDamage"));
+		}
+		// 检查目标是否有单位属性集 (AttributeSet)
+		else if (TargetASC->GetAttributeSet(USG_AttributeSet::StaticClass()))
+		{
+			IncomingDamageAttribute = USG_AttributeSet::GetIncomingDamageAttribute();
+			UE_LOG(LogSGGameplay, Verbose, TEXT("  目标是单位，使用 AttributeSet::IncomingDamage"));
+		}
+		else
+		{
+			UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 目标没有已知的 AttributeSet，无法应用伤害！"));
+			return;
+		}
+
 		// 创建输出修改器
 		// EGameplayModOp::Additive：加法操作（累加伤害）
 		OutExecutionOutput.AddOutputModifier(
 			FGameplayModifierEvaluatedData(
-				USG_AttributeSet::GetIncomingDamageAttribute(),
+				IncomingDamageAttribute, // ✨ 使用动态获取的属性
 				EGameplayModOp::Additive,
 				FinalDamage
 			)
@@ -127,5 +149,5 @@ void USG_DamageExecutionCalc::Execute_Implementation(
 	}
 
 	// 输出日志：伤害计算结束
-	UE_LOG(LogSGGameplay, Verbose, TEXT("========================================"));
+	UE_LOG(LogSGGameplay, Verbose, TEXT("========================================"));	
 }

@@ -5,9 +5,12 @@
  */
 
 #include "AI/Services/SG_BTService_UpdateTarget.h"
+
+#include "AbilitySystem/SG_AttributeSet.h"
 #include "AI/SG_AIControllerBase.h"
 #include "Units/SG_UnitsBase.h"
 #include "BehaviorTree/BlackboardComponent.h"
+#include "Buildings/SG_MainCityBase.h"
 #include "Debug/SG_LogCategories.h"
 
 /**
@@ -45,41 +48,48 @@ void USG_BTService_UpdateTarget::TickNode(UBehaviorTreeComponent& OwnerComp, uin
 {
 	Super::TickNode(OwnerComp, NodeMemory, DeltaSeconds);
 	
-	// 获取 AI Controller
 	ASG_AIControllerBase* AIController = Cast<ASG_AIControllerBase>(OwnerComp.GetAIOwner());
 	if (!AIController)
 	{
 		return;
 	}
 	
-	// 获取黑板组件
 	UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
 	if (!BlackboardComp)
 	{
 		return;
 	}
 	
-	// 获取当前目标
 	AActor* CurrentTarget = Cast<AActor>(BlackboardComp->GetValueAsObject(TargetKey.SelectedKeyName));
 	
-	// 检查目标是否有效
+	// ========== 检查目标是否有效 ==========
 	bool bIsTargetValid = false;
 	if (CurrentTarget)
 	{
-		// 检查目标是否已死亡
+		// 检查单位
 		ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(CurrentTarget);
 		if (TargetUnit)
 		{
-			bIsTargetValid = !TargetUnit->bIsDead;
+			bIsTargetValid = !TargetUnit->bIsDead && 
+							 (!TargetUnit->AttributeSet || TargetUnit->AttributeSet->GetHealth() > 0.0f);
 		}
+		// ✨ 新增 - 检查主城
 		else
 		{
-			// 如果不是单位（可能是主城），假设有效
-			bIsTargetValid = true;
+			ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(CurrentTarget);
+			if (TargetMainCity)
+			{
+				bIsTargetValid = TargetMainCity->GetCurrentHealth() > 0.0f;
+				
+				if (!bIsTargetValid)
+				{
+					UE_LOG(LogSGGameplay, Log, TEXT("🏆 目标主城已被摧毁：%s"), *TargetMainCity->GetName());
+				}
+			}
 		}
 	}
 	
-	// 如果目标无效，查找新目标
+	// ========== 如果目标无效，查找新目标 ==========
 	if (!bIsTargetValid)
 	{
 		UE_LOG(LogSGGameplay, Verbose, TEXT("🔄 目标无效，查找新目标"));
@@ -97,7 +107,7 @@ void USG_BTService_UpdateTarget::TickNode(UBehaviorTreeComponent& OwnerComp, uin
 			BlackboardComp->ClearValue(TargetKey.SelectedKeyName);
 			AIController->SetCurrentTarget(nullptr);
 			
-			UE_LOG(LogSGGameplay, Verbose, TEXT("⚠️ 未找到新目标"));
+			UE_LOG(LogSGGameplay, Log, TEXT("⚠️ 未找到新目标（敌方主城可能已被摧毁）"));
 		}
 	}
 }

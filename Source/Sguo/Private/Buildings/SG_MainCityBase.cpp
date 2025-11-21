@@ -11,7 +11,6 @@
 #include "Components/StaticMeshComponent.h"
 #include "Components/BoxComponent.h"
 #include "Debug/SG_LogCategories.h"
-#include "Kismet/GameplayStatics.h"
 #include "Units/SG_UnitsBase.h"
 
 /**
@@ -24,8 +23,7 @@
 ASG_MainCityBase::ASG_MainCityBase()
 {
 	// 🔧 修改 - 启用 Tick（用于调试可视化）
-	PrimaryActorTick.bCanEverTick = true;
-
+	PrimaryActorTick.bCanEverTick = false;
 	// ========== 创建主城网格体作为根组件 ==========
 	CityMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CityMesh"));
 	RootComponent = CityMesh;
@@ -92,7 +90,6 @@ UAbilitySystemComponent* ASG_MainCityBase::GetAbilitySystemComponent() const
 void ASG_MainCityBase::BeginPlay()
 {
 	Super::BeginPlay();
-	
 	UE_LOG(LogSGGameplay, Log, TEXT("========== 主城 BeginPlay：%s =========="), *GetName());
 	UE_LOG(LogSGGameplay, Log, TEXT("  阵营：%s"), *FactionTag.ToString());
 	
@@ -230,6 +227,7 @@ void ASG_MainCityBase::BindAttributeDelegates()
  */
 void ASG_MainCityBase::OnHealthChanged(const FOnAttributeChangeData& Data)
 {
+	// 🔧 修复：已摧毁的主城不再处理生命值变化
 	if (bIsDestroyed)
 	{
 		return;
@@ -241,7 +239,7 @@ void ASG_MainCityBase::OnHealthChanged(const FOnAttributeChangeData& Data)
 	float Damage = OldHealth - NewHealth;
 	
 	// ✨ 新增 - 详细伤害日志
-	if (bShowDamageLog && Damage > 0.0f)
+	if (Damage > 0.0f)
 	{
 		UE_LOG(LogSGGameplay, Warning, TEXT("========================================"));
 		UE_LOG(LogSGGameplay, Warning, TEXT("🩸 主城受到伤害：%s"), *GetName());
@@ -261,228 +259,14 @@ void ASG_MainCityBase::OnHealthChanged(const FOnAttributeChangeData& Data)
 	// 检测主城被摧毁
 	if (NewHealth <= 0.0f && OldHealth > 0.0f)
 	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("✗ %s 被摧毁！"), *GetName());
+		UE_LOG(LogSGGameplay, Error, TEXT("========================================"));
+		UE_LOG(LogSGGameplay, Error, TEXT("💥 主城被摧毁：%s"), *GetName());
+		UE_LOG(LogSGGameplay, Error, TEXT("========================================"));
 		OnMainCityDestroyed();
 	}
 }
-// ========== ✨ 新增 - Tick 函数 ==========
 
-/**
- * @brief Tick 函数
- * @param DeltaTime 帧间隔时间
- * @details
- * 功能说明：
- * - 每帧绘制调试可视化
- */
-void ASG_MainCityBase::Tick(float DeltaTime)
-{
-	Super::Tick(DeltaTime);
-	
-	// 绘制调试可视化
-	if (bShowAttackDetectionBox || bShowHealthInfo)
-	{
-		DrawDebugVisualization();
-	}
-}
 
-/**
- * @brief 绘制调试可视化
- * @details
- * 功能说明：
- * - 绘制攻击检测盒
- * - 绘制生命值信息
- * - 绘制单位到检测盒的距离线
- */
-void ASG_MainCityBase::DrawDebugVisualization()
-{
-	if (!AttackDetectionBox)
-	{
-		return;
-	}
-	
-	FVector BoxCenter = AttackDetectionBox->GetComponentLocation();
-	FVector BoxExtent = AttackDetectionBox->GetScaledBoxExtent();
-	FQuat BoxRotation = AttackDetectionBox->GetComponentQuat();
-	
-	// ========== 绘制攻击检测盒 ==========
-	if (bShowAttackDetectionBox)
-	{
-		// 绘制盒体边框
-		DrawDebugBox(
-			GetWorld(),
-			BoxCenter,
-			BoxExtent,
-			BoxRotation,
-			DetectionBoxColor.ToFColor(true),
-			false,  // 不持久
-			-1.0f,  // 生命周期（一帧）
-			0,      // 深度优先级
-			3.0f    // 线条粗细
-		);
-		
-		// 绘制中心点
-		DrawDebugPoint(
-			GetWorld(),
-			BoxCenter,
-			15.0f,
-			FColor::Red,
-			false,
-			-1.0f
-		);
-		
-		// 绘制检测盒信息文本
-		FString BoxInfo = FString::Printf(
-			TEXT("检测盒信息\n尺寸: %.0f x %.0f x %.0f\n半径: %.0f"),
-			BoxExtent.X * 2.0f,
-			BoxExtent.Y * 2.0f,
-			BoxExtent.Z * 2.0f,
-			FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z)
-		);
-		
-		DrawDebugString(
-			GetWorld(),
-			BoxCenter + FVector(0, 0, BoxExtent.Z + 100.0f),
-			BoxInfo,
-			nullptr,
-			FColor::Orange,
-			-1.0f,
-			true,
-			1.5f
-		);
-		
-		// ✨ 新增 - 绘制周边单位到检测盒的距离线
-		TArray<AActor*> AllUnits;
-		UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_UnitsBase::StaticClass(), AllUnits);
-		
-		for (AActor* Actor : AllUnits)
-		{
-			ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(Actor);
-			if (!Unit || Unit->FactionTag == FactionTag)
-			{
-				continue;  // 跳过友方单位
-			}
-			
-			FVector UnitLocation = Unit->GetActorLocation();
-			float DistanceToCenter = FVector::Dist(UnitLocation, BoxCenter);
-			float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
-			float DistanceToSurface = FMath::Max(0.0f, DistanceToCenter - BoxRadius);
-			float AttackRange = Unit->GetAttackRangeForAI();
-			
-			// 根据距离选择颜色
-			FColor LineColor;
-			if (DistanceToSurface <= AttackRange)
-			{
-				LineColor = FColor::Red;  // 在攻击范围内
-			}
-			else if (DistanceToSurface <= AttackRange * 2.0f)
-			{
-				LineColor = FColor::Yellow;  // 接近攻击范围
-			}
-			else
-			{
-				LineColor = FColor::Green;  // 远离
-			}
-			
-			// 绘制单位到检测盒中心的线
-			DrawDebugLine(
-				GetWorld(),
-				UnitLocation,
-				BoxCenter,
-				LineColor,
-				false,
-				-1.0f,
-				0,
-				2.0f
-			);
-			
-			// 绘制距离信息
-			FString DistanceInfo = FString::Printf(
-				TEXT("%.0f / %.0f"),
-				DistanceToSurface,
-				AttackRange
-			);
-			
-			DrawDebugString(
-				GetWorld(),
-				(UnitLocation + BoxCenter) * 0.5f,
-				DistanceInfo,
-				nullptr,
-				LineColor,
-				-1.0f,
-				true,
-				1.2f
-			);
-		}
-	}
-	
-	// ========== 绘制生命值信息 ==========
-	if (bShowHealthInfo && AttributeSet)
-	{
-		float CurrentHealth = AttributeSet->GetHealth();
-		float MaxHealth = AttributeSet->GetMaxHealth();
-		float HealthPercentage = (CurrentHealth / MaxHealth) * 100.0f;
-		
-		// 根据生命值百分比选择颜色
-		FColor TextColor;
-		if (HealthPercentage > 75.0f)
-		{
-			TextColor = FColor::Green;
-		}
-		else if (HealthPercentage > 50.0f)
-		{
-			TextColor = FColor::Yellow;
-		}
-		else if (HealthPercentage > 25.0f)
-		{
-			TextColor = FColor::Orange;
-		}
-		else
-		{
-			TextColor = FColor::Red;
-		}
-		
-		FString HealthInfo = FString::Printf(
-			TEXT("%s\n生命值: %.0f / %.0f (%.1f%%)"),
-			*GetName(),
-			CurrentHealth,
-			MaxHealth,
-			HealthPercentage
-		);
-		
-		DrawDebugString(
-			GetWorld(),
-			GetActorLocation() + FVector(0, 0, 1000.0f),
-			HealthInfo,
-			nullptr,
-			TextColor,
-			-1.0f,
-			true,
-			2.0f
-		);
-	}
-}
-
-// ========== ✨ 新增 - 调试开关函数 ==========
-
-/**
- * @brief 切换攻击检测盒显示
- */
-void ASG_MainCityBase::ToggleDetectionBoxVisualization()
-{
-	bShowAttackDetectionBox = !bShowAttackDetectionBox;
-	UE_LOG(LogSGGameplay, Log, TEXT("%s: 攻击检测盒可视化 %s"), 
-		*GetName(), bShowAttackDetectionBox ? TEXT("开启") : TEXT("关闭"));
-}
-
-/**
- * @brief 切换生命值信息显示
- */
-void ASG_MainCityBase::ToggleHealthInfoVisualization()
-{
-	bShowHealthInfo = !bShowHealthInfo;
-	UE_LOG(LogSGGameplay, Log, TEXT("%s: 生命值信息可视化 %s"), 
-		*GetName(), bShowHealthInfo ? TEXT("开启") : TEXT("关闭"));
-}
 
 /**
  * @brief 主城被摧毁时调用
@@ -501,9 +285,41 @@ void ASG_MainCityBase::OnMainCityDestroyed_Implementation()
 	{
 		UE_LOG(LogSGGameplay, Warning, TEXT("✓ 敌方主城被摧毁 → 游戏胜利"));
 	}
+	
 
-	SetLifeSpan(5.0f);
-	UE_LOG(LogSGGameplay, Log, TEXT("  将在 5 秒后销毁"));
+	// ✨ 新增：禁用碰撞（防止继续被攻击）
+	if (AttackDetectionBox)
+	{
+		AttackDetectionBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 禁用攻击检测盒碰撞"));
+	}
+}
+
+
+/**
+ * @brief 检查主城是否存活
+ * @return 是否存活
+ * @details
+ * 功能说明：
+ * - 快速检查主城状态
+ * - 用于 AI 和 UI 查询
+ */
+bool ASG_MainCityBase::IsAlive() const
+{
+	// 方法 1：检查摧毁标记
+	if (bIsDestroyed)
+	{
+		return false;
+	}
+	
+	// 方法 2：检查生命值
+	if (AttributeSet)
+	{
+		return AttributeSet->GetHealth() > 0.0f;
+	}
+	
+	// 如果没有 AttributeSet，假设存活
+	return true;
 }
 
 /**
@@ -550,61 +366,3 @@ float ASG_MainCityBase::GetHealthPercentage() const
 
 
 
-#if WITH_EDITOR
-/**
- * @brief 编辑器中属性改变时调用
- * @details
- * 功能说明：
- * - 验证检测盒位置是否正确
- * - 如果位置错误，输出警告
- */
-void ASG_MainCityBase::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
-{
-	Super::PostEditChangeProperty(PropertyChangedEvent);
-	
-	if (AttackDetectionBox)
-	{
-		FVector BoxWorldLocation = AttackDetectionBox->GetComponentLocation();
-		FVector ActorLocation = GetActorLocation();
-		
-		// 检查检测盒是否在世界原点
-		if (BoxWorldLocation.Equals(FVector::ZeroVector, 10.0f) && !ActorLocation.Equals(FVector::ZeroVector, 10.0f))
-		{
-			UE_LOG(LogSGGameplay, Error, TEXT("⚠️ 检测盒位置错误（在世界原点）！"));
-			UE_LOG(LogSGGameplay, Error, TEXT("  主城位置：%s"), *ActorLocation.ToString());
-			UE_LOG(LogSGGameplay, Error, TEXT("  检测盒位置：%s"), *BoxWorldLocation.ToString());
-			
-			// 尝试修复
-			AttackDetectionBox->SetRelativeLocation(FVector(0.0f, 0.0f, 500.0f));
-		}
-	}
-}
-
-/**
- * @brief 编辑器中移动 Actor 后调用
- * @details
- * 功能说明：
- * - 确保检测盒跟随主城移动
- */
-void ASG_MainCityBase::PostEditMove(bool bFinished)
-{
-	Super::PostEditMove(bFinished);
-	
-	if (bFinished && AttackDetectionBox)
-	{
-		FVector BoxWorldLocation = AttackDetectionBox->GetComponentLocation();
-		FVector ActorLocation = GetActorLocation();
-		
-		UE_LOG(LogSGGameplay, Log, TEXT("主城移动完成："));
-		UE_LOG(LogSGGameplay, Log, TEXT("  主城位置：%s"), *ActorLocation.ToString());
-		UE_LOG(LogSGGameplay, Log, TEXT("  检测盒位置：%s"), *BoxWorldLocation.ToString());
-		
-		// 验证检测盒是否正确跟随
-		float Distance = FVector::Dist(BoxWorldLocation, ActorLocation);
-		if (Distance > 2000.0f)  // 如果距离过大，说明有问题
-		{
-			UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ 检测盒位置可能不正确（距离主城 %.2f）"), Distance);
-		}
-	}
-}
-#endif

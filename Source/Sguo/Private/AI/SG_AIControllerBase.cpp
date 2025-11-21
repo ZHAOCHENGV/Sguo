@@ -5,6 +5,8 @@
  */
 
 #include "AI/SG_AIControllerBase.h"
+
+#include "AbilitySystem/SG_AttributeSet.h"
 #include "BehaviorTree/BehaviorTree.h"
 #include "BehaviorTree/BlackboardComponent.h"
 #include "Units/SG_UnitsBase.h"
@@ -119,13 +121,9 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
 		return nullptr;
 	}
 	
-	// 获取单位的阵营标签
 	FGameplayTag MyFaction = ControlledUnit->FactionTag;
-	
-	// 获取寻敌范围
 	float DetectionRange = ControlledUnit->GetDetectionRange();
 	
-	// 输出日志
 	UE_LOG(LogSGGameplay, Verbose, TEXT("%s 开始查找目标（寻敌范围：%.0f）"), 
 		*ControlledUnit->GetName(), DetectionRange);
 	
@@ -138,38 +136,33 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
 	
 	for (AActor* Actor : AllUnits)
 	{
-		// 排除自己
 		if (Actor == ControlledUnit)
 		{
 			continue;
 		}
 		
-		// 转换为单位类型
 		ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(Actor);
 		if (!Unit)
 		{
 			continue;
 		}
 		
-		// 检查阵营（不同阵营才是敌人）
+		// 检查阵营
 		if (Unit->FactionTag != MyFaction)
 		{
-			// 检查是否已死亡
+			// 🔧 检查是否已死亡
 			if (Unit->bIsDead)
 			{
 				continue;
 			}
 			
-			// 计算距离
 			float Distance = FVector::Dist(ControlledUnit->GetActorLocation(), Unit->GetActorLocation());
 			
-			// 只查找寻敌范围内的目标
 			if (Distance > DetectionRange)
 			{
 				continue;
 			}
 			
-			// 更新最近敌人
 			if (Distance < MinDistance)
 			{
 				MinDistance = Distance;
@@ -178,7 +171,6 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
 		}
 	}
 	
-	// 如果找到敌方单位，返回
 	if (NearestEnemy)
 	{
 		UE_LOG(LogSGGameplay, Verbose, TEXT("%s 找到最近的敌方单位：%s (距离: %.0f)"), 
@@ -186,50 +178,45 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
 		return NearestEnemy;
 	}
 	
-	// ========== 🔧 修改 - 查找敌方主城（使用攻击检测盒位置）==========
+	// ========== 🔧 修复 - 查找敌方主城（排除已摧毁的）==========
 	UE_LOG(LogSGGameplay, Verbose, TEXT("%s 未找到敌方单位，尝试查找敌方主城"), *ControlledUnit->GetName());
 	
-	// 获取所有主城
 	TArray<AActor*> AllMainCities;
 	UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_MainCityBase::StaticClass(), AllMainCities);
 	
-	// 查找敌方主城
 	for (AActor* Actor : AllMainCities)
 	{
-		// 转换为主城类型
 		ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(Actor);
 		if (!MainCity)
 		{
 			continue;
 		}
 		
-		// 检查阵营（不同阵营才是敌人）
+		// 检查阵营
 		if (MainCity->FactionTag != MyFaction)
 		{
-			// 检查主城是否已被摧毁
-			if (MainCity->GetCurrentHealth() <= 0.0f)
+			// ✨ 关键新增：检查主城是否已被摧毁
+			float MainCityHealth = MainCity->GetCurrentHealth();
+			if (MainCityHealth <= 0.0f)
 			{
+				UE_LOG(LogSGGameplay, Verbose, TEXT("  跳过已摧毁的主城：%s（生命值：%.0f）"), 
+					*MainCity->GetName(), MainCityHealth);
 				continue;
 			}
 			
-			// ✨ 新增 - 使用攻击检测盒的位置计算距离
+			// 计算距离
 			UBoxComponent* DetectionBox = MainCity->GetAttackDetectionBox();
 			FVector TargetLocation;
 			
 			if (DetectionBox)
 			{
-				// 使用检测盒的世界位置
 				TargetLocation = DetectionBox->GetComponentLocation();
-				UE_LOG(LogSGGameplay, Verbose, TEXT("  使用主城攻击检测盒位置：%s"), *TargetLocation.ToString());
 			}
 			else
 			{
-				// 回退到主城 Actor 位置
 				TargetLocation = MainCity->GetActorLocation();
-				UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 主城没有攻击检测盒，使用 Actor 位置"));
 			}
 			
-			// 计算距离
 			float DistanceToMainCity = FVector::Dist(
 				ControlledUnit->GetActorLocation(), 
 				TargetLocation
@@ -237,17 +224,14 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
 			
 			if (DistanceToMainCity <= DetectionRange)
 			{
-				// 找到敌方主城
-				UE_LOG(LogSGGameplay, Log, TEXT("%s 找到敌方主城：%s (距离: %.0f)"), 
-					*ControlledUnit->GetName(), *MainCity->GetName(), DistanceToMainCity);
+				UE_LOG(LogSGGameplay, Log, TEXT("%s 找到敌方主城：%s (距离: %.0f, 生命值: %.0f)"), 
+					*ControlledUnit->GetName(), *MainCity->GetName(), DistanceToMainCity, MainCityHealth);
 				return MainCity;
 			}
 		}
 	}
 	
-	// 如果连主城都没找到
-	UE_LOG(LogSGGameplay, Verbose, TEXT("%s 未找到任何目标（寻敌范围：%.0f）"), 
-		*ControlledUnit->GetName(), DetectionRange);
+	UE_LOG(LogSGGameplay, Verbose, TEXT("%s 未找到任何目标"), *ControlledUnit->GetName());
 	return nullptr;
 }
 
@@ -420,11 +404,40 @@ bool ASG_AIControllerBase::IsTargetValid() const
 		return false;
 	}
 	
-	// 检查目标是否已死亡
+	// ========== 检查单位是否已死亡 ==========
 	ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(CurrentTarget);
-	if (TargetUnit && TargetUnit->bIsDead)
+	if (TargetUnit)
 	{
-		return false;
+		// 检查死亡标记
+		if (TargetUnit->bIsDead)
+		{
+			UE_LOG(LogSGGameplay, Verbose, TEXT("  目标单位已死亡：%s"), *TargetUnit->GetName());
+			return false;
+		}
+		
+		// 检查生命值
+		if (TargetUnit->AttributeSet && TargetUnit->AttributeSet->GetHealth() <= 0.0f)
+		{
+			UE_LOG(LogSGGameplay, Verbose, TEXT("  目标单位生命值为 0：%s"), *TargetUnit->GetName());
+			return false;
+		}
+	}
+	
+	// ========== ✨ 新增 - 检查主城是否被摧毁 ==========
+	ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(CurrentTarget);
+	if (TargetMainCity)
+	{
+		// 检查主城生命值
+		float MainCityHealth = TargetMainCity->GetCurrentHealth();
+		if (MainCityHealth <= 0.0f)
+		{
+			UE_LOG(LogSGGameplay, Log, TEXT("  ✗ 目标主城已被摧毁：%s（生命值：%.0f）"), 
+				*TargetMainCity->GetName(), MainCityHealth);
+			return false;
+		}
+		
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 目标主城存活：%s（生命值：%.0f）"), 
+			*TargetMainCity->GetName(), MainCityHealth);
 	}
 	
 	return true;

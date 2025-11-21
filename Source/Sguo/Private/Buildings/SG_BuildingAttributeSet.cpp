@@ -10,26 +10,9 @@
  */
 USG_BuildingAttributeSet::USG_BuildingAttributeSet()
 {
+	// 🔧 修改 - 删除在构造函数中获取 Actor 的日志，防止 CDO 创建崩溃
 	UE_LOG(LogSGGameplay, Warning, TEXT("========== BuildingAttributeSet 构造 =========="));
 	UE_LOG(LogSGGameplay, Warning, TEXT("  AttributeSet：%s"), *GetName());
-	UE_LOG(LogSGGameplay, Warning, TEXT("  所属 Actor：%s"), GetOwningActor() ? *GetOwningActor()->GetName() : TEXT("None"));
-	
-	// 验证属性定义
-	FGameplayAttribute HealthAttr = GetHealthAttribute();
-	FGameplayAttribute MaxHealthAttr = GetMaxHealthAttribute();
-	FGameplayAttribute IncomingDamageAttr = GetIncomingDamageAttribute();
-	
-	UE_LOG(LogSGGameplay, Warning, TEXT("  Health 属性：%s"), HealthAttr.IsValid() ? TEXT("✅") : TEXT("❌"));
-	UE_LOG(LogSGGameplay, Warning, TEXT("  MaxHealth 属性：%s"), MaxHealthAttr.IsValid() ? TEXT("✅") : TEXT("❌"));
-	UE_LOG(LogSGGameplay, Warning, TEXT("  IncomingDamage 属性：%s"), IncomingDamageAttr.IsValid() ? TEXT("✅") : TEXT("❌"));
-	
-	if (IncomingDamageAttr.IsValid())
-	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("    IncomingDamage 属性名称：%s"), *IncomingDamageAttr.GetName());
-		UE_LOG(LogSGGameplay, Warning, TEXT("    IncomingDamage 所属类：%s"), *IncomingDamageAttr.GetAttributeSetClass()->GetName());
-	}
-	
-	UE_LOG(LogSGGameplay, Warning, TEXT("========================================"));
 }
 
 /**

@@ -5,9 +5,12 @@
  */
 
 #include "AI/Decorators/SG_BTDecorator_IsTargetValid.h"
+
+#include "AbilitySystem/SG_AttributeSet.h"
 #include "AI/SG_AIControllerBase.h"
 #include "Units/SG_UnitsBase.h"
 #include "BehaviorTree/BlackboardComponent.h"
+#include "Buildings/SG_MainCityBase.h"
 #include "Debug/SG_LogCategories.h"
 
 /**
@@ -63,11 +66,34 @@ bool USG_BTDecorator_IsTargetValid::CalculateRawConditionValue(UBehaviorTreeComp
 		return false;
 	}
 	
-	// 检查目标是否已死亡
+	// ========== 检查单位是否已死亡 ==========
 	ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(Target);
-	if (TargetUnit && TargetUnit->bIsDead)
+	if (TargetUnit)
 	{
-		return false;
+		if (TargetUnit->bIsDead)
+		{
+			UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位已死亡：%s"), *TargetUnit->GetName());
+			return false;
+		}
+		
+		if (TargetUnit->AttributeSet && TargetUnit->AttributeSet->GetHealth() <= 0.0f)
+		{
+			UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位生命值为 0：%s"), *TargetUnit->GetName());
+			return false;
+		}
+	}
+	
+	// ========== ✨ 新增 - 检查主城是否被摧毁 ==========
+	ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(Target);
+	if (TargetMainCity)
+	{
+		float MainCityHealth = TargetMainCity->GetCurrentHealth();
+		if (MainCityHealth <= 0.0f)
+		{
+			UE_LOG(LogSGGameplay, Log, TEXT("✗ 目标主城已被摧毁：%s（生命值：%.0f）"), 
+				*TargetMainCity->GetName(), MainCityHealth);
+			return false;
+		}
 	}
 	
 	return true;

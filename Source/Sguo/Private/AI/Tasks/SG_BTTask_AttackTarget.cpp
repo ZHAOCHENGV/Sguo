@@ -9,6 +9,8 @@
 #include "Units/SG_UnitsBase.h"
 #include "AbilitySystem/SG_AttributeSet.h"
 #include "BehaviorTree/BlackboardComponent.h"
+#include "Buildings/SG_MainCityBase.h"
+#include "Components/BoxComponent.h"
 #include "Debug/SG_LogCategories.h"
 
 /**
@@ -44,11 +46,10 @@ uint16 USG_BTTask_AttackTarget::GetInstanceMemorySize() const
  */
 EBTNodeResult::Type USG_BTTask_AttackTarget::ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
 {
-	// ========== 输出调试信息 ==========
 	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 	UE_LOG(LogSGGameplay, Log, TEXT("🎯 攻击目标任务：开始执行"));
 	
-	// ========== 步骤1：检查 AI Controller 是否有效 ==========
+	// ========== 步骤1：获取 AI Controller ==========
 	AAIController* AIController = OwnerComp.GetAIOwner();
 	if (!AIController)
 	{
@@ -58,7 +59,12 @@ EBTNodeResult::Type USG_BTTask_AttackTarget::ExecuteTask(UBehaviorTreeComponent&
 	}
 	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ AI Controller 有效"));
 	
-	// ========== 步骤2：获取控制的单位 ==========
+	// ========== ✨ 新增 - 步骤2：立即停止移动 ==========
+	// 在执行攻击前，确保单位已停止移动
+	AIController->StopMovement();
+	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 已停止移动"));
+	
+	// ========== 步骤3：获取控制的单位 ==========
 	ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
 	if (!ControlledUnit)
 	{
@@ -68,29 +74,57 @@ EBTNodeResult::Type USG_BTTask_AttackTarget::ExecuteTask(UBehaviorTreeComponent&
 	}
 	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 控制的单位：%s"), *ControlledUnit->GetName());
 	
-	// ✨ 新增 - 步骤3：检查是否真的在攻击范围内
+	// ========== 🔧 修复 - 步骤4：统一距离计算逻辑 ==========
 	UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
 	if (BlackboardComp)
 	{
 		AActor* Target = Cast<AActor>(BlackboardComp->GetValueAsObject(FName("CurrentTarget")));
 		if (Target)
 		{
-			float Distance = FVector::Dist(ControlledUnit->GetActorLocation(), Target->GetActorLocation());
+			FVector UnitLocation = ControlledUnit->GetActorLocation();
 			float AttackRange = ControlledUnit->GetAttackRangeForAI();
+			float ActualDistance = 0.0f;
 			
-			UE_LOG(LogSGGameplay, Log, TEXT("  距离检查：%.2f / %.2f"), Distance, AttackRange);
+			// 🔧 关键修复：与装饰器使用相同的距离计算
+			ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(Target);
+			if (MainCity && MainCity->GetAttackDetectionBox())
+			{
+				// 主城：计算到检测盒表面的距离
+				UBoxComponent* DetectionBox = MainCity->GetAttackDetectionBox();
+				FVector BoxCenter = DetectionBox->GetComponentLocation();
+				FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
+				float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
+				
+				float DistanceToCenter = FVector::Dist(UnitLocation, BoxCenter);
+				ActualDistance = FMath::Max(0.0f, DistanceToCenter - BoxRadius);
+				
+				UE_LOG(LogSGGameplay, Log, TEXT("  主城目标距离检查："));
+				UE_LOG(LogSGGameplay, Log, TEXT("    到中心距离：%.2f"), DistanceToCenter);
+				UE_LOG(LogSGGameplay, Log, TEXT("    检测盒半径：%.2f"), BoxRadius);
+				UE_LOG(LogSGGameplay, Log, TEXT("    到表面距离：%.2f"), ActualDistance);
+			}
+			else
+			{
+				// 普通单位：直接计算距离
+				ActualDistance = FVector::Dist(UnitLocation, Target->GetActorLocation());
+				UE_LOG(LogSGGameplay, Log, TEXT("  普通单位距离：%.2f"), ActualDistance);
+			}
+			
+			UE_LOG(LogSGGameplay, Log, TEXT("  攻击范围：%.2f"), AttackRange);
 			
 			// 如果不在攻击范围内，任务失败
-			if (Distance > AttackRange + 50.0f)
+			if (ActualDistance > AttackRange + 50.0f)
 			{
 				UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 不在攻击范围内，任务失败"));
 				UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 				return EBTNodeResult::Failed;
 			}
+			
+			UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 在攻击范围内"));
 		}
 	}
 	
-	// 检查主城是否被打断
+	// ========== 步骤5：检查主城是否被打断 ==========
 	ASG_AIControllerBase* SGAIController = Cast<ASG_AIControllerBase>(AIController);
 	if (SGAIController && SGAIController->bIsMainCity && SGAIController->bAttackInterrupted)
 	{
@@ -99,7 +133,7 @@ EBTNodeResult::Type USG_BTTask_AttackTarget::ExecuteTask(UBehaviorTreeComponent&
 		return EBTNodeResult::Failed;
 	}
 	
-	// 触发攻击
+	// ========== 步骤6：触发攻击 ==========
 	UE_LOG(LogSGGameplay, Log, TEXT("  调用 PerformAttack()..."));
 	bool bSuccess = ControlledUnit->PerformAttack();
 	
@@ -158,11 +192,17 @@ void USG_BTTask_AttackTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
 	// 获取任务内存
 	FSG_BTTaskAttackMemory* Memory = reinterpret_cast<FSG_BTTaskAttackMemory*>(NodeMemory);
 	
-	// 🔧 修改 - 添加调试日志（每次都输出）
-	UE_LOG(LogSGGameplay, Verbose, TEXT("  ⏳ 攻击冷却中：剩余 %.2f 秒"), Memory->RemainingWaitTime);
-	
 	// 减少等待时间
 	Memory->RemainingWaitTime -= DeltaSeconds;
+	
+	// ✨ 新增 - 每 0.5 秒输出一次调试日志
+	static float DebugLogTimer = 0.0f;
+	DebugLogTimer += DeltaSeconds;
+	if (DebugLogTimer >= 0.5f)
+	{
+		DebugLogTimer = 0.0f;
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  ⏳ 攻击冷却中：剩余 %.2f 秒"), Memory->RemainingWaitTime);
+	}
 	
 	// 等待完成
 	if (Memory->RemainingWaitTime <= 0.0f)

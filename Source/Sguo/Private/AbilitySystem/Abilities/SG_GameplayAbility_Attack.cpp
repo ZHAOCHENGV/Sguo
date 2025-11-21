@@ -305,10 +305,8 @@ void USG_GameplayAbility_Attack::PerformAttack()
  */
 int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets)
 {
-	// 清空输出数组
 	OutTargets.Empty();
 
-	// 获取施放者
 	AActor* AvatarActor = GetAvatarActorFromActorInfo();
 	if (!AvatarActor)
 	{
@@ -316,7 +314,6 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 		return 0;
 	}
 
-	// 获取施放者的阵营标签
 	ASG_UnitsBase* SourceUnit = Cast<ASG_UnitsBase>(AvatarActor);
 	if (!SourceUnit)
 	{
@@ -324,29 +321,22 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 		return 0;
 	}
 
-	// 获取阵营和攻击范围
 	FGameplayTag MyFaction = SourceUnit->FactionTag;
 	float AttackRange = GetAttackRange();
+	FVector SourceLocation = AvatarActor->GetActorLocation();
 
-	// 输出日志
 	UE_LOG(LogSGGameplay, Verbose, TEXT("  查找范围：%.1f"), AttackRange);
 
-	// 根据攻击类型执行不同的查找逻辑
 	switch (AttackType)
 	{
 	case ESGAttackAbilityType::Melee:
 		{
 			// ========== 近战攻击：球形范围检测 ==========
 			
-			// 获取施放者位置
-			FVector SourceLocation = AvatarActor->GetActorLocation();
-			
-			// 球形检测参数
 			FCollisionShape CollisionShape = FCollisionShape::MakeSphere(AttackRange);
 			FCollisionQueryParams QueryParams;
 			QueryParams.AddIgnoredActor(AvatarActor);
 
-			// 执行球形检测
 			TArray<FOverlapResult> OverlapResults;
 			bool bHit = GetWorld()->OverlapMultiByChannel(
 				OverlapResults,
@@ -357,19 +347,15 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 				QueryParams
 			);
 
-			// 绘制调试可视化
 			if (bShowAttackDetection)
 			{
 				DrawMeleeAttackDetection(SourceLocation, AttackRange, bHit);
 			}
 
-			// 如果检测到碰撞
 			if (bHit)
 			{
-				// 遍历所有碰撞结果
 				for (const FOverlapResult& Result : OverlapResults)
 				{
-					// 获取碰撞的 Actor
 					AActor* HitActor = Result.GetActor();
 					if (!HitActor)
 					{
@@ -380,35 +366,47 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 					ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(HitActor);
 					if (TargetUnit && TargetUnit->FactionTag != MyFaction)
 					{
-						// 使用 AddUnique 避免重复添加同一个 Actor
 						OutTargets.AddUnique(HitActor);
 						UE_LOG(LogSGGameplay, Verbose, TEXT("    找到敌方单位：%s"), *HitActor->GetName());
 						continue;
 					}
 
-					// ========== ✨ 新增 - 检查是否是主城的攻击检测盒 ==========
-					// 获取碰撞组件
+					// ========== 🔧 修复 - 检查是否是主城的攻击检测盒 ==========
 					UPrimitiveComponent* HitComponent = Result.GetComponent();
 					if (HitComponent)
 					{
-						// 尝试获取组件的 Owner（主城）
 						AActor* ComponentOwner = HitComponent->GetOwner();
 						ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(ComponentOwner);
 						
 						if (MainCity && MainCity->FactionTag != MyFaction)
 						{
-							// 🔧 修复 - 正确的类型转换
-							// 将 UPrimitiveComponent 转换为 UBoxComponent
 							UBoxComponent* HitBoxComponent = Cast<UBoxComponent>(HitComponent);
-							// 获取主城的攻击检测盒
 							UBoxComponent* MainCityDetectionBox = MainCity->GetAttackDetectionBox();
 							
-							// 比较是否是同一个组件
 							if (HitBoxComponent && MainCityDetectionBox && HitBoxComponent == MainCityDetectionBox)
 							{
-								OutTargets.AddUnique(MainCity);
-								UE_LOG(LogSGGameplay, Log, TEXT("    找到敌方主城（通过攻击检测盒）：%s"), 
-									*MainCity->GetName());
+								// ✨ 新增 - 验证距离（使用与装饰器相同的逻辑）
+								FVector BoxCenter = MainCityDetectionBox->GetComponentLocation();
+								FVector BoxExtent = MainCityDetectionBox->GetScaledBoxExtent();
+								float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
+								
+								float DistanceToCenter = FVector::Dist(SourceLocation, BoxCenter);
+								float DistanceToSurface = FMath::Max(0.0f, DistanceToCenter - BoxRadius);
+								
+								if (DistanceToSurface <= AttackRange)
+								{
+									OutTargets.AddUnique(MainCity);
+									UE_LOG(LogSGGameplay, Log, TEXT("    找到敌方主城（通过攻击检测盒）：%s"), 
+										*MainCity->GetName());
+									UE_LOG(LogSGGameplay, Log, TEXT("      到表面距离：%.2f / 攻击范围：%.2f"), 
+										DistanceToSurface, AttackRange);
+								}
+								else
+								{
+									UE_LOG(LogSGGameplay, Warning, TEXT("    检测到主城但距离不足：%.2f > %.2f"), 
+										DistanceToSurface, AttackRange);
+								}
+								
 								continue;
 							}
 						}
@@ -422,16 +420,13 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 		{
 			// ========== 远程攻击：射线检测 ==========
 			
-			// 获取施放者的前方方向
 			FVector StartLocation = AvatarActor->GetActorLocation();
 			FVector ForwardVector = AvatarActor->GetActorForwardVector();
 			FVector EndLocation = StartLocation + ForwardVector * AttackRange;
 
-			// 射线检测参数
 			FCollisionQueryParams QueryParams;
 			QueryParams.AddIgnoredActor(AvatarActor);
 
-			// 执行射线检测
 			FHitResult HitResult;
 			bool bHit = GetWorld()->LineTraceSingleByChannel(
 				HitResult,
@@ -441,21 +436,17 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 				QueryParams
 			);
 
-			// 绘制调试可视化
 			if (bShowAttackDetection)
 			{
 				FVector HitLocation = bHit ? HitResult.Location : EndLocation;
 				DrawRangedAttackDetection(StartLocation, EndLocation, bHit, HitLocation);
 			}
 
-			// 如果射线命中
 			if (bHit)
 			{
-				// 获取命中的 Actor
 				AActor* HitActor = HitResult.GetActor();
 				if (HitActor)
 				{
-					// 检查是否是敌方单位
 					ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(HitActor);
 					if (TargetUnit && TargetUnit->FactionTag != MyFaction)
 					{
@@ -463,7 +454,7 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 						UE_LOG(LogSGGameplay, Verbose, TEXT("    找到敌方单位：%s"), *HitActor->GetName());
 					}
 					
-					// ========== ✨ 新增 - 检查是否是主城的攻击检测盒 ==========
+					// ========== 🔧 修复 - 检查是否是主城的攻击检测盒 ==========
 					UPrimitiveComponent* HitComponent = HitResult.GetComponent();
 					if (HitComponent)
 					{
@@ -472,15 +463,32 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 						
 						if (MainCity && MainCity->FactionTag != MyFaction)
 						{
-							// 🔧 修复 - 正确的类型转换
 							UBoxComponent* HitBoxComponent = Cast<UBoxComponent>(HitComponent);
 							UBoxComponent* MainCityDetectionBox = MainCity->GetAttackDetectionBox();
 							
 							if (HitBoxComponent && MainCityDetectionBox && HitBoxComponent == MainCityDetectionBox)
 							{
-								OutTargets.AddUnique(MainCity);
-								UE_LOG(LogSGGameplay, Log, TEXT("    找到敌方主城（通过攻击检测盒）：%s"), 
-									*MainCity->GetName());
+								// ✨ 新增 - 验证距离
+								FVector BoxCenter = MainCityDetectionBox->GetComponentLocation();
+								FVector BoxExtent = MainCityDetectionBox->GetScaledBoxExtent();
+								float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
+								
+								float DistanceToCenter = FVector::Dist(SourceLocation, BoxCenter);
+								float DistanceToSurface = FMath::Max(0.0f, DistanceToCenter - BoxRadius);
+								
+								if (DistanceToSurface <= AttackRange)
+								{
+									OutTargets.AddUnique(MainCity);
+									UE_LOG(LogSGGameplay, Log, TEXT("    找到敌方主城（通过攻击检测盒）：%s"), 
+										*MainCity->GetName());
+									UE_LOG(LogSGGameplay, Log, TEXT("      到表面距离：%.2f / 攻击范围：%.2f"), 
+										DistanceToSurface, AttackRange);
+								}
+								else
+								{
+									UE_LOG(LogSGGameplay, Warning, TEXT("    检测到主城但距离不足：%.2f > %.2f"), 
+										DistanceToSurface, AttackRange);
+								}
 							}
 						}
 					}
@@ -491,19 +499,16 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 
 	case ESGAttackAbilityType::Skill:
 		{
-			// 技能攻击：由子类或蓝图实现
 			UE_LOG(LogSGGameplay, Warning, TEXT("技能攻击类型需要在子类中实现 FindTargetsInRange"));
 		}
 		break;
 	}
 
-	// 绘制目标标记
 	if (bShowAttackDetection && OutTargets.Num() > 0)
 	{
 		DrawTargetMarkers(OutTargets);
 	}
 
-	// 返回找到的目标数量
 	return OutTargets.Num();
 }
 

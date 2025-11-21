@@ -11,6 +11,8 @@
 #include "Components/StaticMeshComponent.h"
 #include "Components/BoxComponent.h"
 #include "Debug/SG_LogCategories.h"
+#include "Kismet/GameplayStatics.h"
+#include "Units/SG_UnitsBase.h"
 
 /**
  * @brief 构造函数
@@ -21,14 +23,12 @@
  */
 ASG_MainCityBase::ASG_MainCityBase()
 {
-	// 禁用 Tick
-	PrimaryActorTick.bCanEverTick = false;
+	// 🔧 修改 - 启用 Tick（用于调试可视化）
+	PrimaryActorTick.bCanEverTick = true;
 
 	// ========== 创建主城网格体作为根组件 ==========
 	CityMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CityMesh"));
 	RootComponent = CityMesh;
-	
-	// 主城网格体不影响导航
 	CityMesh->SetCollisionProfileName(TEXT("NoCollision"));
 	CityMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	CityMesh->SetCanEverAffectNavigation(false);
@@ -37,14 +37,8 @@ ASG_MainCityBase::ASG_MainCityBase()
 	// ========== 创建攻击检测盒 ==========
 	AttackDetectionBox = CreateDefaultSubobject<UBoxComponent>(TEXT("AttackDetectionBox"));
 	AttackDetectionBox->SetupAttachment(CityMesh);
-	
-	// ✨ 简化 - 设置默认尺寸（可在编辑器中直接修改 Box Extent）
 	AttackDetectionBox->SetBoxExtent(FVector(800.0f, 800.0f, 500.0f));
-	
-	// ✨ 简化 - 设置默认偏移（可在编辑器中直接修改 Location）
 	AttackDetectionBox->SetRelativeLocation(FVector(0.0f, 0.0f, 500.0f));
-	
-	// 碰撞设置
 	AttackDetectionBox->SetCollisionProfileName(TEXT("OverlapAllDynamic"));
 	AttackDetectionBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	AttackDetectionBox->SetCollisionResponseToAllChannels(ECR_Ignore);
@@ -53,20 +47,17 @@ ASG_MainCityBase::ASG_MainCityBase()
 	AttackDetectionBox->SetGenerateOverlapEvents(true);
 	AttackDetectionBox->SetMobility(EComponentMobility::Static);
 	
-	// ✨ 在编辑器中显示碰撞盒（橙色线框）
+	// ✨ 编辑器中显示碰撞盒
 	AttackDetectionBox->SetHiddenInGame(false);
 	AttackDetectionBox->SetVisibility(true);
 	AttackDetectionBox->ShapeColor = FColor::Orange;
-
 
 	// ========== 创建 GAS 组件 ==========
 	AbilitySystemComponent = CreateDefaultSubobject<USG_AbilitySystemComponent>(TEXT("AbilitySystemComponent"));
 	AbilitySystemComponent->SetIsReplicated(true);
 	AbilitySystemComponent->SetReplicationMode(EGameplayEffectReplicationMode::Mixed);
-
 	AttributeSet = CreateDefaultSubobject<USG_BuildingAttributeSet>(TEXT("AttributeSet"));
 	
-	// 设置默认阵营
 	FactionTag = FGameplayTag::RequestGameplayTag(TEXT("Unit.Faction.Player"));
 }
 
@@ -170,17 +161,252 @@ void ASG_MainCityBase::OnHealthChanged(const FOnAttributeChangeData& Data)
 	}
 	
 	float NewHealth = Data.NewValue;
+	float OldHealth = Data.OldValue;
 	float MaxHealth = AttributeSet->GetMaxHealth();
+	float Damage = OldHealth - NewHealth;
 	
-	UE_LOG(LogSGGameplay, Log, TEXT("%s 生命值变化：%.0f / %.0f（%.1f%%）"), 
-		*GetName(), NewHealth, MaxHealth, (NewHealth / MaxHealth) * 100.0f);
+	// ✨ 新增 - 详细伤害日志
+	if (bShowDamageLog && Damage > 0.0f)
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("========================================"));
+		UE_LOG(LogSGGameplay, Warning, TEXT("🩸 主城受到伤害：%s"), *GetName());
+		UE_LOG(LogSGGameplay, Warning, TEXT("  伤害值：%.2f"), Damage);
+		UE_LOG(LogSGGameplay, Warning, TEXT("  旧生命值：%.0f"), OldHealth);
+		UE_LOG(LogSGGameplay, Warning, TEXT("  新生命值：%.0f"), NewHealth);
+		UE_LOG(LogSGGameplay, Warning, TEXT("  最大生命值：%.0f"), MaxHealth);
+		UE_LOG(LogSGGameplay, Warning, TEXT("  剩余百分比：%.1f%%"), (NewHealth / MaxHealth) * 100.0f);
+		UE_LOG(LogSGGameplay, Warning, TEXT("========================================"));
+	}
+	else
+	{
+		UE_LOG(LogSGGameplay, Log, TEXT("%s 生命值变化：%.0f / %.0f（%.1f%%）"), 
+			*GetName(), NewHealth, MaxHealth, (NewHealth / MaxHealth) * 100.0f);
+	}
 
 	// 检测主城被摧毁
-	if (NewHealth <= 0.0f && Data.OldValue > 0.0f)
+	if (NewHealth <= 0.0f && OldHealth > 0.0f)
 	{
 		UE_LOG(LogSGGameplay, Warning, TEXT("✗ %s 被摧毁！"), *GetName());
 		OnMainCityDestroyed();
 	}
+}
+// ========== ✨ 新增 - Tick 函数 ==========
+
+/**
+ * @brief Tick 函数
+ * @param DeltaTime 帧间隔时间
+ * @details
+ * 功能说明：
+ * - 每帧绘制调试可视化
+ */
+void ASG_MainCityBase::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+	
+	// 绘制调试可视化
+	if (bShowAttackDetectionBox || bShowHealthInfo)
+	{
+		DrawDebugVisualization();
+	}
+}
+
+/**
+ * @brief 绘制调试可视化
+ * @details
+ * 功能说明：
+ * - 绘制攻击检测盒
+ * - 绘制生命值信息
+ * - 绘制单位到检测盒的距离线
+ */
+void ASG_MainCityBase::DrawDebugVisualization()
+{
+	if (!AttackDetectionBox)
+	{
+		return;
+	}
+	
+	FVector BoxCenter = AttackDetectionBox->GetComponentLocation();
+	FVector BoxExtent = AttackDetectionBox->GetScaledBoxExtent();
+	FQuat BoxRotation = AttackDetectionBox->GetComponentQuat();
+	
+	// ========== 绘制攻击检测盒 ==========
+	if (bShowAttackDetectionBox)
+	{
+		// 绘制盒体边框
+		DrawDebugBox(
+			GetWorld(),
+			BoxCenter,
+			BoxExtent,
+			BoxRotation,
+			DetectionBoxColor.ToFColor(true),
+			false,  // 不持久
+			-1.0f,  // 生命周期（一帧）
+			0,      // 深度优先级
+			3.0f    // 线条粗细
+		);
+		
+		// 绘制中心点
+		DrawDebugPoint(
+			GetWorld(),
+			BoxCenter,
+			15.0f,
+			FColor::Red,
+			false,
+			-1.0f
+		);
+		
+		// 绘制检测盒信息文本
+		FString BoxInfo = FString::Printf(
+			TEXT("检测盒信息\n尺寸: %.0f x %.0f x %.0f\n半径: %.0f"),
+			BoxExtent.X * 2.0f,
+			BoxExtent.Y * 2.0f,
+			BoxExtent.Z * 2.0f,
+			FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z)
+		);
+		
+		DrawDebugString(
+			GetWorld(),
+			BoxCenter + FVector(0, 0, BoxExtent.Z + 100.0f),
+			BoxInfo,
+			nullptr,
+			FColor::Orange,
+			-1.0f,
+			true,
+			1.5f
+		);
+		
+		// ✨ 新增 - 绘制周边单位到检测盒的距离线
+		TArray<AActor*> AllUnits;
+		UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_UnitsBase::StaticClass(), AllUnits);
+		
+		for (AActor* Actor : AllUnits)
+		{
+			ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(Actor);
+			if (!Unit || Unit->FactionTag == FactionTag)
+			{
+				continue;  // 跳过友方单位
+			}
+			
+			FVector UnitLocation = Unit->GetActorLocation();
+			float DistanceToCenter = FVector::Dist(UnitLocation, BoxCenter);
+			float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
+			float DistanceToSurface = FMath::Max(0.0f, DistanceToCenter - BoxRadius);
+			float AttackRange = Unit->GetAttackRangeForAI();
+			
+			// 根据距离选择颜色
+			FColor LineColor;
+			if (DistanceToSurface <= AttackRange)
+			{
+				LineColor = FColor::Red;  // 在攻击范围内
+			}
+			else if (DistanceToSurface <= AttackRange * 2.0f)
+			{
+				LineColor = FColor::Yellow;  // 接近攻击范围
+			}
+			else
+			{
+				LineColor = FColor::Green;  // 远离
+			}
+			
+			// 绘制单位到检测盒中心的线
+			DrawDebugLine(
+				GetWorld(),
+				UnitLocation,
+				BoxCenter,
+				LineColor,
+				false,
+				-1.0f,
+				0,
+				2.0f
+			);
+			
+			// 绘制距离信息
+			FString DistanceInfo = FString::Printf(
+				TEXT("%.0f / %.0f"),
+				DistanceToSurface,
+				AttackRange
+			);
+			
+			DrawDebugString(
+				GetWorld(),
+				(UnitLocation + BoxCenter) * 0.5f,
+				DistanceInfo,
+				nullptr,
+				LineColor,
+				-1.0f,
+				true,
+				1.2f
+			);
+		}
+	}
+	
+	// ========== 绘制生命值信息 ==========
+	if (bShowHealthInfo && AttributeSet)
+	{
+		float CurrentHealth = AttributeSet->GetHealth();
+		float MaxHealth = AttributeSet->GetMaxHealth();
+		float HealthPercentage = (CurrentHealth / MaxHealth) * 100.0f;
+		
+		// 根据生命值百分比选择颜色
+		FColor TextColor;
+		if (HealthPercentage > 75.0f)
+		{
+			TextColor = FColor::Green;
+		}
+		else if (HealthPercentage > 50.0f)
+		{
+			TextColor = FColor::Yellow;
+		}
+		else if (HealthPercentage > 25.0f)
+		{
+			TextColor = FColor::Orange;
+		}
+		else
+		{
+			TextColor = FColor::Red;
+		}
+		
+		FString HealthInfo = FString::Printf(
+			TEXT("%s\n生命值: %.0f / %.0f (%.1f%%)"),
+			*GetName(),
+			CurrentHealth,
+			MaxHealth,
+			HealthPercentage
+		);
+		
+		DrawDebugString(
+			GetWorld(),
+			GetActorLocation() + FVector(0, 0, 1000.0f),
+			HealthInfo,
+			nullptr,
+			TextColor,
+			-1.0f,
+			true,
+			2.0f
+		);
+	}
+}
+
+// ========== ✨ 新增 - 调试开关函数 ==========
+
+/**
+ * @brief 切换攻击检测盒显示
+ */
+void ASG_MainCityBase::ToggleDetectionBoxVisualization()
+{
+	bShowAttackDetectionBox = !bShowAttackDetectionBox;
+	UE_LOG(LogSGGameplay, Log, TEXT("%s: 攻击检测盒可视化 %s"), 
+		*GetName(), bShowAttackDetectionBox ? TEXT("开启") : TEXT("关闭"));
+}
+
+/**
+ * @brief 切换生命值信息显示
+ */
+void ASG_MainCityBase::ToggleHealthInfoVisualization()
+{
+	bShowHealthInfo = !bShowHealthInfo;
+	UE_LOG(LogSGGameplay, Log, TEXT("%s: 生命值信息可视化 %s"), 
+		*GetName(), bShowHealthInfo ? TEXT("开启") : TEXT("关闭"));
 }
 
 /**

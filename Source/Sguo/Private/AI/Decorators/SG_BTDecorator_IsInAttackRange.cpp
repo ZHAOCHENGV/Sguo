@@ -1,4 +1,5 @@
-﻿// 🔧 完全重写 - SG_BTDecorator_IsInAttackRange.cpp
+﻿// 🔧 完全修复 - SG_BTDecorator_IsInAttackRange.cpp
+
 /**
  * @file SG_BTDecorator_IsInAttackRange.cpp
  * @brief 行为树装饰器：检查是否在攻击范围内实现
@@ -7,105 +8,127 @@
 #include "AI/Decorators/SG_BTDecorator_IsInAttackRange.h"
 #include "AI/SG_AIControllerBase.h"
 #include "Units/SG_UnitsBase.h"
+#include "Buildings/SG_MainCityBase.h"  // ✨ 新增
 #include "BehaviorTree/BlackboardComponent.h"
 #include "BehaviorTree/BehaviorTreeComponent.h"
 #include "Debug/SG_LogCategories.h"
+#include "Components/BoxComponent.h"  // ✨ 新增
 
 /**
  * @brief 构造函数
  */
 USG_BTDecorator_IsInAttackRange::USG_BTDecorator_IsInAttackRange()
 {
-	// 设置装饰器名称
 	NodeName = TEXT("是否在攻击范围内");
-	
-	// ✨ 新增 - 启用 Tick，定期检查条件
 	bNotifyTick = true;
-	
-	// ✨ 新增 - 设置为观察者模式
 	bNotifyBecomeRelevant = true;
 	bNotifyCeaseRelevant = true;
-	
-	// 🔧 修改 - 设置中断模式
-	// 原来：FlowAbortMode = EBTFlowAbortMode::None;
-	// 修改为：LowerPriority（当条件满足时，中断优先级更低的节点）
 	FlowAbortMode = EBTFlowAbortMode::LowerPriority;
 	
-	// 配置黑板键过滤器
 	TargetKey.AddObjectFilter(this, GET_MEMBER_NAME_CHECKED(USG_BTDecorator_IsInAttackRange, TargetKey), AActor::StaticClass());
-	
-	// 设置默认黑板键名称
 	TargetKey.SelectedKeyName = FName("CurrentTarget");
 }
 
 /**
  * @brief 计算条件
+ * @details
+ * 功能说明：
+ * - 🔧 修复：主城使用检测盒表面距离
+ * - ✨ 新增：进入攻击范围时立即停止移动
  */
 bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) const
 {
-	// ========== 步骤1：获取 AI Controller ==========
+	
+	// ========== 步骤1-5：获取基础信息（保持不变）==========
 	AAIController* AIController = OwnerComp.GetAIOwner();
-	if (!AIController)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("❌ IsInAttackRange：AI Controller 无效"));
-		return false;
-	}
+	if (!AIController) return false;
 	
-	// ========== 步骤2：获取控制的单位 ==========
 	ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
-	if (!ControlledUnit)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("❌ IsInAttackRange：控制的单位无效"));
-		return false;
-	}
+	if (!ControlledUnit) return false;
 	
-	// ========== 步骤3：获取黑板组件 ==========
 	UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
-	if (!BlackboardComp)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("❌ IsInAttackRange：黑板组件无效"));
-		return false;
-	}
+	if (!BlackboardComp) return false;
 	
-	// ========== 步骤4：获取目标 ==========
-	// 🔧 修改：先输出黑板键名称，用于调试
 	FName KeyName = TargetKey.SelectedKeyName;
-	if (KeyName.IsNone())
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("❌ IsInAttackRange：黑板键名称为空"));
-		return false;
-	}
+	if (KeyName.IsNone()) return false;
 	
-	// 🔧 修改：输出调试信息
-	UE_LOG(LogSGGameplay, Verbose, TEXT("🔍 IsInAttackRange：尝试读取黑板键 '%s'"), *KeyName.ToString());
-	
-	// 获取目标
 	AActor* Target = Cast<AActor>(BlackboardComp->GetValueAsObject(KeyName));
-	if (!Target)
-	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ IsInAttackRange：黑板键 '%s' 的值为空"), *KeyName.ToString());
-		return false;
-	}
+	if (!Target) return false;
 	
-	// ========== 步骤5：获取攻击范围 ==========
+	// ========== 步骤6：获取单位位置和攻击范围 ==========
+	FVector UnitLocation = ControlledUnit->GetActorLocation();
 	float AttackRange = ControlledUnit->GetAttackRangeForAI();
 	
-	// ========== 步骤6：计算与目标的距离 ==========
-	FVector UnitLocation = ControlledUnit->GetActorLocation();
-	FVector TargetLocation = Target->GetActorLocation();
-	float Distance = FVector::Dist(UnitLocation, TargetLocation);
+	// ========== 步骤7：计算到目标的实际距离 ==========
+	float ActualDistance = 0.0f;
+	bool bIsMainCity = false;
 	
-	// ========== 步骤7：检查是否在攻击范围内 ==========
-	bool bInRange = Distance <= (AttackRange + DistanceTolerance);
+	ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(Target);
+	if (MainCity && MainCity->GetAttackDetectionBox())
+	{
+		bIsMainCity = true;
+		
+		UBoxComponent* DetectionBox = MainCity->GetAttackDetectionBox();
+		FVector BoxCenter = DetectionBox->GetComponentLocation();
+		FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
+		
+		float DistanceToCenter = FVector::Dist(UnitLocation, BoxCenter);
+		float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
+		
+		ActualDistance = DistanceToCenter - BoxRadius;
+		
+		if (ActualDistance < 0.0f)
+		{
+			ActualDistance = 0.0f;
+		}
+	}
+	else
+	{
+		ActualDistance = FVector::Dist(UnitLocation, Target->GetActorLocation());
+	}
 	
-	// ========== 步骤8：输出详细调试日志 ==========
+	// ========== 步骤8：判断是否在攻击范围内 ==========
+	bool bInRange = ActualDistance <= (AttackRange + DistanceTolerance);
+	
+	// ========== ✨ 新增 - 步骤9：进入攻击范围时立即停止移动 ==========
+	static TMap<ASG_UnitsBase*, bool> LastInRangeStatus;
+	bool bWasInRange = LastInRangeStatus.FindOrAdd(ControlledUnit, false);
+	
+	if (bInRange && !bWasInRange)
+	{
+		// 刚进入攻击范围，立即停止移动
+		AIController->StopMovement();
+		UE_LOG(LogSGGameplay, Warning, TEXT("🛑 %s 进入攻击范围，立即停止移动"), *ControlledUnit->GetName());
+	}
+	
+	LastInRangeStatus[ControlledUnit] = bInRange;
+	
+	// ========== 步骤10：输出详细调试日志 ==========
 	UE_LOG(LogSGGameplay, Log, TEXT("🎯 IsInAttackRange 检查："));
 	UE_LOG(LogSGGameplay, Log, TEXT("  单位：%s"), *ControlledUnit->GetName());
-	UE_LOG(LogSGGameplay, Log, TEXT("  目标：%s"), *Target->GetName());
+	UE_LOG(LogSGGameplay, Log, TEXT("  目标：%s%s"), *Target->GetName(), bIsMainCity ? TEXT("（主城）") : TEXT(""));
 	UE_LOG(LogSGGameplay, Log, TEXT("  单位位置：%s"), *UnitLocation.ToString());
-	UE_LOG(LogSGGameplay, Log, TEXT("  目标位置：%s"), *TargetLocation.ToString());
-	UE_LOG(LogSGGameplay, Log, TEXT("  距离：%.2f"), Distance);
-	UE_LOG(LogSGGameplay, Log, TEXT("  攻击范围：%.2f"), AttackRange);
+	
+	if (bIsMainCity)
+	{
+		UBoxComponent* DetectionBox = MainCity->GetAttackDetectionBox();
+		FVector BoxCenter = DetectionBox->GetComponentLocation();
+		FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
+		float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
+		float DistanceToCenter = FVector::Dist(UnitLocation, BoxCenter);
+		
+		UE_LOG(LogSGGameplay, Log, TEXT("  检测盒中心：%s"), *BoxCenter.ToString());
+		UE_LOG(LogSGGameplay, Log, TEXT("  检测盒半径：%.2f"), BoxRadius);
+		UE_LOG(LogSGGameplay, Log, TEXT("  到中心距离：%.2f"), DistanceToCenter);
+		UE_LOG(LogSGGameplay, Log, TEXT("  到表面距离：%.2f"), ActualDistance);
+	}
+	else
+	{
+		UE_LOG(LogSGGameplay, Log, TEXT("  目标位置：%s"), *Target->GetActorLocation().ToString());
+		UE_LOG(LogSGGameplay, Log, TEXT("  距离：%.2f"), ActualDistance);
+	}
+	
+	UE_LOG(LogSGGameplay, Log, TEXT("  单位攻击范围：%.2f"), AttackRange);
 	UE_LOG(LogSGGameplay, Log, TEXT("  容差：%.2f"), DistanceTolerance);
 	UE_LOG(LogSGGameplay, Log, TEXT("  结果：%s"), bInRange ? TEXT("✅ 在范围内") : TEXT("❌ 不在范围内"));
 	
@@ -114,13 +137,10 @@ bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeCo
 
 /**
  * @brief Tick 更新
- * @param OwnerComp 行为树组件
- * @param NodeMemory 节点内存
- * @param DeltaSeconds 时间间隔
  * @details
  * 功能说明：
  * - 定期检查条件是否变化
- * - 🔧 修改：条件变化时强制重新评估整个行为树
+ * - 条件变化时通知行为树重新评估
  */
 void USG_BTDecorator_IsInAttackRange::TickNode(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds)
 {
@@ -135,49 +155,43 @@ void USG_BTDecorator_IsInAttackRange::TickNode(UBehaviorTreeComponent& OwnerComp
 		// 计算当前条件
 		bool CurrentConditionResult = CalculateRawConditionValue(OwnerComp, NodeMemory);
 		
-		// 🔧 修改 - 强制更新黑板值
+		// 🔧 强制更新黑板值
 		UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
 		if (BlackboardComp)
 		{
 			BlackboardComp->SetValueAsBool(FName("IsInAttackRange"), CurrentConditionResult);
 		}
 		
-		// 🔧 修改 - 条件变化时，强制重新评估
+		// 条件变化时，强制重新评估
 		if (CurrentConditionResult != LastConditionResult)
 		{
 			LastConditionResult = CurrentConditionResult;
+			OwnerComp.RequestExecution(this);
 			
-			// ✨ 新增 - 强制中断当前执行的节点
-			if (CurrentConditionResult)  // 进入攻击范围
-			{
-				// 中断优先级更低的节点（移动任务）
-				OwnerComp.RequestExecution(this);
-				
-				UE_LOG(LogSGGameplay, Warning, TEXT("🔄 IsInAttackRange 条件变化：进入攻击范围，请求重新评估"));
-			}
-			else  // 离开攻击范围
-			{
-				UE_LOG(LogSGGameplay, Log, TEXT("🔄 IsInAttackRange 条件变化：离开攻击范围"));
-			}
+			UE_LOG(LogSGGameplay, Warning, TEXT("🔄 IsInAttackRange 条件变化：%s → %s，请求重新评估"),
+				!LastConditionResult ? TEXT("不在范围内") : TEXT("在范围内"),
+				CurrentConditionResult ? TEXT("在范围内") : TEXT("不在范围内"));
 		}
 		
-		// ✨ 新增 - 即使条件没变化，如果一直在范围内，也定期请求评估
-		// 这是为了解决"卡在移动任务"的问题
+		// ✨ 强制定期评估（防止卡住）
 		if (CurrentConditionResult)
 		{
-			static int32 ForceEvaluateCounter = 0;
-			ForceEvaluateCounter++;
+			static TMap<UBehaviorTreeComponent*, int32> ForceEvaluateCounters;
+			int32& Counter = ForceEvaluateCounters.FindOrAdd(&OwnerComp, 0);
+			Counter++;
 			
-			// 每5次检查（0.5秒）强制请求一次评估
-			if (ForceEvaluateCounter >= 5)
+			if (Counter >= 5)  // 每5次检查（0.5秒）
 			{
-				ForceEvaluateCounter = 0;
+				Counter = 0;
 				OwnerComp.RequestExecution(this);
 				
 				UE_LOG(LogSGGameplay, Verbose, TEXT("🔄 IsInAttackRange 强制请求评估（防止卡住）"));
 			}
 		}
 	}
+
+
+	
 }
 
 /**

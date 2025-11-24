@@ -20,7 +20,7 @@
 #include "DrawDebugHelpers.h"
 #include "BehaviorTree/BlackboardComponent.h"
 #include "Data/SG_CharacterCardData.h"
-
+#include "Data/Type/SG_UnitDataTable.h" // ✨ 新增 - 包含完整定义
 // 构造函数
 ASG_UnitsBase::ASG_UnitsBase()
 {
@@ -40,6 +40,28 @@ ASG_UnitsBase::ASG_UnitsBase()
 	AttributeSet = CreateDefaultSubobject<USG_AttributeSet>(TEXT("AttributeSet"));
 }
 
+/**
+ * @brief 设置源卡牌数据
+ * @param CardData 卡牌数据
+ * @details
+ * 功能说明：
+ * - 缓存卡牌数据引用
+ * - 在生成单位后立即调用
+ */
+void ASG_UnitsBase::SetSourceCardData(USG_CharacterCardData* CardData)
+{
+	SourceCardData = CardData;
+    
+	if (CardData)
+	{
+		UE_LOG(LogSGGameplay, Log, TEXT("✓ %s: 设置源卡牌数据：%s"), 
+			*GetName(), *CardData->GetName());
+		UE_LOG(LogSGGameplay, Log, TEXT("  生命值倍率：%.2f"), CardData->HealthMultiplier);
+		UE_LOG(LogSGGameplay, Log, TEXT("  伤害倍率：%.2f"), CardData->DamageMultiplier);
+		UE_LOG(LogSGGameplay, Log, TEXT("  速度倍率：%.2f"), CardData->SpeedMultiplier);
+	}
+}
+
 // 获取 AbilitySystemComponent（GAS 接口）
 UAbilitySystemComponent* ASG_UnitsBase::GetAbilitySystemComponent() const
 {
@@ -49,93 +71,137 @@ UAbilitySystemComponent* ASG_UnitsBase::GetAbilitySystemComponent() const
 // BeginPlay
 void ASG_UnitsBase::BeginPlay()
 {
-	Super::BeginPlay();
-	
-	UE_LOG(LogSGGameplay, Log, TEXT("========== 单位生成：%s =========="), *GetName());
-	
-	// ========== 步骤1：检查是否已初始化 ==========
-	bool bNeedsInitialization = false;
-	
-	if (!AttributeSet)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("❌ %s: AttributeSet 为空！"), *GetName());
-		return;
-	}
-	
-	if (AttributeSet->GetMaxHealth() <= 0.0f)
-	{
-		bNeedsInitialization = true;
-		UE_LOG(LogSGGameplay, Log, TEXT("  检测到未初始化的单位"));
-	}
-	else
-	{
-		UE_LOG(LogSGGameplay, Log, TEXT("  单位已初始化（MaxHealth: %.0f）"), 
-			AttributeSet->GetMaxHealth());
-	}
-	
-	// ========== 步骤2：根据配置选择初始化方式 ==========
-	if (bNeedsInitialization)
-	{
-		// ✨ 新增 - 从 CardData 读取倍率（优先级最高）
-		float HealthMult = 1.0f;
-		float DamageMult = 1.0f;
-		float SpeedMult = 1.0f;
-		
-		// 如果有卡牌数据，从卡牌读取倍率
-		if (SourceCardData)
-		{
-			HealthMult = SourceCardData->HealthMultiplier;
-			DamageMult = SourceCardData->DamageMultiplier;
-			SpeedMult = SourceCardData->SpeedMultiplier;
-			
-			UE_LOG(LogSGGameplay, Log, TEXT("  从卡牌数据读取倍率："));
-			UE_LOG(LogSGGameplay, Log, TEXT("    卡牌：%s"), *SourceCardData->GetName());
-			UE_LOG(LogSGGameplay, Log, TEXT("    生命值倍率：%.2f"), HealthMult);
-			UE_LOG(LogSGGameplay, Log, TEXT("    伤害倍率：%.2f"), DamageMult);
-			UE_LOG(LogSGGameplay, Log, TEXT("    速度倍率：%.2f"), SpeedMult);
-		}
-		else
-		{
-			UE_LOG(LogSGGameplay, Log, TEXT("  未设置卡牌数据，使用默认倍率（1.0）"));
-		}
-		
-		// 方式1：使用 DataTable 初始化
-		if (bUseDataTable)
-		{
-			UE_LOG(LogSGGameplay, Log, TEXT("  使用 DataTable 初始化"));
-			
-			bool bLoadSuccess = IsLoadUnitDataFromTable();
-			
-			if (bLoadSuccess)
-			{
-				FGameplayTag InitFactionTag = DetermineFactionTag();
-				
-				// 🔧 修改 - 使用从 CardData 读取的倍率
-				InitializeCharacter(InitFactionTag, HealthMult, DamageMult, SpeedMult);
-				
-				UE_LOG(LogSGGameplay, Log, TEXT("  ✓ DataTable 初始化完成"));
-			}
-			else
-			{
-				UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ DataTable 加载失败，回退到默认初始化"));
-				InitializeWithDefaults();
-			}
-		}
-		// 方式2：使用默认值初始化
-		else
-		{
-			UE_LOG(LogSGGameplay, Log, TEXT("  使用默认值初始化"));
-			
-			// 🔧 修改 - 使用从 CardData 读取的倍率
-			FGameplayTag InitFactionTag = DetermineFactionTag();
-			InitializeCharacter(InitFactionTag, HealthMult, DamageMult, SpeedMult);
-		}
-	}
-	
-	// ========== 步骤3：授予攻击能力 ==========
-	GrantAttackAbility();
-	
-	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+	 Super::BeginPlay();
+    
+    UE_LOG(LogSGGameplay, Log, TEXT("========== 单位生成：%s =========="), *GetName());
+    
+    // ========== 步骤1：检查是否已初始化 ==========
+    bool bNeedsInitialization = false;
+    
+    if (!AttributeSet)
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("❌ %s: AttributeSet 为空！"), *GetName());
+        return;
+    }
+    
+    if (AttributeSet->GetMaxHealth() <= 0.0f)
+    {
+        bNeedsInitialization = true;
+        UE_LOG(LogSGGameplay, Log, TEXT("  检测到未初始化的单位"));
+    }
+    else
+    {
+        UE_LOG(LogSGGameplay, Log, TEXT("  单位已初始化（MaxHealth: %.0f）"), 
+            AttributeSet->GetMaxHealth());
+    }
+    
+    // ========== 步骤2：根据配置选择初始化方式 ==========
+    if (bNeedsInitialization)
+    {
+        // ========== 🔧 关键修改 - 先加载 DataTable，再应用倍率 ==========
+        
+        if (bUseDataTable)
+        {
+            UE_LOG(LogSGGameplay, Log, TEXT("  使用 DataTable 初始化"));
+            
+            // 🔧 修改 - 先加载 DataTable 基础属性
+            bool bLoadSuccess = IsLoadUnitDataFromTable();
+            
+            if (bLoadSuccess)
+            {
+                // ✨ 新增 - 从卡牌数据读取倍率
+                float HealthMult = 1.0f;
+                float DamageMult = 1.0f;
+                float SpeedMult = 1.0f;
+                
+                if (SourceCardData)
+                {
+                    HealthMult = SourceCardData->HealthMultiplier;
+                    DamageMult = SourceCardData->DamageMultiplier;
+                    SpeedMult = SourceCardData->SpeedMultiplier;
+                    
+                    UE_LOG(LogSGGameplay, Log, TEXT("  从卡牌数据读取倍率："));
+                    UE_LOG(LogSGGameplay, Log, TEXT("    卡牌：%s"), *SourceCardData->GetName());
+                    UE_LOG(LogSGGameplay, Log, TEXT("    生命值倍率：%.2f"), HealthMult);
+                    UE_LOG(LogSGGameplay, Log, TEXT("    伤害倍率：%.2f"), DamageMult);
+                    UE_LOG(LogSGGameplay, Log, TEXT("    速度倍率：%.2f"), SpeedMult);
+                }
+                else
+                {
+                    UE_LOG(LogSGGameplay, Log, TEXT("  未设置卡牌数据，使用默认倍率（1.0）"));
+                }
+                
+                // 🔧 关键修改 - 应用倍率到基础属性
+                UE_LOG(LogSGGameplay, Log, TEXT("  应用倍率前的基础属性："));
+                UE_LOG(LogSGGameplay, Log, TEXT("    BaseHealth: %.0f"), BaseHealth);
+                UE_LOG(LogSGGameplay, Log, TEXT("    BaseAttackDamage: %.0f"), BaseAttackDamage);
+                UE_LOG(LogSGGameplay, Log, TEXT("    BaseMoveSpeed: %.0f"), BaseMoveSpeed);
+                UE_LOG(LogSGGameplay, Log, TEXT("    BaseAttackSpeed: %.2f"), BaseAttackSpeed);
+                
+                // 应用倍率到基础属性
+                BaseHealth *= HealthMult;
+                BaseAttackDamage *= DamageMult;
+                BaseMoveSpeed *= SpeedMult;
+                BaseAttackSpeed *= SpeedMult;
+                
+                UE_LOG(LogSGGameplay, Log, TEXT("  应用倍率后的基础属性："));
+                UE_LOG(LogSGGameplay, Log, TEXT("    BaseHealth: %.0f"), BaseHealth);
+                UE_LOG(LogSGGameplay, Log, TEXT("    BaseAttackDamage: %.0f"), BaseAttackDamage);
+                UE_LOG(LogSGGameplay, Log, TEXT("    BaseMoveSpeed: %.0f"), BaseMoveSpeed);
+                UE_LOG(LogSGGameplay, Log, TEXT("    BaseAttackSpeed: %.2f"), BaseAttackSpeed);
+                
+                // 初始化角色（倍率已经应用到 Base 属性，所以这里传 1.0）
+                FGameplayTag InitFactionTag = DetermineFactionTag();
+                InitializeCharacter(InitFactionTag, 1.0f, 1.0f, 1.0f);
+                
+                UE_LOG(LogSGGameplay, Log, TEXT("  ✓ DataTable + 倍率初始化完成"));
+            }
+            else
+            {
+                UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ DataTable 加载失败，回退到默认初始化"));
+                InitializeWithDefaults();
+            }
+        }
+        else
+        {
+            UE_LOG(LogSGGameplay, Log, TEXT("  使用默认值初始化"));
+            
+            // ✨ 新增 - 从卡牌数据读取倍率
+            float HealthMult = 1.0f;
+            float DamageMult = 1.0f;
+            float SpeedMult = 1.0f;
+            
+            if (SourceCardData)
+            {
+                HealthMult = SourceCardData->HealthMultiplier;
+                DamageMult = SourceCardData->DamageMultiplier;
+                SpeedMult = SourceCardData->SpeedMultiplier;
+                
+                UE_LOG(LogSGGameplay, Log, TEXT("  从卡牌数据读取倍率"));
+            }
+            
+            // 应用倍率到基础属性
+            BaseHealth *= HealthMult;
+            BaseAttackDamage *= DamageMult;
+            BaseMoveSpeed *= SpeedMult;
+            BaseAttackSpeed *= SpeedMult;
+            
+            // 初始化角色（倍率已经应用到 Base 属性，所以这里传 1.0）
+            FGameplayTag InitFactionTag = DetermineFactionTag();
+            InitializeCharacter(InitFactionTag, 1.0f, 1.0f, 1.0f);
+        }
+    }
+    
+    // ========== 步骤3：加载攻击技能配置 ==========
+    if (bUseDataTable)
+    {
+        LoadAttackAbilitiesFromDataTable();
+    }
+    
+    // ========== 步骤4：授予通用攻击能力 ==========
+    GrantCommonAttackAbility();
+    
+    UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 }
 
 // 被控制时调用
@@ -158,20 +224,17 @@ void ASG_UnitsBase::PossessedBy(AController* NewController)
 /**
  * @brief 初始化角色
  * @param InFactionTag 阵营标签
- * @param HealthMultiplier 生命值倍率
- * @param DamageMultiplier 伤害倍率
- * @param SpeedMultiplier 速度倍率
+ * @param HealthMultiplier 生命值倍率（已废弃，保留兼容性）
+ * @param DamageMultiplier 伤害倍率（已废弃，保留兼容性）
+ * @param SpeedMultiplier 速度倍率（已废弃，保留兼容性）
  * @details
  * 功能说明：
  * - 设置阵营标签
- * - 初始化属性值
+ * - 初始化属性值（使用已应用倍率的 Base 属性）
  * - 绑定属性变化委托
- * 详细流程：
- * 1. 保存阵营标签
- * 2. 初始化属性（在绑定委托之前）
- * 3. 绑定属性变化委托
  * 注意事项：
- * - 🔧 MODIFIED - 先初始化属性，再绑定委托，避免触发误判
+ * - 倍率应该在调用此函数之前应用到 Base 属性
+ * - 此函数的倍率参数已废弃，保留是为了向后兼容
  */
 void ASG_UnitsBase::InitializeCharacter(
 	FGameplayTag InFactionTag,
@@ -179,20 +242,18 @@ void ASG_UnitsBase::InitializeCharacter(
 	float DamageMultiplier,
 	float SpeedMultiplier)
 {
-	// 记录初始化开始
 	UE_LOG(LogSGGameplay, Log, TEXT("========== 初始化角色：%s =========="), *GetName());
     
 	// 设置阵营标签
 	FactionTag = InFactionTag;
 	UE_LOG(LogSGGameplay, Log, TEXT("  阵营：%s"), *FactionTag.ToString());
     
-	// 🔧 MODIFIED - 先初始化属性
-	InitializeAttributes(HealthMultiplier, DamageMultiplier, SpeedMultiplier);
+	// 🔧 修改 - 直接使用 Base 属性（倍率已经应用）
+	InitializeAttributes(1.0f, 1.0f, 1.0f);
     
-	// 🔧 MODIFIED - 再绑定委托（此时属性已经是正确值）
+	// 绑定委托
 	BindAttributeDelegates();
     
-	// 记录初始化完成
 	UE_LOG(LogSGGameplay, Log, TEXT("✓ 角色初始化完成"));
 	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 }
@@ -421,143 +482,101 @@ void ASG_UnitsBase::SetTarget(AActor* NewTarget)
 // ========== ✨ 新增 - DataTable 相关函数实现 ==========
 
 /**
- * @brief 从 DataTable 加载单位配置
+ * @brief 从 DataTable 加载攻击技能配置
  * @details
  * 功能说明：
- * - 从 DataTable 读取指定行的数据
- * - 应用属性到 BaseHealth、BaseAttackDamage 等
- * - 应用攻击配置（攻击动画、投射物类等）
- * 详细流程：
- * 1. 检查 DataTable 和行名称是否有效
- * 2. 从 DataTable 查找指定行
- * 3. 读取属性值并覆盖基础属性
- * 4. 读取攻击配置
- * 注意事项：
- * - 在 InitializeCharacter() 之前调用
- * - 如果 bUseDataTable = false，不会执行
+ * - 从 DataTable 读取攻击技能列表
+ * - 缓存到 CachedAttackAbilities
+ * - 为后续随机选择攻击做准备
  */
-void ASG_UnitsBase::LoadUnitDataFromTable()
+void ASG_UnitsBase::LoadAttackAbilitiesFromDataTable()
 {
-	// ========== 步骤1：检查有效性 ==========
-	// 检查 DataTable 是否有效
-	if (!UnitDataTable)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("✗ %s: UnitDataTable 为空！"), *GetName());
-		return;
-	}
-	
-	// 检查行名称是否有效
-	if (UnitDataRowName.IsNone())
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("✗ %s: UnitDataRowName 为空！"), *GetName());
-		return;
-	}
-	
-	// ========== 步骤2：查找 DataTable 行 ==========
-	// 从 DataTable 查找指定行
-	// FindRow 是 UDataTable 的模板函数，返回指定行的数据指针
-	FSGUnitDataRow* RowData = UnitDataTable->FindRow<FSGUnitDataRow>(
-		UnitDataRowName,
-		TEXT("LoadUnitDataFromTable")  // 用于错误日志的上下文
-	);
-	
-	// 检查是否找到数据
-	if (!RowData)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("✗ %s: 在 DataTable 中找不到行 '%s'！"), 
-			*GetName(), *UnitDataRowName.ToString());
-		return;
-	}
-	
-	// 输出日志
-	UE_LOG(LogSGGameplay, Log, TEXT("========== 从 DataTable 加载单位配置 =========="));
-	UE_LOG(LogSGGameplay, Log, TEXT("  单位：%s"), *GetName());
-	UE_LOG(LogSGGameplay, Log, TEXT("  数据行：%s"), *UnitDataRowName.ToString());
-	UE_LOG(LogSGGameplay, Log, TEXT("  单位名称：%s"), *RowData->UnitName.ToString());
-	
-	// ========== 步骤3：应用属性值 ==========
-	// 从 DataTable 读取的值会覆盖 Blueprint 中设置的 Base 值
-	BaseHealth = RowData->BaseHealth;
-	BaseAttackDamage = RowData->BaseAttackDamage;
-	BaseMoveSpeed = RowData->BaseMoveSpeed;
-	BaseAttackSpeed = RowData->BaseAttackSpeed;
-	BaseAttackRange = RowData->BaseAttackRange;
-	
-	// 输出日志
-	UE_LOG(LogSGGameplay, Log, TEXT("  属性配置："));
-	UE_LOG(LogSGGameplay, Log, TEXT("    生命值：%.0f"), BaseHealth);
-	UE_LOG(LogSGGameplay, Log, TEXT("    攻击力：%.0f"), BaseAttackDamage);
-	UE_LOG(LogSGGameplay, Log, TEXT("    移动速度：%.0f"), BaseMoveSpeed);
-	UE_LOG(LogSGGameplay, Log, TEXT("    攻击速度：%.2f"), BaseAttackSpeed);
-	UE_LOG(LogSGGameplay, Log, TEXT("    攻击范围：%.0f"), BaseAttackRange);
-	
-	// ========== 步骤4：应用攻击配置 ==========
-	// 应用单位类型标签
-	if (RowData->UnitTypeTag.IsValid())
-	{
-		UnitTypeTag = RowData->UnitTypeTag;
-		UE_LOG(LogSGGameplay, Log, TEXT("  单位类型：%s"), *UnitTypeTag.ToString());
-	}
-	
-	// 应用攻击动画
-	if (RowData->AttackMontage)
-	{
-		AttackMontage = RowData->AttackMontage;
-		UE_LOG(LogSGGameplay, Log, TEXT("  攻击动画：%s"), *AttackMontage->GetName());
-	}
-	
-	// 应用投射物类（仅远程单位）
-	if (RowData->AttackType != ESGUnitAttackType::Melee && RowData->ProjectileClass)
-	{
-		ProjectileClass = RowData->ProjectileClass;
-		UE_LOG(LogSGGameplay, Log, TEXT("  投射物类：%s"), *ProjectileClass->GetName());
-	}
-	
-	// 输出日志
-	UE_LOG(LogSGGameplay, Log, TEXT("✓ 单位配置加载完成"));
-	UE_LOG(LogSGGameplay, Log, TEXT("==============================================="));
+	 // ========== 步骤1：检查有效性 ==========
+    if (!UnitDataTable)
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("❌ %s: UnitDataTable 为空！"), *GetName());
+        return;
+    }
+    
+    if (UnitDataRowName.IsNone())
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("❌ %s: UnitDataRowName 为空！"), *GetName());
+        return;
+    }
+    
+    // ========== 步骤2：查找 DataTable 行 ==========
+    FSGUnitDataRow* RowData = UnitDataTable->FindRow<FSGUnitDataRow>(
+        UnitDataRowName,
+        TEXT("LoadAttackAbilitiesFromDataTable")
+    );
+    
+    if (!RowData)
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("❌ %s: 在 DataTable 中找不到行 '%s'！"), 
+            *GetName(), *UnitDataRowName.ToString());
+        return;
+    }
+    
+    // ========== 步骤3：缓存攻击技能列表 ==========
+    CachedAttackAbilities = RowData->Abilities;
+    
+    // ========== 步骤4：输出日志 ==========
+    UE_LOG(LogSGGameplay, Log, TEXT("========== 加载攻击技能配置 =========="));
+    UE_LOG(LogSGGameplay, Log, TEXT("  单位：%s"), *GetName());
+    UE_LOG(LogSGGameplay, Log, TEXT("  攻击技能数量：%d"), CachedAttackAbilities.Num());
+    
+    for (int32 i = 0; i < CachedAttackAbilities.Num(); ++i)
+    {
+        const FSGUnitAttackDefinition& Ability = CachedAttackAbilities[i];
+        
+        UE_LOG(LogSGGameplay, Log, TEXT("  [%d] 攻击技能："), i);
+        UE_LOG(LogSGGameplay, Log, TEXT("    动画：%s"), 
+            Ability.Montage ? *Ability.Montage->GetName() : TEXT("未设置"));
+        UE_LOG(LogSGGameplay, Log, TEXT("    攻击类型：%s"), 
+            *UEnum::GetValueAsString(Ability.AttackType));
+        UE_LOG(LogSGGameplay, Log, TEXT("    冷却时间：%.2f 秒"), Ability.Cooldown);
+        
+        if (Ability.SpecificAbilityClass)
+        {
+            UE_LOG(LogSGGameplay, Log, TEXT("    指定能力：%s"), 
+                *Ability.SpecificAbilityClass->GetName());
+        }
+        
+        if (Ability.AttackType != ESGUnitAttackType::Melee && Ability.ProjectileClass)
+        {
+            UE_LOG(LogSGGameplay, Log, TEXT("    投射物类：%s"), 
+                *Ability.ProjectileClass->GetName());
+        }
+    }
+    
+    UE_LOG(LogSGGameplay, Log, TEXT("✓ 攻击技能配置加载完成"));
+    UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 }
-
-// ========== ✨ 新增 - 攻击系统函数实现 ==========
-
 /**
- * @brief 授予攻击能力
+ * @brief 授予通用攻击能力
  * @details
  * 功能说明：
- * - 根据单位类型授予对应的攻击 Gameplay Ability
- * - 近战单位使用 GA_Attack_Melee
- * - 远程单位使用 GA_Attack_Ranged
- * 详细流程：
- * 1. 检查 ASC 是否有效
- * 2. 根据 UnitTypeTag 确定攻击类型
- * 3. 创建 Ability Spec 并授予能力
- * 4. 缓存 Ability Handle 供后续使用
- * 注意事项：
- * - 在 BeginPlay 中自动调用
- * - 需要先配置 UnitTypeTag
+ * - 根据单位类型授予通用 GA
+ * - 所有攻击共享此 GA
+ * - 通过传递不同的配置数据来实现不同的攻击效果
  */
-void ASG_UnitsBase::GrantAttackAbility()
+void ASG_UnitsBase::GrantCommonAttackAbility()
 {
-	// ========== 步骤1：检查 ASC 是否有效 ==========
+		// ========== 步骤1：检查 ASC 是否有效 ==========
 	if (!AbilitySystemComponent)
 	{
-		UE_LOG(LogSGGameplay, Error, TEXT("✗ %s: AbilitySystemComponent 为空，无法授予攻击能力！"), *GetName());
+		UE_LOG(LogSGGameplay, Error, TEXT("❌ %s: AbilitySystemComponent 为空！"), *GetName());
 		return;
 	}
 	
-	// ========== 步骤2：确定攻击能力类 ==========
-	// ✨ 新增 - 支持多种方式配置攻击能力类
-	// 优先级：
-	// 1. AttackAbilityClass（Blueprint 中直接配置）
-	// 2. 根据 UnitTypeTag 自动选择（默认行为）
-	TSubclassOf<UGameplayAbility> AbilityClassToGrant = AttackAbilityClass;
+	// ========== 步骤2：确定通用攻击能力类 ==========
+	TSubclassOf<UGameplayAbility> AbilityClassToGrant = CommonAttackAbilityClass;
 	
-	// 如果没有在 Blueprint 中配置，则根据单位类型自动选择
+	// 如果没有在 Blueprint 中配置，根据单位类型自动选择
 	if (!AbilityClassToGrant)
 	{
-		UE_LOG(LogSGGameplay, Log, TEXT("  %s: 未配置 AttackAbilityClass，根据 UnitTypeTag 自动选择"), *GetName());
+		UE_LOG(LogSGGameplay, Log, TEXT("  %s: 未配置 CommonAttackAbilityClass，根据 UnitTypeTag 自动选择"), *GetName());
 		
-		// 🔧 修改 - 使用可选的 GameplayTag（避免未配置时报错）
 		FGameplayTag InfantryTag = FGameplayTag::RequestGameplayTag(FName("Unit.Type.Infantry"), false);
 		FGameplayTag CavalryTag = FGameplayTag::RequestGameplayTag(FName("Unit.Type.Cavalry"), false);
 		FGameplayTag ArcherTag = FGameplayTag::RequestGameplayTag(FName("Unit.Type.Archer"), false);
@@ -566,9 +585,7 @@ void ASG_UnitsBase::GrantAttackAbility()
 		if ((InfantryTag.IsValid() && UnitTypeTag.MatchesTag(InfantryTag)) ||
 			(CavalryTag.IsValid() && UnitTypeTag.MatchesTag(CavalryTag)))
 		{
-			// 近战单位 - 尝试加载默认近战攻击能力
-			UE_LOG(LogSGGameplay, Log, TEXT("  %s 为近战单位，尝试加载默认 GA_Attack_Melee"), *GetName());
-			
+			// 近战单位 - 加载默认近战攻击能力
 			AbilityClassToGrant = LoadClass<UGameplayAbility>(
 				nullptr,
 				TEXT("/Game/Blueprints/GAS/Abilities/GA_Attack_Melee.GA_Attack_Melee_C")
@@ -576,15 +593,13 @@ void ASG_UnitsBase::GrantAttackAbility()
 			
 			if (!AbilityClassToGrant)
 			{
-				UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 默认 GA_Attack_Melee 不存在，请在 Blueprint 中手动配置 AttackAbilityClass"), *GetName());
+				UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 默认 GA_Attack_Melee 不存在，请在 Blueprint 中手动配置 CommonAttackAbilityClass"), *GetName());
 			}
 		}
 		else if ((ArcherTag.IsValid() && UnitTypeTag.MatchesTag(ArcherTag)) ||
 				 (CrossbowTag.IsValid() && UnitTypeTag.MatchesTag(CrossbowTag)))
 		{
-			// 远程单位 - 尝试加载默认远程攻击能力
-			UE_LOG(LogSGGameplay, Log, TEXT("  %s 为远程单位，尝试加载默认 GA_Attack_Ranged"), *GetName());
-			
+			// 远程单位 - 加载默认远程攻击能力
 			AbilityClassToGrant = LoadClass<UGameplayAbility>(
 				nullptr,
 				TEXT("/Game/Blueprints/GAS/Abilities/GA_Attack_Ranged.GA_Attack_Ranged_C")
@@ -592,155 +607,180 @@ void ASG_UnitsBase::GrantAttackAbility()
 			
 			if (!AbilityClassToGrant)
 			{
-				UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 默认 GA_Attack_Ranged 不存在，请在 Blueprint 中手动配置 AttackAbilityClass"), *GetName());
+				UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 默认 GA_Attack_Ranged 不存在，请在 Blueprint 中手动配置 CommonAttackAbilityClass"), *GetName());
 			}
 		}
 		else
 		{
-			UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 未知的单位类型 '%s'，且未配置 AttackAbilityClass"), 
+			UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 未知的单位类型 '%s'，且未配置 CommonAttackAbilityClass"), 
 				*GetName(), *UnitTypeTag.ToString());
 		}
 	}
 	else
 	{
 		// 使用 Blueprint 中配置的攻击能力类
-		UE_LOG(LogSGGameplay, Log, TEXT("  %s: 使用 Blueprint 配置的 AttackAbilityClass: %s"), 
+		UE_LOG(LogSGGameplay, Log, TEXT("  %s: 使用 Blueprint 配置的 CommonAttackAbilityClass: %s"), 
 			*GetName(), *AbilityClassToGrant->GetName());
 	}
 	
 	// ========== 步骤3：授予能力 ==========
 	if (AbilityClassToGrant)
 	{
-		// 创建 Ability Spec
 		FGameplayAbilitySpec AbilitySpec(
-			AbilityClassToGrant,  // 能力类
-			1,                    // 能力等级
-			INDEX_NONE,           // 输入ID（不使用输入绑定）
-			this                  // 能力的 Source Object
+			AbilityClassToGrant,
+			1,
+			INDEX_NONE,
+			this
 		);
 		
-		// 授予能力并缓存 Handle
-		GrantedAttackAbilityHandle = AbilitySystemComponent->GiveAbility(AbilitySpec);
+		// 🔧 修改 - 变量名从 GrantedAttackAbilityHandle 改为 GrantedCommonAttackHandle
+		GrantedCommonAttackHandle = AbilitySystemComponent->GiveAbility(AbilitySpec);
 		
-		// 输出日志
-		UE_LOG(LogSGGameplay, Log, TEXT("✓ %s: 授予攻击能力成功 (类: %s, Handle: %s)"), 
-			*GetName(), *AbilityClassToGrant->GetName(), *GrantedAttackAbilityHandle.ToString());
+		UE_LOG(LogSGGameplay, Log, TEXT("✓ %s: 授予通用攻击能力成功 (类: %s)"), 
+			*GetName(), *AbilityClassToGrant->GetName());
 	}
 	else
 	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 无法确定攻击能力类，跳过授予"), *GetName());
-		UE_LOG(LogSGGameplay, Warning, TEXT("  提示：请在单位 Blueprint 中配置 'Attack Config → 攻击能力类'"));
+		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: 无法确定通用攻击能力类"), *GetName());
 	}
 }
 
+// ========== ✨ 新增 - 攻击系统函数实现 ==========
+
 /**
- * @brief 执行攻击
+ * @brief 执行攻击（随机选择技能）
+ * @return 是否成功触发攻击
  * @details
  * 功能说明：
- * - 触发已授予的攻击能力
- * - 供 AI 或玩家输入调用
+ * - 从攻击技能列表中随机选择一个
+ * - 如果指定了 SpecificAbilityClass，激活特定 GA
+ * - 否则激活通用 GA 并传递配置数据
  * 详细流程：
- * 1. 检查 ASC 和攻击能力是否有效
- * 2. 检查能力是否可以激活（冷却、成本等）
- * 3. 激活攻击能力
- * 注意事项：
- * - 在 StateTree AI 中调用
- * - 需要先调用 GrantAttackAbility()
- * @return 是否成功触发攻击
+ * 1. 检查攻击技能列表是否为空
+ * 2. 随机选择一个攻击技能
+ * 3. 更新当前攻击索引
+ * 4. 激活对应的 GA
  */
 bool ASG_UnitsBase::PerformAttack()
 {
-	// ========== 步骤1：输出调试信息 ==========
 	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 	UE_LOG(LogSGGameplay, Log, TEXT("🔫 %s 尝试执行攻击"), *GetName());
 	
-	// ========== 步骤2：检查 ASC 是否有效 ==========
+	// ========== ✨ 新增 - 步骤1：检查是否在冷却中 ==========
+	if (bIsAttackOnCooldown)
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("  ⏳ 攻击冷却中，剩余时间：%.2f 秒"), CooldownRemainingTime);
+		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+		return false;
+	}
+	
+	// ========== 步骤2：检查攻击技能列表 ==========
+	if (CachedAttackAbilities.Num() == 0)
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 攻击技能列表为空！"));
+		UE_LOG(LogSGGameplay, Error, TEXT("  提示：检查 DataTable 中是否配置了攻击技能"));
+		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+		return false;
+	}
+	
+	// ========== 步骤3：随机选择攻击技能 ==========
+	CurrentAttackIndex = FMath::RandRange(0, CachedAttackAbilities.Num() - 1);
+	const FSGUnitAttackDefinition& SelectedAttack = CachedAttackAbilities[CurrentAttackIndex];
+	
+	UE_LOG(LogSGGameplay, Log, TEXT("  随机选择攻击技能 [%d/%d]"), 
+		CurrentAttackIndex + 1, CachedAttackAbilities.Num());
+	UE_LOG(LogSGGameplay, Log, TEXT("    动画：%s"), 
+		SelectedAttack.Montage ? *SelectedAttack.Montage->GetName() : TEXT("未设置"));
+	UE_LOG(LogSGGameplay, Log, TEXT("    攻击类型：%s"), 
+		*UEnum::GetValueAsString(SelectedAttack.AttackType));
+	UE_LOG(LogSGGameplay, Log, TEXT("    冷却时间：%.2f 秒"), SelectedAttack.Cooldown);
+	
+	// ========== 步骤4：检查 ASC 是否有效 ==========
 	if (!AbilitySystemComponent)
 	{
 		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ AbilitySystemComponent 为空"));
 		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 		return false;
 	}
-	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ AbilitySystemComponent 有效"));
 	
-	// ========== 步骤3：检查攻击能力是否已授予 ==========
-	if (!GrantedAttackAbilityHandle.IsValid())
+	// ========== 步骤5：处理特定能力 ==========
+	FGameplayAbilitySpecHandle AbilityHandleToActivate;
+	
+	if (SelectedAttack.SpecificAbilityClass)
 	{
-		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 攻击能力未授予"));
-		UE_LOG(LogSGGameplay, Error, TEXT("  提示：检查 GrantAttackAbility() 是否被调用"));
-		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-		return false;
-	}
-	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 攻击能力已授予（Handle: %s）"), *GrantedAttackAbilityHandle.ToString());
-	
-	// ========== 步骤4：查找能力规格 ==========
-	FGameplayAbilitySpec* AbilitySpec = AbilitySystemComponent->FindAbilitySpecFromHandle(GrantedAttackAbilityHandle);
-	if (!AbilitySpec)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 找不到攻击能力 Spec"));
-		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-		return false;
-	}
-	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 找到攻击能力 Spec"));
-	
-	// ========== 步骤5：检查能力对象是否有效 ==========
-	if (!AbilitySpec->Ability)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 攻击能力对象为空"));
-		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-		return false;
-	}
-	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 攻击能力对象有效：%s"), *AbilitySpec->Ability->GetName());
-	
-	// ========== 步骤6：检查能力是否正在激活 ==========
-	if (AbilitySpec->IsActive())
-	{
-		UE_LOG(LogSGGameplay, Log, TEXT("  ⏳ 能力正在激活中"));
-		UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 视为成功（攻击动画播放中）"));
-		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-		return true;
-	}
-	
-	// ========== 步骤7：检查能力是否可以激活 ==========
-	bool bCanActivate = AbilitySpec->Ability->CanActivateAbility(
-		GrantedAttackAbilityHandle,
-		AbilitySystemComponent->AbilityActorInfo.Get()
-	);
-	
-	if (!bCanActivate)
-	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 能力无法激活"));
+		UE_LOG(LogSGGameplay, Log, TEXT("  使用指定能力：%s"), 
+			*SelectedAttack.SpecificAbilityClass->GetName());
 		
-		// 🔧 新增 - 详细检查失败原因
-		FGameplayTagContainer FailureTags;
-		AbilitySpec->Ability->CanActivateAbility(
-			GrantedAttackAbilityHandle,
-			AbilitySystemComponent->AbilityActorInfo.Get(),
-			nullptr,
-			nullptr,
-			&FailureTags
-		);
+		// 检查是否已授予此能力
+		FGameplayAbilitySpecHandle* FoundHandle = GrantedSpecificAbilities.Find(SelectedAttack.SpecificAbilityClass);
 		
-		if (FailureTags.Num() > 0)
+		if (FoundHandle && FoundHandle->IsValid())
 		{
-			UE_LOG(LogSGGameplay, Warning, TEXT("  失败原因（Tags）："));
-			for (const FGameplayTag& Tag : FailureTags)
+			// 已授予，直接使用
+			AbilityHandleToActivate = *FoundHandle;
+			UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 能力已授予，直接激活"));
+		}
+		else
+		{
+			// 未授予，先授予能力
+			UE_LOG(LogSGGameplay, Log, TEXT("  授予特定能力..."));
+			
+			FGameplayAbilitySpec AbilitySpec(
+				SelectedAttack.SpecificAbilityClass,
+				1,
+				INDEX_NONE,
+				this
+			);
+			
+			FGameplayAbilitySpecHandle NewHandle = AbilitySystemComponent->GiveAbility(AbilitySpec);
+			
+			if (NewHandle.IsValid())
 			{
-				UE_LOG(LogSGGameplay, Warning, TEXT("    - %s"), *Tag.ToString());
+				GrantedSpecificAbilities.Add(SelectedAttack.SpecificAbilityClass, NewHandle);
+				AbilityHandleToActivate = NewHandle;
+				UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 特定能力授予成功"));
+			}
+			else
+			{
+				UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 特定能力授予失败"));
+				UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+				return false;
 			}
 		}
-		
-		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-		return false;
 	}
-	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 能力可以激活"));
+	else
+	{
+		// 使用通用攻击能力
+		if (!GrantedCommonAttackHandle.IsValid())
+		{
+			UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 通用攻击能力未授予"));
+			UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+			return false;
+		}
+		
+		AbilityHandleToActivate = GrantedCommonAttackHandle;
+		UE_LOG(LogSGGameplay, Log, TEXT("  使用通用攻击能力"));
+	}
 	
-	// ========== 步骤8：激活攻击能力 ==========
-	bool bSuccess = AbilitySystemComponent->TryActivateAbility(GrantedAttackAbilityHandle);
+	// ========== 步骤6：激活能力 ==========
+	bool bSuccess = AbilitySystemComponent->TryActivateAbility(AbilityHandleToActivate);
 	
 	if (bSuccess)
 	{
 		UE_LOG(LogSGGameplay, Log, TEXT("  ✅ 攻击能力激活成功"));
+		
+		// ========== ✨ 新增 - 步骤7：开始冷却 ==========
+		if (SelectedAttack.Cooldown > 0.0f)
+		{
+			StartAttackCooldown(SelectedAttack.Cooldown);
+		}
+		else
+		{
+			// 如果冷却时间为 0，根据攻击速度自动计算
+			float AutoCooldown = 1.0f / FMath::Max(BaseAttackSpeed, 0.1f);
+			StartAttackCooldown(AutoCooldown);
+			UE_LOG(LogSGGameplay, Log, TEXT("  自动计算冷却时间：%.2f 秒"), AutoCooldown);
+		}
 	}
 	else
 	{
@@ -749,6 +789,79 @@ bool ASG_UnitsBase::PerformAttack()
 	
 	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 	return bSuccess;
+}
+
+// ========== ✨ 新增 - 冷却系统实现 ==========
+
+/**
+ * @brief 开始攻击冷却
+ * @param Duration 冷却时间（秒）
+ * @details
+ * 功能说明：
+ * - 设置冷却标记
+ * - 启动冷却定时器
+ * - 更新冷却剩余时间
+ */
+void ASG_UnitsBase::StartAttackCooldown(float Duration)
+{
+	// ========== 步骤1：设置冷却标记 ==========
+	bIsAttackOnCooldown = true;
+	CooldownRemainingTime = Duration;
+	
+	UE_LOG(LogSGGameplay, Verbose, TEXT("  ⏳ 开始攻击冷却：%.2f 秒"), Duration);
+	
+	// ========== 步骤2：清除旧的定时器（如果存在）==========
+	if (GetWorldTimerManager().IsTimerActive(AttackCooldownTimerHandle))
+	{
+		GetWorldTimerManager().ClearTimer(AttackCooldownTimerHandle);
+	}
+	
+	// ========== 步骤3：启动冷却定时器 ==========
+	GetWorldTimerManager().SetTimer(
+		AttackCooldownTimerHandle,
+		this,
+		&ASG_UnitsBase::OnAttackCooldownEnd,
+		Duration,
+		false // 不循环
+	);
+}
+
+/**
+ * @brief 冷却结束回调
+ * @details
+ * 功能说明：
+ * - 重置冷却标记
+ * - 清空冷却剩余时间
+ */
+void ASG_UnitsBase::OnAttackCooldownEnd()
+{
+	// ========== 步骤1：重置冷却标记 ==========
+	bIsAttackOnCooldown = false;
+	CooldownRemainingTime = 0.0f;
+	
+	UE_LOG(LogSGGameplay, Verbose, TEXT("  ✅ %s 攻击冷却结束"), *GetName());
+}
+
+
+/**
+ * @brief 获取当前攻击配置
+ * @return 当前攻击技能定义
+ * @details
+ * 功能说明：
+ * - 返回当前正在使用的攻击配置
+ * - 供 GA 使用，获取动画、伤害倍率等信息
+ */
+FSGUnitAttackDefinition ASG_UnitsBase::GetCurrentAttackDefinition() const
+{
+	// 检查索引有效性
+	if (CachedAttackAbilities.IsValidIndex(CurrentAttackIndex))
+	{
+		return CachedAttackAbilities[CurrentAttackIndex];
+	}
+    
+	// 返回默认值
+	UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s: CurrentAttackIndex 无效，返回默认配置"), *GetName());
+	return FSGUnitAttackDefinition();
 }
 
 /**
@@ -835,6 +948,17 @@ void ASG_UnitsBase::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
+	// ========== ✨ 新增 - 更新冷却剩余时间 ==========
+	if (bIsAttackOnCooldown)
+	{
+		CooldownRemainingTime = GetWorldTimerManager().GetTimerRemaining(AttackCooldownTimerHandle);
+		
+		// 确保不会出现负数
+		if (CooldownRemainingTime < 0.0f)
+		{
+			CooldownRemainingTime = 0.0f;
+		}
+	}
 	// 获取角色位置
 	FVector ActorLocation = GetActorLocation();
 
@@ -869,6 +993,20 @@ void ASG_UnitsBase::Tick(float DeltaTime)
 			FVector(1, 0, 0),  // X轴（用于旋转圆圈）
 			false
 		);
+		// ✨ 新增 - 显示冷却信息
+		if (bIsAttackOnCooldown)
+		{
+			FString CooldownText = FString::Printf(TEXT("冷却中：%.1f 秒"), CooldownRemainingTime);
+			DrawDebugString(
+				GetWorld(),
+				ActorLocation + FVector(0, 0, 150.0f),
+				CooldownText,
+				nullptr,
+				FColor::Yellow,
+				0.0f, // 一帧
+				true  // 绘制阴影
+			);
+		}
 	}
 
 	// ========== 绘制视野范围 ==========
@@ -891,41 +1029,6 @@ void ASG_UnitsBase::Tick(float DeltaTime)
 		);
 	}
 
-	// ========== ✨ 新增 - 输出 AI 调试信息 ==========
-	if (bAIDebugging)
-	{
-#if !UE_BUILD_SHIPPING  // 只在非发布版本中启用
-		static float DebugTimer = 0.0f;
-		DebugTimer += DeltaTime;
-		if (DebugTimer >= 1.0f)
-		{
-			DebugTimer = 0.0f;
-		
-			// 检查是否有 AI Controller
-			if (AAIController* AIController = Cast<AAIController>(GetController()))
-			{
-				// 获取黑板组件
-				if (UBlackboardComponent* BlackboardComp = AIController->GetBlackboardComponent())
-				{
-					// 输出黑板信息
-					AActor* TargetActor  = Cast<AActor>(BlackboardComp->GetValueAsObject(FName("CurrentTarget")));
-					bool bIsInRange = BlackboardComp->GetValueAsBool(FName("IsInAttackRange"));
-				
-					UE_LOG(LogSGGameplay, Log, TEXT("📊 AI 状态：%s"), *GetName());
-					UE_LOG(LogSGGameplay, Log, TEXT("  当前目标：%s"), TargetActor  ? *TargetActor ->GetName() : TEXT("无"));
-					UE_LOG(LogSGGameplay, Log, TEXT("  是否在攻击范围内：%s"), bIsInRange ? TEXT("是") : TEXT("否"));
-				
-					if (TargetActor)
-					{
-						float Distance = FVector::Dist(GetActorLocation(), TargetActor->GetActorLocation());
-						float AttackRange = GetAttackRangeForAI();
-						UE_LOG(LogSGGameplay, Log, TEXT("  距离：%.2f / %.2f"), Distance, AttackRange);
-					}
-				}
-			}
-		}
-	}
-#endif
 }
 
 /**
@@ -1071,81 +1174,67 @@ void ASG_UnitsBase::InitializeWithDefaults()
  */
 bool ASG_UnitsBase::IsLoadUnitDataFromTable()
 {
-	// ========== 步骤1：检查有效性 ==========
-	if (!UnitDataTable)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ UnitDataTable 为空！"));
-		return false;
-	}
-	
-	if (UnitDataRowName.IsNone())
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ UnitDataRowName 为空！"));
-		return false;
-	}
-	
-	// ========== 步骤2：查找 DataTable 行 ==========
-	FSGUnitDataRow* RowData = UnitDataTable->FindRow<FSGUnitDataRow>(
-		UnitDataRowName,
-		TEXT("LoadUnitDataFromTable")
-	);
-	
-	if (!RowData)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 在 DataTable 中找不到行 '%s'！"), 
-			*UnitDataRowName.ToString());
-		return false;
-	}
-	
-	// 输出日志
-	UE_LOG(LogSGGameplay, Log, TEXT("  从 DataTable 加载配置"));
-	UE_LOG(LogSGGameplay, Log, TEXT("    数据行：%s"), *UnitDataRowName.ToString());
-	UE_LOG(LogSGGameplay, Log, TEXT("    单位名称：%s"), *RowData->UnitName.ToString());
-	
-	// ========== 步骤3：应用属性值 ==========
-	BaseHealth = RowData->BaseHealth;
-	BaseAttackDamage = RowData->BaseAttackDamage;
-	BaseMoveSpeed = RowData->BaseMoveSpeed;
-	BaseAttackSpeed = RowData->BaseAttackSpeed;
-	BaseAttackRange = RowData->BaseAttackRange;
-	
-	// ✨ 新增 - 缓存 AI 配置
-	CachedDetectionRange = RowData->DetectionRange;
-	CachedChaseRange = RowData->ChaseRange;
-	
-	// ✨ 新增 - 同步 VisionRange（用于调试可视化）
-	VisionRange = RowData->DetectionRange;
-	
-	UE_LOG(LogSGGameplay, Log, TEXT("    属性配置："));
-	UE_LOG(LogSGGameplay, Log, TEXT("      生命值：%.0f"), BaseHealth);
-	UE_LOG(LogSGGameplay, Log, TEXT("      攻击力：%.0f"), BaseAttackDamage);
-	UE_LOG(LogSGGameplay, Log, TEXT("      移动速度：%.0f"), BaseMoveSpeed);
-	UE_LOG(LogSGGameplay, Log, TEXT("      攻击速度：%.2f"), BaseAttackSpeed);
-	UE_LOG(LogSGGameplay, Log, TEXT("      攻击范围：%.0f"), BaseAttackRange);
-	// ✨ 新增 - 输出 AI 配置日志
-	UE_LOG(LogSGGameplay, Log, TEXT("    AI 配置："));
-	UE_LOG(LogSGGameplay, Log, TEXT("      寻敌范围：%.0f"), CachedDetectionRange);
-	UE_LOG(LogSGGameplay, Log, TEXT("      追击范围：%.0f"), CachedChaseRange);
-	
-	// ========== 步骤4：应用单位类型标签 ==========
-	if (RowData->UnitTypeTag.IsValid())
-	{
-		UnitTypeTag = RowData->UnitTypeTag;
-		UE_LOG(LogSGGameplay, Log, TEXT("    单位类型：%s"), *UnitTypeTag.ToString());
-	}
-	
-	// ========== 步骤5：应用攻击配置 ==========
-	if (RowData->AttackMontage)
-	{
-		AttackMontage = RowData->AttackMontage;
-		UE_LOG(LogSGGameplay, Log, TEXT("    攻击动画：%s"), *AttackMontage->GetName());
-	}
-	
-	if (RowData->AttackType != ESGUnitAttackType::Melee && RowData->ProjectileClass)
-	{
-		ProjectileClass = RowData->ProjectileClass;
-		UE_LOG(LogSGGameplay, Log, TEXT("    投射物类：%s"), *ProjectileClass->GetName());
-	}
+ // ========== 步骤1：检查有效性 ==========
+    if (!UnitDataTable)
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ UnitDataTable 为空！"));
+        return false;
+    }
+    
+    if (UnitDataRowName.IsNone())
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ UnitDataRowName 为空！"));
+        return false;
+    }
+    
+    // ========== 步骤2：查找 DataTable 行 ==========
+    FSGUnitDataRow* RowData = UnitDataTable->FindRow<FSGUnitDataRow>(
+        UnitDataRowName,
+        TEXT("LoadUnitDataFromTable")
+    );
+    
+    if (!RowData)
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 在 DataTable 中找不到行 '%s'！"), 
+            *UnitDataRowName.ToString());
+        return false;
+    }
+    
+    // 输出日志
+    UE_LOG(LogSGGameplay, Log, TEXT("  从 DataTable 加载配置"));
+    UE_LOG(LogSGGameplay, Log, TEXT("    数据行：%s"), *UnitDataRowName.ToString());
+    UE_LOG(LogSGGameplay, Log, TEXT("    单位名称：%s"), *RowData->UnitName.ToString());
+    
+    // ========== 步骤3：应用属性值 ==========
+    BaseHealth = RowData->BaseHealth;
+    BaseAttackDamage = RowData->BaseAttackDamage;
+    BaseMoveSpeed = RowData->BaseMoveSpeed;
+    BaseAttackSpeed = RowData->BaseAttackSpeed;
+    BaseAttackRange = RowData->BaseAttackRange;
+    
+    // ✨ 新增 - 缓存 AI 配置
+    CachedDetectionRange = RowData->DetectionRange;
+    CachedChaseRange = RowData->ChaseRange;
+    
+    // ✨ 新增 - 同步 VisionRange（用于调试可视化）
+    VisionRange = RowData->DetectionRange;
+    
+    UE_LOG(LogSGGameplay, Log, TEXT("    属性配置："));
+    UE_LOG(LogSGGameplay, Log, TEXT("      生命值：%.0f"), BaseHealth);
+    UE_LOG(LogSGGameplay, Log, TEXT("      攻击力：%.0f"), BaseAttackDamage);
+    UE_LOG(LogSGGameplay, Log, TEXT("      移动速度：%.0f"), BaseMoveSpeed);
+    UE_LOG(LogSGGameplay, Log, TEXT("      攻击速度：%.2f"), BaseAttackSpeed);
+    UE_LOG(LogSGGameplay, Log, TEXT("      攻击范围：%.0f"), BaseAttackRange);
+    UE_LOG(LogSGGameplay, Log, TEXT("    AI 配置："));
+    UE_LOG(LogSGGameplay, Log, TEXT("      寻敌范围：%.0f"), CachedDetectionRange);
+    UE_LOG(LogSGGameplay, Log, TEXT("      追击范围：%.0f"), CachedChaseRange);
+    
+    // ========== 步骤4：应用单位类型标签 ==========
+    if (RowData->UnitTypeTag.IsValid())
+    {
+        UnitTypeTag = RowData->UnitTypeTag;
+        UE_LOG(LogSGGameplay, Log, TEXT("    单位类型：%s"), *UnitTypeTag.ToString());
+    }
 	
 	return true;
 }

@@ -58,20 +58,6 @@ protected:
 	// ========== 蓝图可配置参数 ==========
 
 	/**
-	 * @brief 投射物生成偏移
-	 * @details
-	 * 功能说明：
-	 * - 投射物生成位置相对于单位的偏移
-	 * - 用于调整投射物从弓弩发射的位置
-	 * 建议值：
-	 * - X: 50（前方）
-	 * - Y: 0
-	 * - Z: 80（弓的高度）
-	 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Ranged Config", meta = (DisplayName = "投射物生成偏移"))
-	FVector ProjectileSpawnOffset = FVector(50.0f, 0.0f, 80.0f);
-
-	/**
 	 * @brief 目标预判系数
 	 * @details
 	 * 功能说明：

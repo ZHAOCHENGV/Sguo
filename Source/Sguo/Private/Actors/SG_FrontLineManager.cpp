@@ -978,10 +978,22 @@ void ASG_FrontLineManager::OnUnitDeath(ASG_UnitsBase* DeadUnit)
  */
 void ASG_FrontLineManager::BindUnitDeathEvent(ASG_UnitsBase* Unit)
 {
-    if (Unit)
+    // 🔧 修改 - 使用 IsValid 代替简单的判空
+    // IsValid 会同时检查：1. 指针是否为空 2. 对象是否标记为 PendingKill (即将销毁) 3. 对象是否是垃圾内存
+    if (IsValid(Unit))
     {
-        // 将 OnUnitDeath 函数添加到单位的死亡事件委托
-        Unit->OnUnitDeathEvent.AddDynamic(this, &ASG_FrontLineManager::OnUnitDeath);
+        // ✨ 新增 - 防止重复绑定
+        // 动态委托如果重复绑定同一个函数，可能会导致多次调用或警告
+        if (!Unit->OnUnitDeathEvent.IsAlreadyBound(this, &ASG_FrontLineManager::OnUnitDeath))
+        {
+            // 将 OnUnitDeath 函数添加到单位的死亡事件委托
+            Unit->OnUnitDeathEvent.AddDynamic(this, &ASG_FrontLineManager::OnUnitDeath);
+        }
+    }
+    else
+    {
+        //输出日志以便排查为什么传入了无效单位
+        UE_LOG(LogSGGameplay, Warning, TEXT("BindUnitDeathEvent 失败：尝试绑定无效单位"));
     }
 }
 
@@ -992,7 +1004,8 @@ void ASG_FrontLineManager::BindUnitDeathEvent(ASG_UnitsBase* Unit)
  */
 void ASG_FrontLineManager::UnbindUnitDeathEvent(ASG_UnitsBase* Unit)
 {
-    if (Unit)
+    // 🔧 修改 - 同样使用 IsValid 进行安全检查
+    if (IsValid(Unit))
     {
         // 从单位的死亡事件委托中移除 OnUnitDeath 函数
         Unit->OnUnitDeathEvent.RemoveDynamic(this, &ASG_FrontLineManager::OnUnitDeath);

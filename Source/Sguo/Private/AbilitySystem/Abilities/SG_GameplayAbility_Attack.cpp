@@ -13,7 +13,6 @@
 #include "Debug/SG_LogCategories.h"
 #include "Animation/AnimMontage.h"
 #include "Animation/AnimInstance.h"
-#include "Kismet/GameplayStatics.h"
 #include "GameplayEffect.h"
 #include "Engine/OverlapResult.h"
 #include "AbilitySystemGlobals.h"
@@ -22,7 +21,7 @@
 #include "Buildings/SG_MainCityBase.h"
 #include "Components/BoxComponent.h"  // ✨ 新增 - 必须包含完整定义
 #include "Abilities/Tasks/AbilityTask_WaitGameplayEvent.h"
-
+#include "Data/Type/SG_UnitDataTable.h" // ✨ 新增 - 包含完整定义
 // ========== 构造函数 ==========
 
 /**
@@ -60,8 +59,7 @@ USG_GameplayAbility_Attack::USG_GameplayAbility_Attack()
 	// LocalPredicted：客户端预测，服务器确认
 	NetExecutionPolicy = EGameplayAbilityNetExecutionPolicy::LocalPredicted;
 
-	// ✨ 新增 - 初始化默认的攻击通知列表
-	AttackNotifyNames.Add(TEXT("AttackHit"));
+
 }
 
 // ========== 激活技能 ==========
@@ -82,16 +80,38 @@ void USG_GameplayAbility_Attack::ActivateAbility(
 )
 {
 	Super::ActivateAbility(Handle, ActorInfo, ActivationInfo, TriggerEventData);
+	UE_LOG(LogSGGameplay, Log, TEXT("========== 攻击技能激活 =========="));
+	
+	// ✨ 新增 - 从单位加载当前攻击配置
+	LoadAttackConfigFromUnit();
+	
+	// ✨ 新增 - 监听攻击命中事件（从 AnimNotifyState 发送）
+	UAbilityTask_WaitGameplayEvent* WaitEventTask = UAbilityTask_WaitGameplayEvent::WaitGameplayEvent(
+		this,
+		FGameplayTag::RequestGameplayTag(FName("Event.Attack.Hit")),
+		nullptr,
+		false, // OnlyTriggerOnce = false（允许多次命中）
+		false  // OnlyMatchExact
+	);
 
-	// ✨ 新增 - 重置攻击段数计数器
-	CurrentAttackIndex = 0;
+	if (WaitEventTask)
+	{
+		// 绑定到命中事件处理函数
+		WaitEventTask->EventReceived.AddDynamic(this, &USG_GameplayAbility_Attack::OnAttackHitEvent);
+		WaitEventTask->ReadyForActivation();
+		
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 已启动命中事件监听"));
+	}
 
 	UE_LOG(LogSGGameplay, Log, TEXT("========== 攻击技能激活 =========="));
 	UE_LOG(LogSGGameplay, Log, TEXT("  施放者：%s"), 
 		ActorInfo->AvatarActor.IsValid() ? *ActorInfo->AvatarActor->GetName() : TEXT("None"));
 	UE_LOG(LogSGGameplay, Log, TEXT("  攻击类型：%s"), 
 		*UEnum::GetValueAsString(AttackType));
-	UE_LOG(LogSGGameplay, Log, TEXT("  攻击段数：%d"), AttackNotifyNames.Num());
+	
+	
+	// ✨ 新增 - 从单位加载当前攻击配置
+	LoadAttackConfigFromUnit();
 
 	if (AttackMontage && ActorInfo->AvatarActor.IsValid())
 	{
@@ -99,7 +119,7 @@ void USG_GameplayAbility_Attack::ActivateAbility(
 		{
 			if (UAnimInstance* AnimInstance = Character->GetMesh()->GetAnimInstance())
 			{
-				// ✨ 新增 - 获取攻击速度倍率
+				// 获取攻击速度倍率
 				float PlayRate = 1.0f;
 				if (const USG_AbilitySystemComponent* SGASC = Cast<USG_AbilitySystemComponent>(GetAbilitySystemComponentFromActorInfo()))
 				{
@@ -109,37 +129,22 @@ void USG_GameplayAbility_Attack::ActivateAbility(
 					}
 				}
 
-				// 🔧 修改 - 使用攻击速度播放蒙太奇
-				// 如果 PlayRate 是 2.0，动画播放速度就是 2 倍
+				// 使用攻击速度播放蒙太奇
 				float MontageLength = AnimInstance->Montage_Play(AttackMontage, PlayRate);
 				
-			
-				// 绑定传统的 AnimNotify 回调（兼容旧的配置）
+				// 绑定传统的 AnimNotify 回调
 				AnimInstance->OnPlayMontageNotifyBegin.AddDynamic(
 					this, 
 					&USG_GameplayAbility_Attack::OnMontageNotifyBegin
 				);
-				// ✨ 新增 - 监听攻击命中事件 (配合新的 SG_ANS_MeleeDetection 使用)
-				// 监听 Tag: Event.Attack.Hit
-				UAbilityTask_WaitGameplayEvent* WaitEventTask = UAbilityTask_WaitGameplayEvent::WaitGameplayEvent(
-					this,
-					FGameplayTag::RequestGameplayTag(FName("Event.Attack.Hit")),
-					nullptr, // OptionalExternalTarget
-					false,   // OnlyTriggerOnce (设为 false 以便一次挥击击中多个敌人)
-					false    // OnlyMatchExact
-				);
-
-				if (WaitEventTask)
-				{
-					// 绑定到我们新写的 OnDamageGameplayEvent 函数
-					WaitEventTask->EventReceived.AddDynamic(this, &USG_GameplayAbility_Attack::OnDamageGameplayEvent);
-					WaitEventTask->ReadyForActivation();
-					UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 已启动 WaitGameplayEvent 监听任务"));
-				}
+				
+				// ❌ 删除 - 旧的 WaitGameplayEvent 监听
+				// UAbilityTask_WaitGameplayEvent* WaitEventTask = UAbilityTask_WaitGameplayEvent::WaitGameplayEvent(...);
+				// WaitEventTask->EventReceived.AddDynamic(this, &USG_GameplayAbility_Attack::OnDamageGameplayEvent);
 
 				UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 攻击动画已播放：%s"), *AttackMontage->GetName());
-				// 🔧 修改 - 根据倍率计算实际持续时间
-				// Montage_Play 返回的是原始长度，实际播放时间 = 原始长度 / 播放速率
+				
+				// 根据倍率计算实际持续时间
 				float ActualDuration = (PlayRate > 0.0f) ? (MontageLength / PlayRate) : MontageLength;
 				UE_LOG(LogSGGameplay, Log, TEXT("  实际动画时长：%.2f 秒"), ActualDuration);
 				
@@ -161,11 +166,10 @@ void USG_GameplayAbility_Attack::ActivateAbility(
 					EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 				});
 				
-				// 🔧 修改 - 使用计算后的实际时长设置定时器
 				ActorInfo->AvatarActor->GetWorldTimerManager().SetTimer(
 					TimerHandle,
 					TimerDelegate,
-					ActualDuration, // 使用修正后的时间
+					ActualDuration,
 					false
 				);
 			}
@@ -190,7 +194,64 @@ void USG_GameplayAbility_Attack::ActivateAbility(
 
 	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 }
+// ========== ✨ 新增 - 命中事件处理函数 ==========
 
+/**
+ * @brief 处理攻击命中事件（从 AnimNotifyState 发送）
+ * @param Payload 事件数据（包含目标和伤害倍率）
+ * @details
+ * 功能说明：
+ * - 接收 AnimNotifyState 发送的命中事件
+ * - 从 EventData 中读取伤害倍率
+ * - 应用伤害到目标
+ */
+UFUNCTION()
+void USG_GameplayAbility_Attack::OnAttackHitEvent(FGameplayEventData Payload)
+{
+	UE_LOG(LogSGGameplay, Log, TEXT("========== 处理命中事件 =========="));
+	
+	// ========== 步骤1：获取目标 ==========
+	AActor* Target = const_cast<AActor*>(Payload.Target.Get());
+	if (!Target)
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 目标为空"));
+		return;
+	}
+	
+	UE_LOG(LogSGGameplay, Log, TEXT("  目标：%s"), *Target->GetName());
+	
+	// ========== 步骤2：获取伤害倍率 ==========
+	// EventMagnitude 存储了 AnimNotifyState 传递的伤害倍率
+	float HitDamageMultiplier = Payload.EventMagnitude;
+	
+	if (HitDamageMultiplier <= 0.0f)
+	{
+		// 如果没有传递倍率，使用默认倍率
+		HitDamageMultiplier = DamageMultiplier;
+		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 未传递伤害倍率，使用默认值：%.2f"), HitDamageMultiplier);
+	}
+	else
+	{
+		UE_LOG(LogSGGameplay, Log, TEXT("  伤害倍率：%.2f"), HitDamageMultiplier);
+	}
+	
+	// ========== 步骤3：临时修改伤害倍率 ==========
+	float OriginalMultiplier = DamageMultiplier;
+	DamageMultiplier = HitDamageMultiplier;
+	
+	// ========== 步骤4：应用伤害 ==========
+	ApplyDamageToTarget(Target);
+	
+	// ========== 步骤5：恢复原始倍率 ==========
+	DamageMultiplier = OriginalMultiplier;
+	
+	// ========== 步骤6：触发蓝图事件 ==========
+	TArray<AActor*> HitActors;
+	HitActors.Add(Target);
+	OnAttackHit(HitActors);
+	
+	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+}
 // ========== 结束技能 ==========
 
 /**
@@ -208,13 +269,80 @@ void USG_GameplayAbility_Attack::EndAbility(
 	bool bWasCancelled
 )
 {
-	// ✨ 新增 - 重置攻击段数计数器
-	CurrentAttackIndex = 0;
+
 
 	UE_LOG(LogSGGameplay, Verbose, TEXT("攻击技能结束 (取消: %s)"), 
 		bWasCancelled ? TEXT("是") : TEXT("否"));
 
 	Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
+}
+/**
+ * @brief 从单位加载当前攻击配置
+ * @details
+ * 功能说明：
+ * - 从施放者（SG_UnitsBase）获取当前攻击配置
+ * - 更新 AttackMontage、DamageMultiplier 等属性
+ * - 在 ActivateAbility 开始时调用
+ * 详细流程：
+ * 1. 获取施放者（SG_UnitsBase）
+ * 2. 调用 GetCurrentAttackDefinition() 获取配置
+ * 3. 更新本地属性
+ */
+void USG_GameplayAbility_Attack::LoadAttackConfigFromUnit()
+{
+	// ========== 步骤1：获取施放者 ==========
+	AActor* AvatarActor = GetAvatarActorFromActorInfo();
+	if (!AvatarActor)
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("❌ LoadAttackConfigFromUnit: 施放者为空"));
+		return;
+	}
+	
+	ASG_UnitsBase* SourceUnit = Cast<ASG_UnitsBase>(AvatarActor);
+	if (!SourceUnit)
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("❌ LoadAttackConfigFromUnit: 施放者不是 SG_UnitsBase"));
+		return;
+	}
+	
+	// ========== 步骤2：获取当前攻击配置 ==========
+	FSGUnitAttackDefinition AttackDef = SourceUnit->GetCurrentAttackDefinition();
+	
+	// ========== 步骤3：更新本地属性 ==========
+	AttackMontage = AttackDef.Montage;
+	/*DamageMultiplier = AttackDef.DamageMultiplier;*/
+	ProjectileClass = AttackDef.ProjectileClass;
+	ProjectileSpawnOffset = AttackDef.ProjectileSpawnOffset;
+	
+	// 根据攻击类型设置 AttackType
+	switch (AttackDef.AttackType)
+	{
+	case ESGUnitAttackType::Melee:
+		AttackType = ESGAttackAbilityType::Melee;
+		break;
+	case ESGUnitAttackType::Ranged:
+	case ESGUnitAttackType::Projectile:
+		AttackType = ESGAttackAbilityType::Ranged;
+		break;
+	default:
+		AttackType = ESGAttackAbilityType::Melee;
+		break;
+	}
+	
+	// ========== 步骤4：输出日志 ==========
+	UE_LOG(LogSGGameplay, Log, TEXT("========== 从单位加载攻击配置 =========="));
+	UE_LOG(LogSGGameplay, Log, TEXT("  施放者：%s"), *SourceUnit->GetName());
+	UE_LOG(LogSGGameplay, Log, TEXT("  攻击动画：%s"), AttackMontage ? *AttackMontage->GetName() : TEXT("未设置"));
+	UE_LOG(LogSGGameplay, Log, TEXT("  攻击类型：%s"), *UEnum::GetValueAsString(AttackType));
+	UE_LOG(LogSGGameplay, Log, TEXT("  伤害倍率：%.2f"), DamageMultiplier);
+	
+	if (AttackType == ESGAttackAbilityType::Ranged && ProjectileClass)
+	{
+		UE_LOG(LogSGGameplay, Log, TEXT("  投射物类：%s"), *ProjectileClass->GetName());
+		UE_LOG(LogSGGameplay, Log, TEXT("  生成偏移：%s"), *ProjectileSpawnOffset.ToString());
+	}
+	
+	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 }
 
 // ========== 动画通知回调 ==========
@@ -234,45 +362,16 @@ void USG_GameplayAbility_Attack::OnMontageNotifyBegin(
 	const FBranchingPointNotifyPayload& BranchingPointPayload
 )
 {
-	// ✨ 新增 - 检查通知名称是否在列表中
-	int32 NotifyIndex = AttackNotifyNames.IndexOfByKey(NotifyName);
-	
-	if (NotifyIndex != INDEX_NONE)
+	// ✨ 新增 - 简化版：任何 AnimNotify 都触发攻击判定
+	// 不再检查特定的通知名称列表
+	if (NotifyName != NAME_None)
 	{
-		UE_LOG(LogSGGameplay, Log, TEXT("  🎯 攻击判定帧触发 (通知: %s, 第 %d 段)"), 
-			*NotifyName.ToString(), NotifyIndex + 1);
-		
-		// ✨ 新增 - 获取当前段的伤害倍率
-		float CurrentDamageMultiplier = DamageMultiplier;
-		if (AttackDamageMultipliers.IsValidIndex(NotifyIndex))
-		{
-			CurrentDamageMultiplier = AttackDamageMultipliers[NotifyIndex];
-			UE_LOG(LogSGGameplay, Log, TEXT("    使用第 %d 段伤害倍率：%.2f"), 
-				NotifyIndex + 1, CurrentDamageMultiplier);
-		}
-		else
-		{
-			UE_LOG(LogSGGameplay, Log, TEXT("    使用默认伤害倍率：%.2f"), CurrentDamageMultiplier);
-		}
-		
-		// ✨ 新增 - 临时修改伤害倍率
-		float OriginalMultiplier = DamageMultiplier;
-		DamageMultiplier = CurrentDamageMultiplier;
+		UE_LOG(LogSGGameplay, Log, TEXT("  🎯 攻击判定帧触发 (通知: %s)"), *NotifyName.ToString());
 		
 		// 执行攻击判定
 		PerformAttack();
-		
-		// ✨ 新增 - 恢复原始倍率
-		DamageMultiplier = OriginalMultiplier;
-		
-		// 增加攻击段数计数
-		CurrentAttackIndex++;
 	}
-	else
-	{
-		UE_LOG(LogSGGameplay, Verbose, TEXT("  AnimNotify: %s (不在攻击通知列表中)"), 
-			*NotifyName.ToString());
-	}
+	
 }
 
 // ========== 执行攻击判定 ==========
@@ -384,10 +483,7 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 				QueryParams
 			);
 
-			if (bShowAttackDetection)
-			{
-				DrawMeleeAttackDetection(SourceLocation, AttackRange, bHit);
-			}
+		
 
 			if (bHit)
 			{
@@ -473,11 +569,6 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 				QueryParams
 			);
 
-			if (bShowAttackDetection)
-			{
-				FVector HitLocation = bHit ? HitResult.Location : EndLocation;
-				DrawRangedAttackDetection(StartLocation, EndLocation, bHit, HitLocation);
-			}
 
 			if (bHit)
 			{
@@ -541,10 +632,7 @@ int32 USG_GameplayAbility_Attack::FindTargetsInRange(TArray<AActor*>& OutTargets
 		break;
 	}
 
-	if (bShowAttackDetection && OutTargets.Num() > 0)
-	{
-		DrawTargetMarkers(OutTargets);
-	}
+	
 
 	return OutTargets.Num();
 }
@@ -715,288 +803,4 @@ float USG_GameplayAbility_Attack::GetAttackRange() const
 	// 如果没有 AttributeSet，返回默认值
 	UE_LOG(LogSGGameplay, Warning, TEXT("GetAttackRange 失败：没有 AttributeSet，使用默认值"));
 	return 150.0f;
-}
-
-// ========== ✨ 调试可视化函数实现 ==========
-
-/**
- * @brief 绘制近战攻击范围检测
- * @param Center 检测中心位置
- * @param Radius 检测半径
- * @param bHit 是否命中目标
- */
-void USG_GameplayAbility_Attack::DrawMeleeAttackDetection(const FVector& Center, float Radius, bool bHit)
-{
-	if (!GetWorld())
-	{
-		return;
-	}
-
-	// 选择颜色（根据是否命中）
-	FColor DrawColor = bHit ? AttackRangeHitColor : AttackRangeMissColor;
-
-	// 绘制球体（检测范围）
-	DrawDebugSphere(
-		GetWorld(),
-		Center,
-		Radius,
-		32,  // 分段数
-		DrawColor,
-		false,  // 不持久
-		DetectionVisualizationDuration,  // 持续时间
-		0,  // 深度优先级
-		2.0f  // 线条粗细
-	);
-
-	// 绘制中心点
-	DrawDebugPoint(
-		GetWorld(),
-		Center,
-		10.0f,  // 点的大小
-		DrawColor,
-		false,
-		DetectionVisualizationDuration
-	);
-
-	// 绘制文本标签
-	FString DebugText = FString::Printf(TEXT("近战检测\n半径: %.0f\n命中: %s"), 
-		Radius, 
-		bHit ? TEXT("是") : TEXT("否"));
-	
-	DrawDebugString(
-		GetWorld(),
-		Center + FVector(0, 0, Radius + 50.0f),  // 文本位置（球体上方）
-		DebugText,
-		nullptr,  // 不需要 Actor
-		DrawColor,
-		DetectionVisualizationDuration,
-		true  // 绘制阴影
-	);
-}
-
-/**
- * @brief 绘制远程攻击范围检测
- * @param Start 射线起点
- * @param End 射线终点
- * @param bHit 是否命中目标
- * @param HitLocation 命中位置（如果命中）
- */
-void USG_GameplayAbility_Attack::DrawRangedAttackDetection(
-	const FVector& Start, 
-	const FVector& End, 
-	bool bHit, 
-	const FVector& HitLocation)
-{
-	if (!GetWorld())
-	{
-		return;
-	}
-
-	// 选择颜色（根据是否命中）
-	FColor DrawColor = bHit ? AttackRangeHitColor : AttackRangeMissColor;
-
-	// 绘制射线
-	if (bHit)
-	{
-		// 如果命中，绘制两段线：起点到命中点（红色），命中点到终点（黄色虚线）
-		DrawDebugLine(
-			GetWorld(),
-			Start,
-			HitLocation,
-			AttackRangeHitColor,
-			false,
-			DetectionVisualizationDuration,
-			0,
-			3.0f  // 线条粗细
-		);
-
-		// 绘制未命中部分（虚线）
-		DrawDebugLine(
-			GetWorld(),
-			HitLocation,
-			End,
-			AttackRangeMissColor,
-			false,
-			DetectionVisualizationDuration,
-			0,
-			1.0f  // 更细的线
-		);
-
-		// 在命中点绘制十字标记
-		DrawDebugCrosshairs(
-			GetWorld(),
-			HitLocation,
-			FRotator::ZeroRotator,
-			100.0f,  // 十字大小
-			AttackRangeHitColor,
-			false,
-			DetectionVisualizationDuration,
-			0  
-		); 
-	}
-	else
-	{
-		// 如果未命中，绘制完整射线
-		DrawDebugLine(
-			GetWorld(),
-			Start,
-			End,
-			AttackRangeMissColor,
-			false,
-			DetectionVisualizationDuration,
-			0,
-			2.0f
-		);
-	}
-
-	// 绘制起点标记
-	DrawDebugPoint(
-		GetWorld(),
-		Start,
-		10.0f,
-		FColor::Green,
-		false,
-		DetectionVisualizationDuration
-	);
-
-	// 绘制终点标记
-	DrawDebugPoint(
-		GetWorld(),
-		End,
-		10.0f,
-		FColor::Blue,
-		false,
-		DetectionVisualizationDuration
-	);
-
-	// 绘制文本标签
-	float Distance = FVector::Dist(Start, HitLocation);
-	FString DebugText = FString::Printf(TEXT("远程检测\n距离: %.0f\n命中: %s"), 
-		Distance, 
-		bHit ? TEXT("是") : TEXT("否"));
-	
-	FVector TextLocation = bHit ? HitLocation : ((Start + End) * 0.5f);
-	DrawDebugString(
-		GetWorld(),
-		TextLocation + FVector(0, 0, 100.0f),
-		DebugText,
-		nullptr,
-		DrawColor,
-		DetectionVisualizationDuration,
-		true
-	);
-}
-
-/**
- * @brief 绘制目标标记
- * @param Targets 检测到的目标列表
- */
-void USG_GameplayAbility_Attack::DrawTargetMarkers(const TArray<AActor*>& Targets)
-{
-	if (!GetWorld())
-	{
-		return;
-	}
-
-	// 获取施放者位置
-	AActor* AvatarActor = GetAvatarActorFromActorInfo();
-	if (!AvatarActor)
-	{
-		return;
-	}
-
-	FVector SourceLocation = AvatarActor->GetActorLocation();
-
-	// 遍历所有目标
-	for (int32 i = 0; i < Targets.Num(); ++i)
-	{
-		AActor* Target = Targets[i];
-		if (!Target)
-		{
-			continue;
-		}
-
-		FVector TargetLocation = Target->GetActorLocation();
-
-		// 绘制目标标记（球体）
-		DrawDebugSphere(
-			GetWorld(),
-			TargetLocation,
-			TargetMarkerSize,
-			16,
-			TargetMarkerColor,
-			false,
-			DetectionVisualizationDuration,
-			0,
-			3.0f
-		);
-
-		// 绘制从施放者到目标的连线
-		DrawDebugLine(
-			GetWorld(),
-			SourceLocation,
-			TargetLocation,
-			TargetMarkerColor,
-			false,
-			DetectionVisualizationDuration,
-			0,
-			2.0f
-		);
-
-		// 绘制目标序号
-		FString TargetText = FString::Printf(TEXT("目标 %d\n%s"), 
-			i + 1, 
-			*Target->GetName());
-		
-		DrawDebugString(
-			GetWorld(),
-			TargetLocation + FVector(0, 0, TargetMarkerSize + 20.0f),
-			TargetText,
-			nullptr,
-			TargetMarkerColor,
-			DetectionVisualizationDuration,
-			true
-		);
-
-		// 绘制目标的朝向箭头
-		FVector TargetForward = Target->GetActorForwardVector();
-		DrawDebugDirectionalArrow(
-			GetWorld(),
-			TargetLocation,
-			TargetLocation + TargetForward * 100.0f,
-			50.0f,  // 箭头大小
-			FColor::Cyan,
-			false,
-			DetectionVisualizationDuration,
-			0,
-			2.0f
-		);
-	}
-
-	// 绘制总结信息
-	FString SummaryText = FString::Printf(TEXT("检测到 %d 个目标"), Targets.Num());
-	DrawDebugString(
-		GetWorld(),
-		SourceLocation + FVector(0, 0, 200.0f),
-		SummaryText,
-		nullptr,
-		FColor::White,
-		DetectionVisualizationDuration,
-		true,
-		2.0f  // 文字大小
-	);
-}
-
-void USG_GameplayAbility_Attack::OnDamageGameplayEvent(FGameplayEventData Payload)
-{
-	if (AActor* Target = const_cast<AActor*>(Payload.Target.Get()))
-	{
-		// 调用现有的应用伤害逻辑
-		ApplyDamageToTarget(Target);
-        
-		// 触发命中反馈
-		TArray<AActor*> HitActors;
-		HitActors.Add(Target);
-		OnAttackHit(HitActors); 
-	}
 }

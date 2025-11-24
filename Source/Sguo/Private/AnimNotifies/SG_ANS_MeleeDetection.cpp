@@ -1,167 +1,326 @@
-﻿// Source/Sguo/Private/AnimNotifies/SG_ANS_MeleeDetection.cpp
+﻿// 📄 文件：Source/Sguo/Private/AnimNotifies/SG_ANS_MeleeDetection.cpp
 
 #include "AnimNotifies/SG_ANS_MeleeDetection.h"
 #include "AbilitySystemBlueprintLibrary.h"
+#include "AbilitySystemComponent.h"
 #include "Units/SG_UnitsBase.h"
-#include "Kismet/KismetMathLibrary.h"
+#include "Buildings/SG_MainCityBase.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Debug/SG_LogCategories.h"
+
+// ========== 构造函数 ==========
 
 USG_ANS_MeleeDetection::USG_ANS_MeleeDetection()
 {
+	// 默认插槽名称
 	StartSocketName = FName("WeaponStart");
 	EndSocketName = FName("WeaponEnd");
-	HitEventTag = FGameplayTag::RequestGameplayTag(FName("Event.Attack.Hit"));
 	
-	// 默认调试关闭，但在编辑器里为了方便可以默认开启一帧
-	DrawDebugType = EDrawDebugTrace::ForOneFrame; 
+	// 默认事件标签
+	HitEventTag = FGameplayTag::RequestGameplayTag(FName("Event.Attack.Hit"), false);
+	if (!HitEventTag.IsValid())
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ GameplayTag 'Event.Attack.Hit' 未配置"));
+	}
+	
+	// 默认调试开启一帧（方便测试）
+	DrawDebugType = EDrawDebugTrace::ForOneFrame;
+	
+	// 默认伤害倍率
+	DamageMultiplier = 1.0f;
 }
 
-void USG_ANS_MeleeDetection::NotifyBegin(USkeletalMeshComponent* MeshComp, UAnimSequenceBase* Animation, float TotalDuration, const FAnimNotifyEventReference& EventReference)
+// ========== NotifyBegin ==========
+
+void USG_ANS_MeleeDetection::NotifyBegin(
+	USkeletalMeshComponent* MeshComp, 
+	UAnimSequenceBase* Animation, 
+	float TotalDuration, 
+	const FAnimNotifyEventReference& EventReference)
 {
 	Super::NotifyBegin(MeshComp, Animation, TotalDuration, EventReference);
+	
+	// 清空已命中列表
 	HitActors.Empty();
+	
+	// 输出日志
+	if (MeshComp && MeshComp->GetOwner())
+	{
+		UE_LOG(LogSGGameplay, Verbose, TEXT("========== 近战检测开始 =========="));
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  施放者：%s"), *MeshComp->GetOwner()->GetName());
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  起始插槽：%s"), *StartSocketName.ToString());
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  结束插槽：%s"), *EndSocketName.ToString());
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  伤害倍率：%.2f"), DamageMultiplier);
+		UE_LOG(LogSGGameplay, Verbose, TEXT("========================================"));
+	}
 }
 
-void USG_ANS_MeleeDetection::NotifyTick(USkeletalMeshComponent* MeshComp, UAnimSequenceBase* Animation, float FrameDeltaTime, const FAnimNotifyEventReference& EventReference)
+// ========== NotifyTick ==========
+
+void USG_ANS_MeleeDetection::NotifyTick(
+	USkeletalMeshComponent* MeshComp, 
+	UAnimSequenceBase* Animation, 
+	float FrameDeltaTime, 
+	const FAnimNotifyEventReference& EventReference)
 {
 	Super::NotifyTick(MeshComp, Animation, FrameDeltaTime, EventReference);
 
-	if (!MeshComp || !MeshComp->GetOwner() || !MeshComp->GetWorld()) return;
-
-	AActor* OwnerActor = MeshComp->GetOwner();
-
-	// 1. 计算位置和旋转
-	// 获取插槽变换
-	FTransform StartSocketTransform = MeshComp->GetSocketTransform(StartSocketName);
-	FTransform EndSocketTransform = MeshComp->GetSocketTransform(EndSocketName);
-
-	// 应用偏移 (在插槽的局部空间应用偏移，然后转到世界空间)
-	// 这里假设偏移是相对于 StartSocket 的坐标系的
-	FVector StartLocation = StartSocketTransform.TransformPosition(FVector::ZeroVector + LocationOffset);
-	FVector EndLocation = EndSocketTransform.GetLocation(); // End Socket 通常不需要偏移，或者使用相同的逻辑
-	
-	// 如果只设置了 StartSocket，EndLocation 默认为 StartLocation (原地检测)
-	if (EndSocketName.IsNone())
+	// ========== 步骤1：检查有效性 ==========
+	if (!MeshComp || !MeshComp->GetOwner() || !MeshComp->GetWorld())
 	{
-		EndLocation = StartLocation;
+		return;
 	}
 
-	// 计算胶囊体的旋转：
-	// 基础旋转取自 StartSocket，叠加 RotationOffset
-	FQuat BaseQuat = StartSocketTransform.GetRotation();
-	FQuat OffsetQuat = RotationOffset.Quaternion();
-	FQuat FinalQuat = BaseQuat * OffsetQuat;
+	AActor* OwnerActor = MeshComp->GetOwner();
+	UWorld* World = MeshComp->GetWorld();
 
-	// 2. 执行检测 (SweepMultiByChannel)
+	// ========== 步骤2：检查插槽是否存在 ==========
+	if (!MeshComp->DoesSocketExist(StartSocketName))
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("❌ 起始插槽不存在：%s"), *StartSocketName.ToString());
+		return;
+	}
+
+	// ========== 步骤3：计算起始位置和旋转 ==========
+	FTransform StartSocketTransform = MeshComp->GetSocketTransform(StartSocketName);
+	
+	// 应用起始插槽的位置偏移（局部空间）
+	FVector StartLocation = StartSocketTransform.TransformPosition(StartLocationOffset);
+	
+	// 应用起始插槽的旋转偏移
+	FQuat StartBaseQuat = StartSocketTransform.GetRotation();
+	FQuat StartOffsetQuat = StartRotationOffset.Quaternion();
+	FQuat StartFinalQuat = StartBaseQuat * StartOffsetQuat;
+
+	// ========== 步骤4：计算结束位置和旋转 ==========
+	FVector EndLocation;
+	FQuat EndFinalQuat;
+	
+	if (!EndSocketName.IsNone() && MeshComp->DoesSocketExist(EndSocketName))
+	{
+		// 使用结束插槽
+		FTransform EndSocketTransform = MeshComp->GetSocketTransform(EndSocketName);
+		
+		// 应用结束插槽的位置偏移（局部空间）
+		EndLocation = EndSocketTransform.TransformPosition(EndLocationOffset);
+		
+		// 应用结束插槽的旋转偏移
+		FQuat EndBaseQuat = EndSocketTransform.GetRotation();
+		FQuat EndOffsetQuat = EndRotationOffset.Quaternion();
+		EndFinalQuat = EndBaseQuat * EndOffsetQuat;
+	}
+	else
+	{
+		// 没有结束插槽，使用起始位置
+		EndLocation = StartLocation;
+		EndFinalQuat = StartFinalQuat;
+	}
+
+	// ========== 步骤5：执行胶囊体扫掠检测 ==========
 	TArray<FHitResult> HitResults;
 	FCollisionShape CapsuleShape = FCollisionShape::MakeCapsule(CapsuleRadius, CapsuleHalfHeight);
 	FCollisionQueryParams QueryParams;
 	QueryParams.AddIgnoredActor(OwnerActor);
+	QueryParams.bTraceComplex = false; // 使用简单碰撞
+	QueryParams.bReturnPhysicalMaterial = false;
 
-	bool bHit = MeshComp->GetWorld()->SweepMultiByChannel(
+	// 使用起始位置的旋转进行扫掠
+	bool bHit = World->SweepMultiByChannel(
 		HitResults,
 		StartLocation,
 		EndLocation,
-		FinalQuat,
-		ECC_Pawn, // 建议后续将此硬编码改为可配置的 TraceChannel 变量
+		StartFinalQuat,
+		ECC_Pawn, // 🔧 可以改为可配置的 TraceChannel
 		CapsuleShape,
 		QueryParams
 	);
 
-	// 3. 处理命中逻辑
+	// ========== 步骤6：处理命中结果 ==========
 	if (bHit)
 	{
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  检测到 %d 个碰撞"), HitResults.Num());
+		
 		for (const FHitResult& Hit : HitResults)
 		{
 			AActor* HitActor = Hit.GetActor();
-			// 排除已命中的、空的、或者是自己的
-			if (HitActor && HitActor != OwnerActor && !HitActors.Contains(HitActor))
+			
+			// ========== 步骤6.1：基础检查 ==========
+			if (!HitActor || HitActor == OwnerActor || HitActors.Contains(HitActor))
 			{
-				// 阵营判断
-				bool bIsEnemy = true;
-				if (ASG_UnitsBase* SourceUnit = Cast<ASG_UnitsBase>(OwnerActor))
+				continue;
+			}
+
+			// ========== 步骤6.2：阵营检查 ==========
+			bool bIsEnemy = false;
+			
+			// 获取施放者阵营
+			FGameplayTag SourceFaction;
+			if (ASG_UnitsBase* SourceUnit = Cast<ASG_UnitsBase>(OwnerActor))
+			{
+				SourceFaction = SourceUnit->FactionTag;
+			}
+			else if (ASG_MainCityBase* SourceMainCity = Cast<ASG_MainCityBase>(OwnerActor))
+			{
+				SourceFaction = SourceMainCity->FactionTag;
+			}
+			
+			// 检查目标阵营
+			if (SourceFaction.IsValid())
+			{
+				// 检查单位
+				if (ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(HitActor))
 				{
-					if (ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(HitActor))
+					if (TargetUnit->FactionTag != SourceFaction)
 					{
-						if (SourceUnit->FactionTag == TargetUnit->FactionTag)
-						{
-							bIsEnemy = false;
-						}
+						bIsEnemy = true;
 					}
 				}
-
-				if (bIsEnemy)
+				// 检查主城
+				else if (ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(HitActor))
 				{
-					HitActors.Add(HitActor);
-
-					FGameplayEventData EventData;
-					EventData.Instigator = OwnerActor;
-					EventData.Target = HitActor;
-					
-					// 发送事件
-					UAbilitySystemBlueprintLibrary::SendGameplayEventToActor(OwnerActor, HitEventTag, EventData);
+					if (TargetMainCity->FactionTag != SourceFaction)
+					{
+						bIsEnemy = true;
+					}
 				}
+			}
+
+			// ========== 步骤6.3：发送命中事件 ==========
+			if (bIsEnemy)
+			{
+				// 添加到已命中列表
+				HitActors.Add(HitActor);
+
+				// 构建 GameplayEventData
+				FGameplayEventData EventData;
+				EventData.Instigator = OwnerActor;
+				EventData.Target = HitActor;
+				
+				// ✨ 新增 - 传递伤害倍率
+				EventData.EventMagnitude = DamageMultiplier;
+				
+				// ✨ 新增 - 传递命中位置
+				EventData.ContextHandle.AddHitResult(Hit);
+				
+				// 发送事件到施放者的 ASC
+				UAbilitySystemComponent* SourceASC = UAbilitySystemBlueprintLibrary::GetAbilitySystemComponent(OwnerActor);
+				if (SourceASC && HitEventTag.IsValid())
+				{
+					SourceASC->HandleGameplayEvent(HitEventTag, &EventData);
+					
+					UE_LOG(LogSGGameplay, Log, TEXT("  ✅ 命中敌人：%s"), *HitActor->GetName());
+					UE_LOG(LogSGGameplay, Log, TEXT("    伤害倍率：%.2f"), DamageMultiplier);
+				}
+				else
+				{
+					UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 无法发送事件：ASC 或 HitEventTag 无效"));
+				}
+			}
+			else
+			{
+				UE_LOG(LogSGGameplay, Verbose, TEXT("  跳过友方单位：%s"), *HitActor->GetName());
 			}
 		}
 	}
 
-	// 4. 处理调试绘制 (Draw Debug)
+	// ========== 步骤7：绘制调试信息 ==========
 	if (DrawDebugType != EDrawDebugTrace::None)
 	{
+		// 计算调试显示时间
 		bool bPersistent = (DrawDebugType == EDrawDebugTrace::Persistent);
-		float LifeTime = (DrawDebugType == EDrawDebugTrace::ForDuration) ? DrawTime : (bPersistent ? 1000.0f : -1.0f);
+		float LifeTime = -1.0f; // 默认一帧
 		
-		// 如果是 ForOneFrame，LifeTime 设为 -1.0f (一帧)
-		if (DrawDebugType == EDrawDebugTrace::ForOneFrame)
+		if (DrawDebugType == EDrawDebugTrace::ForDuration)
 		{
-			LifeTime = -1.0f;
+			LifeTime = DrawTime;
+		}
+		else if (bPersistent)
+		{
+			LifeTime = 1000.0f;
 		}
 
-		// 绘制胶囊体
-		// 注意：Sweep 是从 Start 到 End，这里我们画出 Start 位置的胶囊体和 End 位置的胶囊体，或者画出扫掠过的体积
-		// 为了简洁和性能，通常绘制 Start 位置 或者 扫掠轨迹。
-		// 标准的 DrawDebugCapsule 只能画静态的，这里我们画在 Start 位置表示当前的检测体
+		// 选择颜色
+		FColor DebugColor = bHit ? TraceHitColor.ToFColor(true) : TraceColor.ToFColor(true);
+
+		// 绘制起始位置的胶囊体
 		DrawDebugCapsule(
-			MeshComp->GetWorld(),
+			World,
 			StartLocation,
 			CapsuleHalfHeight,
 			CapsuleRadius,
-			FinalQuat,
-			bHit ? TraceHitColor.ToFColor(true) : TraceColor.ToFColor(true),
+			StartFinalQuat,
+			DebugColor,
 			bPersistent,
 			LifeTime,
 			0,
-			1.0f
+			2.0f
 		);
 
-		// 如果 Start 和 End 不同，画一条线表示扫掠路径
+		// 如果起始和结束位置不同，绘制扫掠路径
 		if (!StartLocation.Equals(EndLocation, 1.0f))
 		{
+			// 绘制扫掠路径线
 			DrawDebugLine(
-				MeshComp->GetWorld(),
+				World,
 				StartLocation,
 				EndLocation,
-				bHit ? TraceHitColor.ToFColor(true) : TraceColor.ToFColor(true),
+				DebugColor,
+				bPersistent,
+				LifeTime,
+				0,
+				2.0f
+			);
+			
+			// 绘制结束位置的胶囊体（半透明）
+			DrawDebugCapsule(
+				World,
+				EndLocation,
+				CapsuleHalfHeight,
+				CapsuleRadius,
+				EndFinalQuat,
+				DebugColor,
 				bPersistent,
 				LifeTime,
 				0,
 				1.0f
 			);
-			
-			// 在结束位置也画一个虚影胶囊体
-			DrawDebugCapsule(
-				MeshComp->GetWorld(),
-				EndLocation,
-				CapsuleHalfHeight,
-				CapsuleRadius,
-				FinalQuat,
-				bHit ? TraceHitColor.ToFColor(true) : TraceColor.ToFColor(true),
+		}
+
+		// 绘制命中点
+		for (const FHitResult& Hit : HitResults)
+		{
+			DrawDebugPoint(
+				World,
+				Hit.ImpactPoint,
+				10.0f,
+				FColor::Orange,
 				bPersistent,
-				LifeTime,
-				0,
-				0.5f
+				LifeTime
 			);
 		}
 	}
+}
+
+// ========== NotifyEnd ==========
+
+void USG_ANS_MeleeDetection::NotifyEnd(
+	USkeletalMeshComponent* MeshComp, 
+	UAnimSequenceBase* Animation, 
+	const FAnimNotifyEventReference& EventReference)
+{
+	Super::NotifyEnd(MeshComp, Animation, EventReference);
+	
+	// 输出日志
+	if (MeshComp && MeshComp->GetOwner())
+	{
+		UE_LOG(LogSGGameplay, Verbose, TEXT("========== 近战检测结束 =========="));
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  施放者：%s"), *MeshComp->GetOwner()->GetName());
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  总共命中：%d 个敌人"), HitActors.Num());
+		UE_LOG(LogSGGameplay, Verbose, TEXT("========================================"));
+	}
+	
+	// 清空已命中列表
+	HitActors.Empty();
 }

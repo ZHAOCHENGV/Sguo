@@ -25,8 +25,7 @@ USG_BTTask_AttackTarget::USG_BTTask_AttackTarget()
 	// ✨ 新增 - 启用 Tick，等待攻击完成
 	bNotifyTick = true;
 	
-	// ❌ 删除 - 不能直接赋值 NodeMemory
-	// NodeMemory = sizeof(FSG_BTTaskAttackMemory);
+	
 }
 
 // ✨ 新增 - 获取实例内存大小
@@ -92,12 +91,36 @@ EBTNodeResult::Type USG_BTTask_AttackTarget::ExecuteTask(UBehaviorTreeComponent&
 		{
 			FVector UnitLocation = ControlledUnit->GetActorLocation();
 			float AttackRange = ControlledUnit->GetAttackRangeForAI();
-			float ActualDistance = FVector::Dist(UnitLocation, Target->GetActorLocation());
+			float ActualDistance = 0.0f;
 			
-			UE_LOG(LogSGGameplay, Log, TEXT("  距离检查："));
-			UE_LOG(LogSGGameplay, Log, TEXT("    实际距离：%.2f"), ActualDistance);
-			UE_LOG(LogSGGameplay, Log, TEXT("    攻击范围：%.2f"), AttackRange);
+			// ========== 🔧 关键修复开始：主城距离判定 ==========
+			ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(Target);
 			
+			// 如果目标是主城，且有检测盒，计算到盒体表面的距离
+			if (MainCity && MainCity->GetAttackDetectionBox())
+			{
+				UBoxComponent* DetectionBox = MainCity->GetAttackDetectionBox();
+				FVector BoxCenter = DetectionBox->GetComponentLocation();
+				FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
+				// 计算近似半径（取最大轴）
+				float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
+				
+				float DistanceToCenter = FVector::Dist(UnitLocation, BoxCenter);
+				// 表面距离 = 中心距离 - 半径 (最小为0)
+				ActualDistance = FMath::Max(0.0f, DistanceToCenter - BoxRadius);
+				
+				UE_LOG(LogSGGameplay, Log, TEXT("  🏰 主城目标距离检查："));
+				UE_LOG(LogSGGameplay, Log, TEXT("    检测盒半径：%.2f"), BoxRadius);
+				UE_LOG(LogSGGameplay, Log, TEXT("    到表面距离：%.2f"), ActualDistance);
+			}
+			else
+			{
+				// 普通单位：直接计算到 Actor 中心的距离
+				ActualDistance = FVector::Dist(UnitLocation, Target->GetActorLocation());
+				UE_LOG(LogSGGameplay, Log, TEXT("  👤 普通单位距离：%.2f"), ActualDistance);
+			}
+			// ========== 🔧 关键修复结束 ==========
+			UE_LOG(LogSGGameplay, Log, TEXT("  攻击范围：%.2f (容差 +50.0)"), AttackRange);
 			if (ActualDistance > AttackRange + 50.0f)
 			{
 				UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 不在攻击范围内，任务失败"));

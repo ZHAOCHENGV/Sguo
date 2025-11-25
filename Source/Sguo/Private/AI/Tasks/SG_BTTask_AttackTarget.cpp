@@ -46,43 +46,43 @@ uint16 USG_BTTask_AttackTarget::GetInstanceMemorySize() const
  */
 EBTNodeResult::Type USG_BTTask_AttackTarget::ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
 {
-	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-	UE_LOG(LogSGGameplay, Log, TEXT("🎯 攻击目标任务：开始执行"));
-	
 	// ========== 步骤1：获取 AI Controller ==========
 	AAIController* AIController = OwnerComp.GetAIOwner();
-	if (!AIController)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ AI Controller 无效"));
-		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-		return EBTNodeResult::Failed;
-	}
-	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ AI Controller 有效"));
+	if (!AIController) return EBTNodeResult::Failed;
 	
 	// ========== 步骤2：立即停止移动 ==========
 	AIController->StopMovement();
-	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 已停止移动"));
 	
 	// ========== 步骤3：获取控制的单位 ==========
 	ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
-	if (!ControlledUnit)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 控制的单位无效"));
-		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-		return EBTNodeResult::Failed;
-	}
-	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 控制的单位：%s"), *ControlledUnit->GetName());
+	if (!ControlledUnit) return EBTNodeResult::Failed;
 	
-	// ========== ✨ 新增 - 步骤4：检查是否在冷却中 ==========
+	// 获取任务内存
+	FSG_BTTaskAttackMemory* Memory = reinterpret_cast<FSG_BTTaskAttackMemory*>(NodeMemory);
+	Memory->RemainingWaitTime = 0.0f; // 初始化
+
+	// ========== 🔧 修改 - 步骤4：智能检查状态 ==========
+	
+	// 情况A：单位正在播放攻击动画
+	if (ControlledUnit->bIsAttacking)
+	{
+		// ✨ 关键修复：不要返回 Failed，而是返回 InProgress 等待动画结束
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  ⚠️ 单位正在攻击动画中，BT 任务进入等待状态"));
+		return EBTNodeResult::InProgress;
+	}
+
+	// 情况B：单位处于数值冷却中
 	if (ControlledUnit->IsAttackOnCooldown())
 	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("  ⏳ 单位攻击冷却中，剩余：%.2f 秒"), 
-			ControlledUnit->GetCooldownRemainingTime());
-		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-		return EBTNodeResult::Failed;
+		float Remaining = ControlledUnit->GetCooldownRemainingTime();
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  ⏳ 单位攻击冷却中，剩余：%.2f 秒，BT 任务进入等待状态"), Remaining);
+		
+		// 设置等待时间并进入等待
+		Memory->RemainingWaitTime = Remaining;
+		return EBTNodeResult::InProgress;
 	}
 	
-	// ========== 步骤5：检查距离 ==========
+	// ========== 步骤5：检查距离 (保持原有逻辑) ==========
 	UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
 	if (BlackboardComp)
 	{
@@ -93,70 +93,50 @@ EBTNodeResult::Type USG_BTTask_AttackTarget::ExecuteTask(UBehaviorTreeComponent&
 			float AttackRange = ControlledUnit->GetAttackRangeForAI();
 			float ActualDistance = 0.0f;
 			
-			// ========== 🔧 关键修复开始：主城距离判定 ==========
 			ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(Target);
-			
-			// 如果目标是主城，且有检测盒，计算到盒体表面的距离
 			if (MainCity && MainCity->GetAttackDetectionBox())
 			{
 				UBoxComponent* DetectionBox = MainCity->GetAttackDetectionBox();
 				FVector BoxCenter = DetectionBox->GetComponentLocation();
 				FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
-				// 计算近似半径（取最大轴）
 				float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
-				
 				float DistanceToCenter = FVector::Dist(UnitLocation, BoxCenter);
-				// 表面距离 = 中心距离 - 半径 (最小为0)
 				ActualDistance = FMath::Max(0.0f, DistanceToCenter - BoxRadius);
-				
-				UE_LOG(LogSGGameplay, Log, TEXT("  🏰 主城目标距离检查："));
-				UE_LOG(LogSGGameplay, Log, TEXT("    检测盒半径：%.2f"), BoxRadius);
-				UE_LOG(LogSGGameplay, Log, TEXT("    到表面距离：%.2f"), ActualDistance);
 			}
 			else
 			{
-				// 普通单位：直接计算到 Actor 中心的距离
 				ActualDistance = FVector::Dist(UnitLocation, Target->GetActorLocation());
-				UE_LOG(LogSGGameplay, Log, TEXT("  👤 普通单位距离：%.2f"), ActualDistance);
 			}
-			// ========== 🔧 关键修复结束 ==========
-			UE_LOG(LogSGGameplay, Log, TEXT("  攻击范围：%.2f (容差 +50.0)"), AttackRange);
+
 			if (ActualDistance > AttackRange + 50.0f)
 			{
-				UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 不在攻击范围内，任务失败"));
-				UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 				return EBTNodeResult::Failed;
 			}
-			
-			UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 在攻击范围内"));
 		}
 	}
 	
 	// ========== 步骤6：触发攻击 ==========
-	UE_LOG(LogSGGameplay, Log, TEXT("  调用 PerformAttack()..."));
 	bool bSuccess = ControlledUnit->PerformAttack();
 	
 	if (bSuccess)
 	{
 		UE_LOG(LogSGGameplay, Log, TEXT("  ✅ 攻击触发成功"));
 		
-		// ========== 🔧 修改 - 使用 DataTable 的冷却时间 ==========
-		FSG_BTTaskAttackMemory* Memory = reinterpret_cast<FSG_BTTaskAttackMemory*>(NodeMemory);
-		
 		// 从单位获取当前攻击的冷却时间
 		FSGUnitAttackDefinition CurrentAttack = ControlledUnit->GetCurrentAttackDefinition();
 		Memory->RemainingWaitTime = CurrentAttack.Cooldown;
 		
-		UE_LOG(LogSGGameplay, Log, TEXT("  使用 DataTable 冷却时间：%.2f 秒"), Memory->RemainingWaitTime);
-		UE_LOG(LogSGGameplay, Log, TEXT("  返回：InProgress（等待冷却）"));
-		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 		return EBTNodeResult::InProgress;
 	}
 	else
 	{
+		// 如果 PerformAttack 失败（可能是因为极短时间内的状态变化），我们再次检查是否是因为正在攻击
+		if (ControlledUnit->bIsAttacking)
+		{
+			return EBTNodeResult::InProgress;
+		}
+		
 		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 攻击触发失败"));
-		UE_LOG(LogSGGameplay, Log, TEXT("  返回：Failed"));
-		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 		return EBTNodeResult::Failed;
 	}
 }
@@ -175,25 +155,32 @@ void USG_BTTask_AttackTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
 {
 	Super::TickTask(OwnerComp, NodeMemory, DeltaSeconds);
 	
+	ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(OwnerComp.GetAIOwner()->GetPawn());
+	if (!ControlledUnit)
+	{
+		FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
+		return;
+	}
+
 	// 获取任务内存
 	FSG_BTTaskAttackMemory* Memory = reinterpret_cast<FSG_BTTaskAttackMemory*>(NodeMemory);
 	
-	// 减少等待时间
-	Memory->RemainingWaitTime -= DeltaSeconds;
-	
-	// ✨ 新增 - 每 0.5 秒输出一次调试日志
-	static float DebugLogTimer = 0.0f;
-	DebugLogTimer += DeltaSeconds;
-	if (DebugLogTimer >= 0.5f)
+	// 1. 更新数值冷却时间
+	if (Memory->RemainingWaitTime > 0.0f)
 	{
-		DebugLogTimer = 0.0f;
-		UE_LOG(LogSGGameplay, Verbose, TEXT("  ⏳ 攻击冷却中：剩余 %.2f 秒"), Memory->RemainingWaitTime);
+		Memory->RemainingWaitTime -= DeltaSeconds;
 	}
 	
-	// 等待完成
-	if (Memory->RemainingWaitTime <= 0.0f)
+	// 2. 检查是否正在播放攻击动画
+	bool bIsAnimating = ControlledUnit->bIsAttacking;
+
+	// ✨ 关键逻辑：只有当 [数值冷却结束] 且 [单位不在攻击动作中] 时，才算任务完成
+	if (Memory->RemainingWaitTime <= 0.0f && !bIsAnimating)
 	{
-		UE_LOG(LogSGGameplay, Log, TEXT("✓ 攻击目标任务：攻击完成"));
-		FinishLatentTask(OwnerComp, EBTNodeResult::Succeeded);
+		// 再次检查单位本身的冷却器（双重保险）
+		if (!ControlledUnit->IsAttackOnCooldown())
+		{
+			FinishLatentTask(OwnerComp, EBTNodeResult::Succeeded);
+		}
 	}
 }

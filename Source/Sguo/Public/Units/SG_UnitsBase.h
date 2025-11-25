@@ -328,4 +328,39 @@ protected:
     
     FGameplayTag DetermineFactionTag() const;
     void InitializeWithDefaults();
+
+public:
+    // ========== ✨ 新增 - 攻击状态控制 ==========
+
+    /**
+     * @brief 是否正在执行攻击动作
+     * @details 
+     * True：技能正在运行（播放动画中）
+     * False：技能已结束
+     * 用于防止在动画播放期间再次尝试激活技能
+     */
+    UPROPERTY(BlueprintReadOnly, Category = "Attack State")
+    bool bIsAttacking = false;
+    /**
+         * @brief 开始攻击循环（由 GA 在播放动画时调用）
+         * @param AnimDuration 动画实际播放时长（受攻速影响后的时长）
+         * @details 
+         * 功能说明：
+         * - 立即设置正在攻击状态
+         * - 立即开始计算冷却（冷却时间 = 动画时长 + 配置冷却）
+         * - 确保冷却从动作开始时计算
+         */
+    UFUNCTION(BlueprintCallable, Category = "Attack")
+    void StartAttackCycle(float AnimDuration);
+    
+    /**
+     * @brief 攻击技能结束回调
+     * @details 
+     * 功能说明：
+     * - 供 GA_Attack 在 EndAbility 时调用
+     * - 标记攻击结束
+     * - 正式开始计算冷却时间
+     */
+    UFUNCTION(BlueprintCallable, Category = "Attack")
+    void OnAttackAbilityFinished();
 };

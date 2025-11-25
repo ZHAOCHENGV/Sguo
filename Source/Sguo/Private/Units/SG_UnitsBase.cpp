@@ -666,128 +666,68 @@ bool ASG_UnitsBase::PerformAttack()
 	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 	UE_LOG(LogSGGameplay, Log, TEXT("🔫 %s 尝试执行攻击"), *GetName());
 	
-	// ========== ✨ 新增 - 步骤1：检查是否在冷却中 ==========
+	// 1. 检查冷却
 	if (bIsAttackOnCooldown)
 	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("  ⏳ 攻击冷却中，剩余时间：%.2f 秒"), CooldownRemainingTime);
-		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  ⏳ 攻击冷却中，剩余：%.2f 秒"), CooldownRemainingTime);
+		return false;
+	}
+
+	// 2. 检查是否正在攻击（防止动画未结束时重复触发）
+	if (bIsAttacking)
+	{
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  ⚠️ 上一次攻击动画尚未结束，跳过"));
 		return false;
 	}
 	
-	// ========== 步骤2：检查攻击技能列表 ==========
+	// 3. 检查配置
 	if (CachedAttackAbilities.Num() == 0)
 	{
 		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 攻击技能列表为空！"));
-		UE_LOG(LogSGGameplay, Error, TEXT("  提示：检查 DataTable 中是否配置了攻击技能"));
-		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 		return false;
 	}
 	
-	// ========== 步骤3：随机选择攻击技能 ==========
+	// 4. 选择技能
 	CurrentAttackIndex = FMath::RandRange(0, CachedAttackAbilities.Num() - 1);
 	const FSGUnitAttackDefinition& SelectedAttack = CachedAttackAbilities[CurrentAttackIndex];
 	
-	UE_LOG(LogSGGameplay, Log, TEXT("  随机选择攻击技能 [%d/%d]"), 
-		CurrentAttackIndex + 1, CachedAttackAbilities.Num());
-	UE_LOG(LogSGGameplay, Log, TEXT("    动画：%s"), 
-		SelectedAttack.Montage ? *SelectedAttack.Montage->GetName() : TEXT("未设置"));
-	UE_LOG(LogSGGameplay, Log, TEXT("    攻击类型：%s"), 
-		*UEnum::GetValueAsString(SelectedAttack.AttackType));
-	UE_LOG(LogSGGameplay, Log, TEXT("    冷却时间：%.2f 秒"), SelectedAttack.Cooldown);
-	
-	// ========== 步骤4：检查 ASC 是否有效 ==========
-	if (!AbilitySystemComponent)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ AbilitySystemComponent 为空"));
-		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-		return false;
-	}
-	
-	// ========== 步骤5：处理特定能力 ==========
+	// 5. 激活能力
+	if (!AbilitySystemComponent) return false;
+
 	FGameplayAbilitySpecHandle AbilityHandleToActivate;
-	
 	if (SelectedAttack.SpecificAbilityClass)
 	{
-		UE_LOG(LogSGGameplay, Log, TEXT("  使用指定能力：%s"), 
-			*SelectedAttack.SpecificAbilityClass->GetName());
-		
-		// 检查是否已授予此能力
 		FGameplayAbilitySpecHandle* FoundHandle = GrantedSpecificAbilities.Find(SelectedAttack.SpecificAbilityClass);
-		
 		if (FoundHandle && FoundHandle->IsValid())
 		{
-			// 已授予，直接使用
 			AbilityHandleToActivate = *FoundHandle;
-			UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 能力已授予，直接激活"));
 		}
 		else
 		{
-			// 未授予，先授予能力
-			UE_LOG(LogSGGameplay, Log, TEXT("  授予特定能力..."));
-			
-			FGameplayAbilitySpec AbilitySpec(
-				SelectedAttack.SpecificAbilityClass,
-				1,
-				INDEX_NONE,
-				this
-			);
-			
-			FGameplayAbilitySpecHandle NewHandle = AbilitySystemComponent->GiveAbility(AbilitySpec);
-			
-			if (NewHandle.IsValid())
-			{
-				GrantedSpecificAbilities.Add(SelectedAttack.SpecificAbilityClass, NewHandle);
-				AbilityHandleToActivate = NewHandle;
-				UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 特定能力授予成功"));
-			}
-			else
-			{
-				UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 特定能力授予失败"));
-				UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-				return false;
-			}
+			FGameplayAbilitySpec AbilitySpec(SelectedAttack.SpecificAbilityClass, 1, INDEX_NONE, this);
+			AbilityHandleToActivate = AbilitySystemComponent->GiveAbility(AbilitySpec);
+			GrantedSpecificAbilities.Add(SelectedAttack.SpecificAbilityClass, AbilityHandleToActivate);
 		}
 	}
 	else
 	{
-		// 使用通用攻击能力
-		if (!GrantedCommonAttackHandle.IsValid())
-		{
-			UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 通用攻击能力未授予"));
-			UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-			return false;
-		}
-		
+		if (!GrantedCommonAttackHandle.IsValid()) return false;
 		AbilityHandleToActivate = GrantedCommonAttackHandle;
-		UE_LOG(LogSGGameplay, Log, TEXT("  使用通用攻击能力"));
 	}
 	
-	// ========== 步骤6：激活能力 ==========
 	bool bSuccess = AbilitySystemComponent->TryActivateAbility(AbilityHandleToActivate);
 	
 	if (bSuccess)
 	{
-		UE_LOG(LogSGGameplay, Log, TEXT("  ✅ 攻击能力激活成功"));
-		
-		// ========== ✨ 新增 - 步骤7：开始冷却 ==========
-		if (SelectedAttack.Cooldown > 0.0f)
-		{
-			StartAttackCooldown(SelectedAttack.Cooldown);
-		}
-		else
-		{
-			// 如果冷却时间为 0，根据攻击速度自动计算
-			float AutoCooldown = 1.0f / FMath::Max(BaseAttackSpeed, 0.1f);
-			StartAttackCooldown(AutoCooldown);
-			UE_LOG(LogSGGameplay, Log, TEXT("  自动计算冷却时间：%.2f 秒"), AutoCooldown);
-		}
+		// ✨ 关键修改：不再这里设置状态，而是等待 GA 调用 StartAttackCycle
+		// 这样能确保 GA 获取到准确的动画时长后再设置冷却
+		UE_LOG(LogSGGameplay, Log, TEXT("  ✅ 攻击能力激活成功，等待 GA 确认动画时长..."));
 	}
 	else
 	{
 		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 攻击能力激活失败"));
 	}
 	
-	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 	return bSuccess;
 }
 
@@ -1152,6 +1092,55 @@ void ASG_UnitsBase::InitializeWithDefaults()
 	UE_LOG(LogSGGameplay, Log, TEXT("    移动速度：%.0f (基础: %.0f, 倍率: %.2f)"), 
 		BaseMoveSpeed * SpeedMult, BaseMoveSpeed, SpeedMult);
 	UE_LOG(LogSGGameplay, Log, TEXT("    视野范围：%.0f"), VisionRange);
+}
+/**
+ * @brief 开始攻击循环（由 GA 调用）
+ * @param AnimDuration 动画实际播放时长
+ * @details 
+ * 核心逻辑修改：
+ * - 冷却总时间 = 动画时长 + 配置冷却
+ * - 立即启动计时器
+ */
+void ASG_UnitsBase::StartAttackCycle(float AnimDuration)
+{
+	// 1. 标记正在攻击
+	bIsAttacking = true;
+
+	// 2. 获取配置的额外冷却时间
+	FSGUnitAttackDefinition CurrentAttack = GetCurrentAttackDefinition();
+	float ConfigCooldown = CurrentAttack.Cooldown;
+
+	// 3. 计算总锁定时间
+	// 总时间 = 动画播放时间 + 额外冷却时间
+	// 例子：动画1秒，冷却1秒 -> 总冷却2秒（动画播完后还要等1秒）
+	// 例子：动画1秒，冷却0秒 -> 总冷却1秒（动画播完立即可以动）
+	float TotalCooldownTime = AnimDuration + ConfigCooldown;
+
+	// 4. 启动冷却计时器
+	if (TotalCooldownTime > 0.0f)
+	{
+		StartAttackCooldown(TotalCooldownTime);
+		UE_LOG(LogSGGameplay, Log, TEXT("  🏁 启动攻击循环：动画(%.2f) + 冷却(%.2f) = 总计 %.2f 秒"), 
+			AnimDuration, ConfigCooldown, TotalCooldownTime);
+	}
+}
+
+/**
+ * @brief 攻击技能结束回调（由 GA 调用）
+ * @details 
+ * 功能说明：
+ * - 重置攻击状态标记
+ * - 正式开始计算冷却时间
+ */
+void ASG_UnitsBase::OnAttackAbilityFinished()
+{
+	if (bIsAttacking)
+	{
+		bIsAttacking = false;
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  🛑 攻击动画播放完毕 (bIsAttacking = false)"));
+		
+		// 注意：这里不处理 bIsAttackOnCooldown，因为它是基于时间的，会自动结束
+	}
 }
 
 /**

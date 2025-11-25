@@ -66,11 +66,18 @@ USG_GameplayAbility_Attack::USG_GameplayAbility_Attack()
 
 /**
  * @brief 激活能力
+ * @param Handle 能力句柄
+ * @param ActorInfo Actor信息
+ * @param ActivationInfo 激活信息
+ * @param TriggerEventData 触发事件数据
  * @details
  * 功能说明：
- * - 播放攻击动画
- * - 绑定动画通知回调
- * - 如果没有动画，直接执行攻击判定
+ * - 1. 从单位加载最新的攻击配置（动画、伤害倍率等）。
+ * - 2. 启动攻击命中事件的监听任务。
+ * - 3. 计算动画实际时长（考虑攻速倍率）。
+ * - 4. 播放攻击蒙太奇动画。
+ * - 5. ✨ 关键：立即通知单位开始攻击循环（StartAttackCycle），传入动画时长以正确计算冷却。
+ * - 6. 如果没有动画，则按默认时长处理并直接执行判定。
  */
 void USG_GameplayAbility_Attack::ActivateAbility(
 	const FGameplayAbilitySpecHandle Handle,
@@ -79,47 +86,52 @@ void USG_GameplayAbility_Attack::ActivateAbility(
 	const FGameplayEventData* TriggerEventData
 )
 {
+	// 调用父类激活逻辑
 	Super::ActivateAbility(Handle, ActorInfo, ActivationInfo, TriggerEventData);
+	
 	UE_LOG(LogSGGameplay, Log, TEXT("========== 攻击技能激活 =========="));
 	
-	// ✨ 新增 - 从单位加载当前攻击配置
+	// 1. 从单位加载当前攻击配置 (AttackMontage, DamageMultiplier, etc.)
 	LoadAttackConfigFromUnit();
 	
-	// ✨ 新增 - 监听攻击命中事件（从 AnimNotifyState 发送）
+	// 2. 创建并激活"等待游戏事件"任务，用于监听 AnimNotifyState 发送的命中事件 (Event.Attack.Hit)
 	UAbilityTask_WaitGameplayEvent* WaitEventTask = UAbilityTask_WaitGameplayEvent::WaitGameplayEvent(
 		this,
 		FGameplayTag::RequestGameplayTag(FName("Event.Attack.Hit")),
 		nullptr,
-		false, // OnlyTriggerOnce = false（允许多次命中）
+		false, // OnlyTriggerOnce = false（允许一次攻击多段命中）
 		false  // OnlyMatchExact
 	);
 
 	if (WaitEventTask)
 	{
-		// 绑定到命中事件处理函数
+		// 绑定到 OnAttackHitEvent 回调
 		WaitEventTask->EventReceived.AddDynamic(this, &USG_GameplayAbility_Attack::OnAttackHitEvent);
+		// 激活任务
 		WaitEventTask->ReadyForActivation();
 		
 		UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 已启动命中事件监听"));
 	}
 
-	UE_LOG(LogSGGameplay, Log, TEXT("========== 攻击技能激活 =========="));
+	// 日志输出当前攻击信息
 	UE_LOG(LogSGGameplay, Log, TEXT("  施放者：%s"), 
 		ActorInfo->AvatarActor.IsValid() ? *ActorInfo->AvatarActor->GetName() : TEXT("None"));
 	UE_LOG(LogSGGameplay, Log, TEXT("  攻击类型：%s"), 
 		*UEnum::GetValueAsString(AttackType));
 	
-	
-	// ✨ 新增 - 从单位加载当前攻击配置
-	LoadAttackConfigFromUnit();
+	// 准备变量存储动画实际时长
+	float ActualDuration = 0.0f;
 
+	// 3. 处理动画播放逻辑
 	if (AttackMontage && ActorInfo->AvatarActor.IsValid())
 	{
+		// 获取 Character 指针
 		if (ACharacter* Character = Cast<ACharacter>(ActorInfo->AvatarActor.Get()))
 		{
+			// 获取 AnimInstance
 			if (UAnimInstance* AnimInstance = Character->GetMesh()->GetAnimInstance())
 			{
-				// 获取攻击速度倍率
+				// 3.1 获取攻击速度倍率 (从 AttributeSet)
 				float PlayRate = 1.0f;
 				if (const USG_AbilitySystemComponent* SGASC = Cast<USG_AbilitySystemComponent>(GetAbilitySystemComponentFromActorInfo()))
 				{
@@ -129,43 +141,44 @@ void USG_GameplayAbility_Attack::ActivateAbility(
 					}
 				}
 
-				// 使用攻击速度播放蒙太奇
+				// 3.2 播放蒙太奇
 				float MontageLength = AnimInstance->Montage_Play(AttackMontage, PlayRate);
 				
-				// 绑定传统的 AnimNotify 回调
+				// 3.3 计算实际时长 = 原始时长 / 播放速率
+				// 防止除零错误
+				ActualDuration = (PlayRate > 0.0f) ? (MontageLength / PlayRate) : MontageLength;
+				
+				// 3.4 绑定 AnimNotify 回调 (用于触发伤害判定点)
 				AnimInstance->OnPlayMontageNotifyBegin.AddDynamic(
 					this, 
 					&USG_GameplayAbility_Attack::OnMontageNotifyBegin
 				);
 				
-				// ❌ 删除 - 旧的 WaitGameplayEvent 监听
-				// UAbilityTask_WaitGameplayEvent* WaitEventTask = UAbilityTask_WaitGameplayEvent::WaitGameplayEvent(...);
-				// WaitEventTask->EventReceived.AddDynamic(this, &USG_GameplayAbility_Attack::OnDamageGameplayEvent);
-
 				UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 攻击动画已播放：%s"), *AttackMontage->GetName());
+				UE_LOG(LogSGGameplay, Log, TEXT("  实际动画时长：%.2f 秒 (倍率: %.2f)"), ActualDuration, PlayRate);
 				
-				// 根据倍率计算实际持续时间
-				float ActualDuration = (PlayRate > 0.0f) ? (MontageLength / PlayRate) : MontageLength;
-				UE_LOG(LogSGGameplay, Log, TEXT("  实际动画时长：%.2f 秒"), ActualDuration);
-				
-				// 设置定时器，确保能力在动画结束后结束
+				// 3.5 设置定时器，确保能力在动画结束后正确结束
 				FTimerHandle TimerHandle;
 				FTimerDelegate TimerDelegate;
+				// 使用 Lambda 绑定结束逻辑
 				TimerDelegate.BindLambda([this, Handle, ActorInfo, ActivationInfo, AnimInstance]()
 				{
+					// 清理委托绑定
 					if (AnimInstance)
 					{
 						AnimInstance->OnPlayMontageNotifyBegin.RemoveDynamic(
 							this, 
 							&USG_GameplayAbility_Attack::OnMontageNotifyBegin
 						);
-						UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 解绑动画通知回调"));
+						UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 解绑动画通知回调"));
 					}
 					
-					UE_LOG(LogSGGameplay, Log, TEXT("  ⏰ 攻击动画结束，结束能力"));
+					// 正常结束能力
+					UE_LOG(LogSGGameplay, Verbose, TEXT("  ⏰ 攻击动画自然结束，结束 Ability"));
 					EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 				});
 				
+				// 启动定时器
 				ActorInfo->AvatarActor->GetWorldTimerManager().SetTimer(
 					TimerHandle,
 					TimerDelegate,
@@ -187,9 +200,24 @@ void USG_GameplayAbility_Attack::ActivateAbility(
 	}
 	else
 	{
+		// 处理无动画的情况（瞬发）
 		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 无攻击动画，直接执行攻击判定"));
+		
+		// 设置一个默认短时长，防止逻辑瞬间完成导致的问题
+		ActualDuration = 0.5f; 
+		
+		// 直接执行一次攻击判定
 		PerformAttack();
+		
+		// 立即结束能力
 		EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
+	}
+
+	// 4. ✨ 关键修改：立即通知 Unit 开始计算冷却循环
+	// 这样 Unit 就能知道："虽然动画要播 X 秒，但我现在就要开始计算 (X + Cooldown) 秒的计时了"
+	if (ASG_UnitsBase* SourceUnit = Cast<ASG_UnitsBase>(ActorInfo->AvatarActor.Get()))
+	{
+		SourceUnit->StartAttackCycle(ActualDuration);
 	}
 
 	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
@@ -273,6 +301,17 @@ void USG_GameplayAbility_Attack::EndAbility(
 
 	UE_LOG(LogSGGameplay, Verbose, TEXT("攻击技能结束 (取消: %s)"), 
 		bWasCancelled ? TEXT("是") : TEXT("否"));
+
+	// ✨ 新增 - 通知单位技能结束，开始计算冷却
+	if (ActorInfo && ActorInfo->AvatarActor.IsValid())
+	{
+		if (ASG_UnitsBase* SourceUnit = Cast<ASG_UnitsBase>(ActorInfo->AvatarActor.Get()))
+		{
+			// 只有在正常结束（非取消）或者你需要取消也算冷却时调用
+			// 通常这里无论是否取消都应该通知 Unit 重置 bIsAttacking 状态，否则 Unit 会卡死在攻击状态
+			SourceUnit->OnAttackAbilityFinished();
+		}
+	}
 
 	Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
 }

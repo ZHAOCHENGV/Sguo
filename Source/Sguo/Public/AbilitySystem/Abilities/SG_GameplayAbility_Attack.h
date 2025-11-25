@@ -77,6 +77,44 @@ protected:
     UPROPERTY(BlueprintReadWrite, Category = "Attack Config", meta = (DisplayName = "投射物生成偏移"))
     FVector ProjectileSpawnOffset = FVector(50.0f, 0.0f, 80.0f);
 
+    // ✨ 新增 - 发射投射物到目标
+    /**
+     * @brief 发射投射物攻击目标
+     * @param Target 目标 Actor
+     * @details
+     * 功能说明：
+     * - 计算从当前位置到目标的抛物线弹道
+     * - 生成 ProjectileClass 实例
+     * - 初始化投射物参数
+     */
+    void SpawnProjectileToTarget(AActor* Target, const FVector* OverrideSpawnLocation = nullptr);
+
+    // ✨ 新增 - 接收 Notify 发送的生成事件
+    UFUNCTION()
+    void OnSpawnProjectileEvent(FGameplayEventData Payload);
+    
+    // ✨ 新增 - 带完整参数的投射物生成函数
+    /**
+     * @brief 使用完整参数发射投射物
+     * @param Target 目标 Actor
+     * @param SpawnLocation 发射位置（世界空间）
+     * @param SpawnRotation 发射旋转（世界空间）
+     * @param OverrideSpeed 覆盖速度（0 = 使用默认）
+     * @param GravityScale 重力缩放
+     * @details
+     * 功能说明：
+     * - 使用 AnimNotify 提供的精确发射参数
+     * - 支持覆盖投射物的速度和重力
+     * - 计算到目标的弹道
+     */
+    void SpawnProjectileToTargetWithParams(
+        AActor* Target,
+        const FVector& SpawnLocation,
+        const FRotator& SpawnRotation,
+        float OverrideSpeed,
+        float GravityScale
+    );
+    
     // ========== ✨ 新增 - 命中事件处理 ==========
 	
     /**
@@ -113,4 +151,23 @@ protected:
     
     UFUNCTION(BlueprintImplementableEvent, Category = "Attack", meta = (DisplayName = "攻击命中时"))
     void OnAttackHit(const TArray<AActor*>& Targets);
+
+    // ✨ 新增 - 带弧度参数的投射物生成函数
+    /**
+     * @brief 使用完整参数发射投射物（包含弧度控制）
+     * @param Target 目标 Actor
+     * @param SpawnLocation 发射位置
+     * @param SpawnRotation 发射旋转
+     * @param OverrideSpeed 覆盖速度（0 = 使用默认）
+     * @param GravityScale 重力缩放
+     * @param ArcParam 弧度参数（0-1，控制抛物线高度）
+     */
+    void SpawnProjectileWithArc(
+        AActor* Target,
+        const FVector& SpawnLocation,
+        const FRotator& SpawnRotation,
+        float OverrideSpeed,
+        float GravityScale,
+        float ArcParam
+    );
 };

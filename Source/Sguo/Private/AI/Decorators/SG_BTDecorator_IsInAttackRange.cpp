@@ -35,6 +35,7 @@ USG_BTDecorator_IsInAttackRange::USG_BTDecorator_IsInAttackRange()
  * 功能说明：
  * - 🔧 修复：主城使用检测盒表面距离
  * - ✨ 新增：进入攻击范围时立即停止移动
+ * 🔧 修改 - 增加目标有效性检查
  */
 bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) const
 {
@@ -53,7 +54,34 @@ bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeCo
 	if (KeyName.IsNone()) return false;
 	
 	AActor* Target = Cast<AActor>(BlackboardComp->GetValueAsObject(KeyName));
-	if (!Target) return false;
+	
+	
+	// ✨ 新增 - 步骤2：检查目标是否有效（存在且存活）
+	if (!Target)
+	{
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  IsInAttackRange: 目标为空，返回 false"));
+		return false;
+	}
+    
+	// ✨ 新增 - 检查单位是否已死亡
+	if (ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(Target))
+	{
+		if (TargetUnit->bIsDead)
+		{
+			UE_LOG(LogSGGameplay, Verbose, TEXT("  IsInAttackRange: 目标单位已死亡，返回 false"));
+			return false;
+		}
+	}
+    
+	// ✨ 新增 - 检查主城是否已摧毁
+	if (ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(Target))
+	{
+		if (!TargetMainCity->IsAlive())
+		{
+			UE_LOG(LogSGGameplay, Verbose, TEXT("  IsInAttackRange: 目标主城已摧毁，返回 false"));
+			return false;
+		}
+	}
 	
 	// ========== 步骤6：获取单位位置和攻击范围 ==========
 	FVector UnitLocation = ControlledUnit->GetActorLocation();

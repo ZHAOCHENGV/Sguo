@@ -36,6 +36,20 @@ public:
 	 */
 	USG_BTDecorator_IsTargetValid();
 
+
+	// ✨ 新增 - Tick 函数声明
+	/**
+	 * @brief Tick 更新
+	 * @param OwnerComp 行为树组件
+	 * @param NodeMemory 节点内存
+	 * @param DeltaSeconds 时间间隔
+	 * @details
+	 * 功能说明：
+	 * - 实时检测目标是否死亡
+	 * - 目标死亡时立即中断当前节点
+	 */
+	virtual void TickNode(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds) override;
+
 	/**
 	 * @brief 计算条件
 	 * @param OwnerComp 行为树组件

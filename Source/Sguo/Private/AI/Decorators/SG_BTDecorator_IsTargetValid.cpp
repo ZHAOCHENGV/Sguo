@@ -12,7 +12,7 @@
 #include "BehaviorTree/BlackboardComponent.h"
 #include "Buildings/SG_MainCityBase.h"
 #include "Debug/SG_LogCategories.h"
-
+#include "BehaviorTree/BehaviorTreeComponent.h"  // ✨ 新增
 /**
  * @brief 构造函数
  * @details
@@ -24,12 +24,16 @@ USG_BTDecorator_IsTargetValid::USG_BTDecorator_IsTargetValid()
 {
 	// 设置装饰器名称
 	NodeName = TEXT("目标是否有效");
-	
-	// 配置观察者中断模式（目标变化时中断）
+    
+	// 🔧 修改 - 启用 Tick 以便实时检测目标状态变化
+	bNotifyTick = true;
 	bNotifyBecomeRelevant = true;
 	bNotifyCeaseRelevant = true;
-	
-	// 配置黑板键过滤器（只接受 Object 类型）
+    
+	// ✨ 新增 - 设置中断模式，当条件变化时中断子节点
+	FlowAbortMode = EBTFlowAbortMode::Self;
+    
+	// 配置黑板键过滤器
 	TargetKey.AddObjectFilter(this, GET_MEMBER_NAME_CHECKED(USG_BTDecorator_IsTargetValid, TargetKey), AActor::StaticClass());
 }
 
@@ -51,22 +55,22 @@ bool USG_BTDecorator_IsTargetValid::CalculateRawConditionValue(UBehaviorTreeComp
 	{
 		return false;
 	}
-	
+    
 	// 获取黑板组件
 	UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
 	if (!BlackboardComp)
 	{
 		return false;
 	}
-	
+    
 	// 获取目标
 	AActor* Target = Cast<AActor>(BlackboardComp->GetValueAsObject(TargetKey.SelectedKeyName));
 	if (!Target)
 	{
 		return false;
 	}
-	
-	// ========== 检查单位是否已死亡 ==========
+    
+	// 检查单位是否已死亡
 	ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(Target);
 	if (TargetUnit)
 	{
@@ -75,26 +79,53 @@ bool USG_BTDecorator_IsTargetValid::CalculateRawConditionValue(UBehaviorTreeComp
 			UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位已死亡：%s"), *TargetUnit->GetName());
 			return false;
 		}
-		
+        
 		if (TargetUnit->AttributeSet && TargetUnit->AttributeSet->GetHealth() <= 0.0f)
 		{
 			UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位生命值为 0：%s"), *TargetUnit->GetName());
 			return false;
 		}
 	}
-	
-	// ========== ✨ 新增 - 检查主城是否被摧毁 ==========
+    
+	// 检查主城是否被摧毁
 	ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(Target);
 	if (TargetMainCity)
 	{
-		float MainCityHealth = TargetMainCity->GetCurrentHealth();
-		if (MainCityHealth <= 0.0f)
+		if (!TargetMainCity->IsAlive())
 		{
-			UE_LOG(LogSGGameplay, Log, TEXT("✗ 目标主城已被摧毁：%s（生命值：%.0f）"), 
-				*TargetMainCity->GetName(), MainCityHealth);
+			UE_LOG(LogSGGameplay, Log, TEXT("✗ 目标主城已被摧毁：%s"), *TargetMainCity->GetName());
 			return false;
 		}
 	}
-	
+    
 	return true;
+}
+
+
+// ✨ 新增 - Tick 函数，实时检测目标状态
+/**
+ * @brief Tick 更新
+ * @param OwnerComp 行为树组件
+ * @param NodeMemory 节点内存
+ * @param DeltaSeconds 时间间隔
+ * @details
+ * 功能说明：
+ * - 实时检测目标是否死亡
+ * - 目标死亡时立即中断当前节点
+ */
+void USG_BTDecorator_IsTargetValid::TickNode(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds)
+{
+	Super::TickNode(OwnerComp, NodeMemory, DeltaSeconds);
+    
+	// 计算当前条件
+	bool bCurrentCondition = CalculateRawConditionValue(OwnerComp, NodeMemory);
+    
+	// 如果条件变为 false（目标死亡），请求重新评估
+	if (!bCurrentCondition)
+	{
+		// 请求行为树重新评估此节点
+		OwnerComp.RequestExecution(this);
+        
+		UE_LOG(LogSGGameplay, Log, TEXT("🎯 目标无效，请求行为树重新评估"));
+	}
 }

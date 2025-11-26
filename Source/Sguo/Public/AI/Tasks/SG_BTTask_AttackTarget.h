@@ -76,4 +76,17 @@ protected:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Attack", meta = (DisplayName = "攻击冷却时间（0=自动）", ClampMin = "0.0", UIMin = "0.0", UIMax = "5.0"))
 	float AttackCooldown = 0.0f;
+
+	// ✨ 新增 - 检查目标是否存活
+	/**
+	 * @brief 检查目标是否存活
+	 * @param Target 目标 Actor
+	 * @return 目标是否存活
+	 * @details
+	 * 功能说明：
+	 * - 检查目标是否为空
+	 * - 检查单位是否已死亡
+	 * - 检查主城是否已摧毁
+	 */
+	bool IsTargetAlive(AActor* Target) const;
 };

@@ -35,43 +35,59 @@ USG_BTTask_FindTarget::USG_BTTask_FindTarget()
  * - 查找最近的目标
  * - 更新黑板
  * - 返回成功或失败
+ * 🔧 修改 - 增强日志，始终返回成功以便行为树继续运行
  */
 EBTNodeResult::Type USG_BTTask_FindTarget::ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
 {
+	UE_LOG(LogSGGameplay, Log, TEXT("========== 执行查找目标任务 =========="));
+    
 	// 获取 AI Controller
 	ASG_AIControllerBase* AIController = Cast<ASG_AIControllerBase>(OwnerComp.GetAIOwner());
 	if (!AIController)
 	{
-		UE_LOG(LogSGGameplay, Error, TEXT("❌ 查找目标任务：AI Controller 无效"));
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ AI Controller 无效"));
 		return EBTNodeResult::Failed;
 	}
-	
+    
+	// 获取控制的单位
+	APawn* ControlledPawn = AIController->GetPawn();
+	if (ControlledPawn)
+	{
+		UE_LOG(LogSGGameplay, Log, TEXT("  单位：%s"), *ControlledPawn->GetName());
+	}
+    
 	// 查找最近的目标
 	AActor* NewTarget = AIController->FindNearestTarget();
-	
+    
 	// 获取黑板组件
 	UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
 	if (!BlackboardComp)
 	{
-		UE_LOG(LogSGGameplay, Error, TEXT("❌ 查找目标任务：黑板组件无效"));
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 黑板组件无效"));
 		return EBTNodeResult::Failed;
 	}
-	
+    
 	// 更新黑板
 	if (NewTarget)
 	{
 		BlackboardComp->SetValueAsObject(TargetKey.SelectedKeyName, NewTarget);
 		AIController->SetCurrentTarget(NewTarget);
-		
-		UE_LOG(LogSGGameplay, Verbose, TEXT("✓ 查找目标任务：找到目标 %s"), *NewTarget->GetName());
+        
+		UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 找到目标：%s"), *NewTarget->GetName());
+		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 		return EBTNodeResult::Succeeded;
 	}
 	else
 	{
 		BlackboardComp->ClearValue(TargetKey.SelectedKeyName);
 		AIController->SetCurrentTarget(nullptr);
-		
-		UE_LOG(LogSGGameplay, Verbose, TEXT("⚠️ 查找目标任务：未找到目标"));
-		return EBTNodeResult::Failed;
+        
+		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 未找到任何目标（敌方单位和主城都没有）"));
+		UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+        
+		// ✨ 新增 - 返回 Succeeded 而不是 Failed
+		// 这样行为树会在下一帧继续尝试查找
+		// 如果返回 Failed，可能导致行为树停止
+		return EBTNodeResult::Succeeded;
 	}
 }

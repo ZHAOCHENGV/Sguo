@@ -160,12 +160,18 @@ void ASG_AIControllerBase::FreezeAI()
  * 功能说明：
  * - 🔧 修改 - 正方形寻敌范围使用 DetectionRange
  * - 🔧 修改 - 排除已死亡的单位
+ * 🔧 修改 - 确保在没有敌方单位时能找到主城
  */
 AActor* ASG_AIControllerBase::FindNearestTarget()
 {
-	 // 1. 获取控制的单位
+
+    // 1. 获取控制的单位
     ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
-    if (!ControlledUnit) return nullptr;
+    if (!ControlledUnit) 
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("FindNearestTarget: 控制的单位为空"));
+        return nullptr;
+    }
 
     FGameplayTag MyFaction = ControlledUnit->FactionTag;
     FVector MyLoc = ControlledUnit->GetActorLocation();
@@ -175,146 +181,144 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
     ESGTargetSearchShape SearchShape = ControlledUnit->TargetSearchShape;
     bool bPrioritizeFrontmost = ControlledUnit->bPrioritizeFrontmost;
 
-    // 2. 准备候选列表
-    TArray<AActor*> AllCandidates;
-    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_UnitsBase::StaticClass(), AllCandidates);
+    UE_LOG(LogSGGameplay, Verbose, TEXT("FindNearestTarget: %s 开始寻找目标"), *ControlledUnit->GetName());
+    UE_LOG(LogSGGameplay, Verbose, TEXT("  我方阵营：%s"), *MyFaction.ToString());
+    UE_LOG(LogSGGameplay, Verbose, TEXT("  寻敌范围：%.0f"), DetectionRadius);
+
+    // 2. 准备候选列表 - 分开处理单位和主城
+    TArray<AActor*> AllUnits;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_UnitsBase::StaticClass(), AllUnits);
     
-    // 添加主城作为备选
     TArray<AActor*> AllMainCities;
     UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_MainCityBase::StaticClass(), AllMainCities);
-    AllCandidates.Append(AllMainCities);
 
-    // 3. 筛选有效目标
-    TArray<AActor*> ValidTargets;
+    UE_LOG(LogSGGameplay, Verbose, TEXT("  场上单位数量：%d"), AllUnits.Num());
+    UE_LOG(LogSGGameplay, Verbose, TEXT("  场上主城数量：%d"), AllMainCities.Num());
+
+    // 3. 筛选有效的敌方单位
+    TArray<AActor*> ValidEnemyUnits;
     
-    for (AActor* Actor : AllCandidates)
+    for (AActor* Actor : AllUnits)
     {
         if (Actor == ControlledUnit) continue;
 
-        // 检查有效性
-        bool bIsValidTarget = false;
-        bool bIsEnemy = false;
-
-        // 检查单位
-        if (ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(Actor))
-        {
-            // 🔧 修改 - 排除已死亡的单位
-            if (Unit->bIsDead)
-            {
-                continue;
-            }
-            
-            if (Unit->FactionTag != MyFaction)
-            {
-                bIsEnemy = true;
-                bIsValidTarget = true;
-            }
-        }
-        // 检查主城
-        else if (ASG_MainCityBase* City = Cast<ASG_MainCityBase>(Actor))
-        {
-            if (City->IsAlive() && City->FactionTag != MyFaction)
-            {
-                bIsEnemy = true;
-                bIsValidTarget = true;
-            }
-        }
-
-        if (!bIsEnemy || !bIsValidTarget) continue;
+        ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(Actor);
+        if (!Unit) continue;
+        
+        // 排除已死亡的单位
+        if (Unit->bIsDead) continue;
+        
+        // 排除同阵营
+        if (Unit->FactionTag == MyFaction) continue;
 
         // 范围检查
-        FVector TargetLoc = Actor->GetActorLocation();
-        
-        // 处理主城的大体积
-        if (ASG_MainCityBase* City = Cast<ASG_MainCityBase>(Actor))
-        {
-            if (City->GetAttackDetectionBox())
-            {
-               TargetLoc = City->GetAttackDetectionBox()->GetComponentLocation();
-            }
-        }
-
+        FVector TargetLoc = Unit->GetActorLocation();
         bool bInRange = false;
+        
         if (SearchShape == ESGTargetSearchShape::Square)
         {
-            // 🔧 修改 - 正方形检测使用 DetectionRadius 作为半边长
             float DiffX = FMath::Abs(TargetLoc.X - MyLoc.X);
             float DiffY = FMath::Abs(TargetLoc.Y - MyLoc.Y);
-            if (DiffX <= DetectionRadius && DiffY <= DetectionRadius)
-            {
-                bInRange = true;
-            }
+            bInRange = (DiffX <= DetectionRadius && DiffY <= DetectionRadius);
         }
-        else // Circle
+        else
         {
-            if (FVector::DistSquared(TargetLoc, MyLoc) <= (DetectionRadius * DetectionRadius))
-            {
-                bInRange = true;
-            }
+            bInRange = (FVector::DistSquared(TargetLoc, MyLoc) <= (DetectionRadius * DetectionRadius));
         }
 
         if (bInRange)
         {
-            ValidTargets.Add(Actor);
+            ValidEnemyUnits.Add(Unit);
+            UE_LOG(LogSGGameplay, Verbose, TEXT("    找到敌方单位：%s"), *Unit->GetName());
         }
     }
 
-    if (ValidTargets.Num() == 0) return nullptr;
-
-    // 4. 选择最佳目标
-    AActor* BestTarget = nullptr;
-
-    if (bPrioritizeFrontmost)
+    // 4. 如果有敌方单位，选择最佳目标
+    if (ValidEnemyUnits.Num() > 0)
     {
-        // 最前排优先
-        bool bPlayerIsLeft = true;
-        if (ASG_FrontLineManager* FLM = ASG_FrontLineManager::GetFrontLineManager(this))
-        {
-            bPlayerIsLeft = FLM->IsPlayerOnLeftSide();
-        }
+        AActor* BestTarget = nullptr;
         
-        bool bAmILeft = bPlayerIsLeft; 
-        if (MyFaction.MatchesTag(FGameplayTag::RequestGameplayTag(TEXT("Unit.Faction.Enemy"))))
+        if (bPrioritizeFrontmost)
         {
-            bAmILeft = !bPlayerIsLeft;
-        }
-
-        float BestXDiff = FLT_MAX;
-        
-        for (AActor* Target : ValidTargets)
-        {
-            float DistX = FMath::Abs(Target->GetActorLocation().X - MyLoc.X);
-            
-            if (DistX < BestXDiff)
+            // 最前排优先（X轴最近）
+            float BestXDiff = FLT_MAX;
+            for (AActor* Target : ValidEnemyUnits)
             {
-                BestXDiff = DistX;
-                BestTarget = Target;
+                float DistX = FMath::Abs(Target->GetActorLocation().X - MyLoc.X);
+                if (DistX < BestXDiff)
+                {
+                    BestXDiff = DistX;
+                    BestTarget = Target;
+                }
             }
         }
-    }
-    else
-    {
-        // 纯距离优先
-        float BestDistSq = FLT_MAX;
-        for (AActor* Target : ValidTargets)
+        else
         {
-            float DistSq = FVector::DistSquared(Target->GetActorLocation(), MyLoc);
-            if (DistSq < BestDistSq)
+            // 距离优先
+            float BestDistSq = FLT_MAX;
+            for (AActor* Target : ValidEnemyUnits)
             {
-                BestDistSq = DistSq;
-                BestTarget = Target;
+                float DistSq = FVector::DistSquared(Target->GetActorLocation(), MyLoc);
+                if (DistSq < BestDistSq)
+                {
+                    BestDistSq = DistSq;
+                    BestTarget = Target;
+                }
             }
+        }
+        
+        if (BestTarget)
+        {
+            UE_LOG(LogSGGameplay, Log, TEXT("FindNearestTarget: 选中敌方单位 %s"), *BestTarget->GetName());
+            return BestTarget;
         }
     }
 
-    if (BestTarget)
+    // ✨ 新增 - 5. 如果没有敌方单位，查找敌方主城（无视距离限制）
+    UE_LOG(LogSGGameplay, Log, TEXT("FindNearestTarget: 没有敌方单位，查找敌方主城"));
+    
+    AActor* NearestMainCity = nullptr;
+    float NearestMainCityDist = FLT_MAX;
+    
+    for (AActor* Actor : AllMainCities)
     {
-        UE_LOG(LogSGGameplay, Verbose, TEXT("%s 锁定目标: %s (策略: %s)"), 
-            *ControlledUnit->GetName(), *BestTarget->GetName(), 
-            bPrioritizeFrontmost ? TEXT("最前排/X轴最近") : TEXT("直线最近"));
+        ASG_MainCityBase* City = Cast<ASG_MainCityBase>(Actor);
+        if (!City) continue;
+        
+        // 排除已摧毁的主城
+        if (!City->IsAlive())
+        {
+            UE_LOG(LogSGGameplay, Verbose, TEXT("    跳过已摧毁的主城：%s"), *City->GetName());
+            continue;
+        }
+        
+        // 排除同阵营
+        if (City->FactionTag == MyFaction)
+        {
+            UE_LOG(LogSGGameplay, Verbose, TEXT("    跳过同阵营主城：%s (阵营: %s)"), 
+                *City->GetName(), *City->FactionTag.ToString());
+            continue;
+        }
+        
+        // 计算距离
+        float Dist = FVector::Dist(MyLoc, City->GetActorLocation());
+        UE_LOG(LogSGGameplay, Verbose, TEXT("    找到敌方主城：%s (距离: %.0f)"), *City->GetName(), Dist);
+        
+        if (Dist < NearestMainCityDist)
+        {
+            NearestMainCityDist = Dist;
+            NearestMainCity = City;
+        }
+    }
+    
+    if (NearestMainCity)
+    {
+        UE_LOG(LogSGGameplay, Log, TEXT("FindNearestTarget: 选中敌方主城 %s"), *NearestMainCity->GetName());
+        return NearestMainCity;
     }
 
-    return BestTarget;
+    UE_LOG(LogSGGameplay, Warning, TEXT("FindNearestTarget: 未找到任何敌方目标"));
+    return nullptr;
 }
 
 /**

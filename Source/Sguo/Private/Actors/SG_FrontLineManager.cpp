@@ -45,17 +45,7 @@ ASG_FrontLineManager::ASG_FrontLineManager()
     // 右端点：Y = 2500
     PlayerFrontLineSpline->AddSplinePoint(FVector(0.0f, 2500.0f, 10.0f), ESplineCoordinateSpace::Local);
 
-    // 创建敌人前线样条线
-    // 用于在编辑器和运行时可视化敌人前线位置
-    EnemyFrontLineSpline = CreateDefaultSubobject<USplineComponent>(TEXT("EnemyFrontLineSpline"));
-    EnemyFrontLineSpline->SetupAttachment(RootComp);
-    // 清空默认点
-    EnemyFrontLineSpline->ClearSplinePoints();
-    // 添加初始的两个端点（形成一条竖线）
-    // 左端点：Y = -2500
-    EnemyFrontLineSpline->AddSplinePoint(FVector(0.0f, -2500.0f, 10.0f), ESplineCoordinateSpace::Local);
-    // 右端点：Y = 2500
-    EnemyFrontLineSpline->AddSplinePoint(FVector(0.0f, 2500.0f, 10.0f), ESplineCoordinateSpace::Local);
+    
 
     // ✨ 新增 - 创建玩家前线可视化网格体
     // 用于在游戏运行时显示玩家前线的3D模型
@@ -576,28 +566,7 @@ void ASG_FrontLineManager::UpdateFrontLineVisualization()
         // 更新样条线第1个点的位置（终点）
         PlayerFrontLineSpline->SetLocationAtSplinePoint(1, EndPoint, ESplineCoordinateSpace::World);
     }
-
-    // ========== 更新敌人前线样条线 ==========
-    if (EnemyFrontLineSpline)
-    {
-        // 计算样条线起点（左端点）
-        // X = 当前敌人前线位置
-        // Y = 前线宽度的一半（负值，表示左侧）
-        // Z = 前线高度
-        FVector StartPoint = FVector(CurrentEnemyFrontLineX, -FrontLineWidth / 2.0f, FrontLineHeight);
-        
-        // 计算样条线终点（右端点）
-        // X = 当前敌人前线位置
-        // Y = 前线宽度的一半（正值，表示右侧）
-        // Z = 前线高度
-        FVector EndPoint = FVector(CurrentEnemyFrontLineX, FrontLineWidth / 2.0f, FrontLineHeight);
-        
-        // 更新样条线第0个点的位置（起点）
-        EnemyFrontLineSpline->SetLocationAtSplinePoint(0, StartPoint, ESplineCoordinateSpace::World);
-        // 更新样条线第1个点的位置（终点）
-        EnemyFrontLineSpline->SetLocationAtSplinePoint(1, EndPoint, ESplineCoordinateSpace::World);
-    }
-
+    
     // ✨ 新增 - 更新玩家前线网格体
     if (PlayerFrontLineMesh)
     {

@@ -18,6 +18,7 @@
 // ✨ 新增 - 调试可视化相关头文件
 #include "AIController.h"
 #include "DrawDebugHelpers.h"
+#include "AI/SG_AIControllerBase.h"
 #include "BehaviorTree/BlackboardComponent.h"
 #include "Data/SG_CharacterCardData.h"
 #include "Data/Type/SG_UnitDataTable.h" // ✨ 新增 - 包含完整定义
@@ -364,45 +365,109 @@ void ASG_UnitsBase::OnHealthChanged(const FOnAttributeChangeData& Data)
 	}
 }
 
-// 死亡处理
+/**
+ * @brief 死亡处理
+ * @details
+ * 功能说明：
+ * - 🔧 修改 - 完善死亡逻辑，确保停止所有行为
+ * - 停止移动、攻击、AI 逻辑
+ * - 播放死亡动画
+ * - 广播死亡事件
+ */
 void ASG_UnitsBase::OnDeath_Implementation()
 {
-	// 🔧 MODIFIED - 设置死亡标记
-	bIsDead = true;
-	
-	// ✨ 新增 - 广播死亡事件（在最开始）
-	UE_LOG(LogSGGameplay, Log, TEXT("📢 广播单位死亡事件：%s"), *GetName());
-	OnUnitDeathEvent.Broadcast(this);
-	
-	// 输出死亡日志
-	UE_LOG(LogSGGameplay, Log, TEXT("========== %s 执行死亡逻辑 =========="), *GetName());
+	// 防止重复死亡
+    if (bIsDead) return;
     
-	// 禁用碰撞
-	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
-	{
-		// 禁用碰撞
-		Capsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		// 输出日志
-		UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 禁用碰撞"));
-	}
+    // 设置死亡标记
+    bIsDead = true;
+    
+    UE_LOG(LogSGGameplay, Log, TEXT("========== %s 执行死亡逻辑 =========="), *GetName());
+    
+    // ✨ 新增 - 步骤0：立即强制停止所有行为
+    ForceStopAllActions();
+    
+    // 步骤1：禁用碰撞（防止继续被攻击或阻挡其他单位）
+    if (UCapsuleComponent* Capsule = GetCapsuleComponent())
+    {
+        Capsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 禁用碰撞"));
+    }
 
-	// 禁用输入（如果是玩家控制）
-	if (AController* Ctrl = GetController())
-	{
-		// 禁用输入
-		DisableInput(Cast<APlayerController>(Ctrl));
-		// 输出日志
-		UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 禁用输入"));
-	}
+    // 步骤2：停止移动并禁用移动组件
+    if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+    {
+        MoveComp->StopMovementImmediately();
+        MoveComp->DisableMovement();
+        MoveComp->SetComponentTickEnabled(false);
+        UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 停止移动组件"));
+    }
 
-	// TODO: 播放死亡动画
-	// TODO: 播放死亡音效
-	// TODO: 生成掉落物
+    // 步骤3：停止 AI 逻辑
+    if (AController* Ctrl = GetController())
+    {
+        // 🔧 修改 - 使用专门的冻结函数
+        if (ASG_AIControllerBase* AICon = Cast<ASG_AIControllerBase>(Ctrl))
+        {
+            AICon->FreezeAI();
+            UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 冻结 AI 控制器"));
+        }
+        
+        // 解除控制
+        Ctrl->UnPossess();
+        UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 解除控制器"));
+    }
 
-	// 延迟销毁（给动画播放时间）
-	SetLifeSpan(2.0f);
-	// 输出日志
-	UE_LOG(LogSGGameplay, Log, TEXT("  将在 2 秒后销毁"));
+    // ✨ 新增 - 步骤4：广播死亡事件（在播放动画之前，让其他单位有机会切换目标）
+    UE_LOG(LogSGGameplay, Log, TEXT("📢 广播单位死亡事件：%s"), *GetName());
+    OnUnitDeathEvent.Broadcast(this);
+
+    // 步骤5：播放死亡动画
+    float DeathAnimDuration = 2.0f; // 默认销毁延迟
+    
+    if (DeathMontage)
+    {
+        // 🔧 修改 - 确保动画实例有效
+        if (USkeletalMeshComponent* MeshComp = GetMesh())
+        {
+            if (UAnimInstance* AnimInstance = MeshComp->GetAnimInstance())
+            {
+                // 停止所有正在播放的蒙太奇
+                AnimInstance->StopAllMontages(0.1f);
+                
+                // 播放死亡蒙太奇
+                float Duration = AnimInstance->Montage_Play(DeathMontage, 1.0f);
+                
+                if (Duration > 0.0f)
+                {
+                    DeathAnimDuration = Duration + 0.5f;
+                    UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 播放死亡动画，时长：%.2f"), Duration);
+                }
+                else
+                {
+                    UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 死亡动画播放失败"));
+                }
+            }
+        }
+    }
+    else
+    {
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 未配置死亡动画"));
+        
+        // 如果没有动画，可以开启物理模拟（布娃娃）
+        if (USkeletalMeshComponent* MeshComp = GetMesh())
+        {
+            MeshComp->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+            MeshComp->SetSimulatePhysics(true);
+            DeathAnimDuration = 5.0f;
+            UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 启用布娃娃物理"));
+        }
+    }
+
+    // 步骤6：延迟销毁
+    SetLifeSpan(DeathAnimDuration);
+    UE_LOG(LogSGGameplay, Log, TEXT("  将在 %.1f 秒后销毁"), DeathAnimDuration);
+    UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 }
 
 // 查找最近的目标
@@ -886,89 +951,100 @@ bool ASG_UnitsBase::IsTargetValid() const
  */
 void ASG_UnitsBase::Tick(float DeltaTime)
 {
-	Super::Tick(DeltaTime);
+	 Super::Tick(DeltaTime);
 
-	// ========== ✨ 新增 - 更新冷却剩余时间 ==========
-	if (bIsAttackOnCooldown)
-	{
-		CooldownRemainingTime = GetWorldTimerManager().GetTimerRemaining(AttackCooldownTimerHandle);
-		
-		// 确保不会出现负数
-		if (CooldownRemainingTime < 0.0f)
-		{
-			CooldownRemainingTime = 0.0f;
-		}
-	}
-	// 获取角色位置
-	FVector ActorLocation = GetActorLocation();
+    // 更新冷却剩余时间
+    if (bIsAttackOnCooldown)
+    {
+        CooldownRemainingTime = GetWorldTimerManager().GetTimerRemaining(AttackCooldownTimerHandle);
+        
+        if (CooldownRemainingTime < 0.0f)
+        {
+            CooldownRemainingTime = 0.0f;
+        }
+    }
+    
+    // 获取角色位置
+    FVector ActorLocation = GetActorLocation();
 
-	// ========== 绘制攻击范围 ==========
-	if (bShowAttackRange && AttributeSet)
-	{
-		// 获取当前攻击范围
-		float CurrentAttackRange = AttributeSet->GetAttackRange();
+    // 绘制攻击范围
+    if (bShowAttackRange && AttributeSet)
+    {
+        float CurrentAttackRange = AttributeSet->GetAttackRange();
 
-		// 绘制攻击范围圆圈
-		// DrawDebugCircle 参数说明：
-		// - GetWorld()：世界对象
-		// - ActorLocation：圆心位置
-		// - CurrentAttackRange：半径
-		// - 32：圆的分段数（越大越圆滑）
-		// - AttackRangeColor.ToFColor(true)：颜色
-		// - false：不持久绘制（每帧重绘）
-		// - -1.0f：生命周期（-1表示一帧）
-		// - 0：深度优先级
-		// - 3.0f：线条粗细
-		DrawDebugCircle(
-			GetWorld(),
-			ActorLocation,
-			CurrentAttackRange,
-			32,
-			AttackRangeColor.ToFColor(true),
-			false,
-			-1.0f,
-			0,
-			3.0f,
-			FVector(0, 1, 0),  // Y轴（用于旋转圆圈）
-			FVector(1, 0, 0),  // X轴（用于旋转圆圈）
-			false
-		);
-		// ✨ 新增 - 显示冷却信息
-		if (bIsAttackOnCooldown)
-		{
-			FString CooldownText = FString::Printf(TEXT("冷却中：%.1f 秒"), CooldownRemainingTime);
-			DrawDebugString(
-				GetWorld(),
-				ActorLocation + FVector(0, 0, 150.0f),
-				CooldownText,
-				nullptr,
-				FColor::Yellow,
-				0.0f, // 一帧
-				true  // 绘制阴影
-			);
-		}
-	}
+        DrawDebugCircle(
+            GetWorld(),
+            ActorLocation,
+            CurrentAttackRange,
+            32,
+            AttackRangeColor.ToFColor(true),
+            false,
+            -1.0f,
+            0,
+            3.0f,
+            FVector(0, 1, 0),
+            FVector(1, 0, 0),
+            false
+        );
+        
+        // 显示冷却信息
+        if (bIsAttackOnCooldown)
+        {
+            FString CooldownText = FString::Printf(TEXT("冷却中：%.1f 秒"), CooldownRemainingTime);
+            DrawDebugString(
+                GetWorld(),
+                ActorLocation + FVector(0, 0, 150.0f),
+                CooldownText,
+                nullptr,
+                FColor::Yellow,
+                0.0f,
+                true
+            );
+        }
+    }
 
-	// ========== 绘制视野范围 ==========
-	if (bShowVisionRange)
-	{
-		// 绘制视野范围圆圈
-		DrawDebugCircle(
-			GetWorld(),
-			ActorLocation,
-			VisionRange,
-			48,  // 视野范围更大，使用更多分段
-			VisionRangeColor.ToFColor(true),
-			false,
-			-1.0f,
-			0,
-			2.0f,  // 视野范围线条稍细
-			FVector(0, 1, 0),
-			FVector(1, 0, 0),
-			false
-		);
-	}
-
+    // 🔧 修改 - 绘制寻敌范围（正方形使用 DetectionRange）
+    if (bShowSearchRange)
+    {
+        // 获取寻敌范围（统一使用 DetectionRange）
+        float Range = GetDetectionRange();
+        
+        if (TargetSearchShape == ESGTargetSearchShape::Circle)
+        {
+            // 圆形寻敌范围
+            DrawDebugCircle(
+                GetWorld(),
+                ActorLocation,
+                Range,
+                48,
+                VisionRangeColor.ToFColor(true),
+                false,
+                -1.0f,
+                0,
+                2.0f,
+                FVector(0, 1, 0),
+                FVector(1, 0, 0),
+                false
+            );
+        }
+        else if (TargetSearchShape == ESGTargetSearchShape::Square)
+        {
+            // 🔧 修改 - 正方形寻敌范围使用 DetectionRange 作为半边长
+            // 这样圆形和正方形的配置统一使用同一个值
+            FVector BoxExtent(Range, Range, 50.0f);
+            DrawDebugBox(
+                GetWorld(),
+                ActorLocation,
+                BoxExtent,
+                FQuat::Identity,
+                VisionRangeColor.ToFColor(true),
+                false,
+                -1.0f,
+                0,
+                2.0f
+            );
+        }
+    }
 }
 
 /**
@@ -1141,6 +1217,64 @@ void ASG_UnitsBase::OnAttackAbilityFinished()
 		
 		// 注意：这里不处理 bIsAttackOnCooldown，因为它是基于时间的，会自动结束
 	}
+}
+
+
+// ✨ 新增 - 强制停止所有行为
+/**
+ * @brief 强制停止所有行为
+ * @details
+ * 功能说明：
+ * - 取消所有正在执行的能力
+ * - 停止攻击状态
+ * - 清除冷却计时器
+ * - 清除目标
+ * 详细流程：
+ * 1. 取消所有 GAS 能力
+ * 2. 重置攻击状态标记
+ * 3. 清除冷却计时器
+ * 4. 停止所有蒙太奇动画
+ * 5. 清除当前目标
+ */
+void ASG_UnitsBase::ForceStopAllActions()
+{
+	UE_LOG(LogSGGameplay, Log, TEXT("  🛑 强制停止所有行为：%s"), *GetName());
+    
+	// 步骤1：取消所有正在执行的能力
+	if (AbilitySystemComponent)
+	{
+		// 取消所有能力
+		AbilitySystemComponent->CancelAllAbilities();
+		UE_LOG(LogSGGameplay, Verbose, TEXT("    ✓ 取消所有能力"));
+	}
+    
+	// 步骤2：重置攻击状态
+	bIsAttacking = false;
+	bIsAttackOnCooldown = false;
+	CooldownRemainingTime = 0.0f;
+    
+	// 步骤3：清除冷却计时器
+	if (GetWorldTimerManager().IsTimerActive(AttackCooldownTimerHandle))
+	{
+		GetWorldTimerManager().ClearTimer(AttackCooldownTimerHandle);
+		UE_LOG(LogSGGameplay, Verbose, TEXT("    ✓ 清除冷却计时器"));
+	}
+    
+	// 步骤4：停止所有蒙太奇动画
+	if (USkeletalMeshComponent* MeshComp = GetMesh())
+	{
+		if (UAnimInstance* AnimInstance = MeshComp->GetAnimInstance())
+		{
+			// 快速淡出所有蒙太奇（0.1秒）
+			AnimInstance->StopAllMontages(0.1f);
+			UE_LOG(LogSGGameplay, Verbose, TEXT("    ✓ 停止所有蒙太奇"));
+		}
+	}
+    
+	// 步骤5：清除当前目标
+	CurrentTarget = nullptr;
+	UE_LOG(LogSGGameplay, Verbose, TEXT("    ✓ 清除当前目标"));
+
 }
 
 /**

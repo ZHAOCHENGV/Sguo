@@ -65,12 +65,7 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (DisplayName = "玩家前线样条线"))
     USplineComponent* PlayerFrontLineSpline;
 
-    /**
-     * @brief 敌人前线样条线组件
-     * @details 用于可视化敌人前线位置，在编辑器中显示为红色线条
-     */
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (DisplayName = "敌人前线样条线"))
-    USplineComponent* EnemyFrontLineSpline;
+
 
     /**
      * @brief Actor 广告牌组件

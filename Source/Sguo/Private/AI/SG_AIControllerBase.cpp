@@ -1,4 +1,4 @@
-// 🔧 修改 - SG_AIControllerBase.cpp
+	// 🔧 修改 - SG_AIControllerBase.cpp
 /**
  * @file SG_AIControllerBase.cpp
  * @brief AI 控制器基类实现
@@ -14,6 +14,10 @@
 #include "Buildings/SG_MainCityBase.h"
 #include "Debug/SG_LogCategories.h"
 #include "Components/BoxComponent.h"  // ✨ 新增
+#include "Actors/SG_FrontLineManager.h" // ✨ 引入前线管理器用于判断左右
+// ✨ 新增 - 行为树组件头文件
+#include "BehaviorTree/BehaviorTreeComponent.h"
+
 // ========== 黑板键名称定义 ==========
 const FName ASG_AIControllerBase::BB_CurrentTarget = TEXT("CurrentTarget");
 const FName ASG_AIControllerBase::BB_IsInAttackRange = TEXT("IsInAttackRange");
@@ -93,146 +97,224 @@ void ASG_AIControllerBase::OnPossess(APawn* InPawn)
 	
 	UE_LOG(LogSGGameplay, Log, TEXT("✓ AI 控制器接管 Pawn：%s"), *InPawn->GetName());
 }
+	// ✨ 新增 - 解除控制时调用
+	/**
+	 * @brief 解除控制时调用
+	 * @details
+	 * 功能说明：
+	 * - 清理目标死亡监听
+	 * - 停止行为树
+	 */
+void ASG_AIControllerBase::OnUnPossess()
+	{
+	// 解绑目标死亡事件
+	if (CurrentListenedTarget.IsValid())
+	{
+		UnbindTargetDeathEvent(CurrentListenedTarget.Get());
+		CurrentListenedTarget = nullptr;
+	}
+    
+		// 调用父类
+		Super::OnUnPossess();
+}
+/**
+ * @brief 冻结 AI
+ * @details
+ * 功能说明：
+ * - 🔧 修改 - 增加解绑目标死亡事件
+ */
+void ASG_AIControllerBase::FreezeAI()
+{
+	// 1. 停止行为树
+	if (UBehaviorTreeComponent* BTComp = Cast<UBehaviorTreeComponent>(BrainComponent))
+	{
+		BTComp->StopTree(EBTStopMode::Safe);
+	}
+    
+	// 2. 停止移动
+	StopMovement();
+    
+	// ✨ 新增 - 3. 解绑目标死亡事件
+	if (CurrentListenedTarget.IsValid())
+	{
+		UnbindTargetDeathEvent(CurrentListenedTarget.Get());
+		CurrentListenedTarget = nullptr;
+	}
+    
+	// 4. 清除目标
+	SetCurrentTarget(nullptr);
+    
+	// 5. 停止所有逻辑更新
+	SetActorTickEnabled(false);
+    
+	UE_LOG(LogSGGameplay, Log, TEXT("🥶 AI 已冻结：%s"), 
+		GetPawn() ? *GetPawn()->GetName() : TEXT("None"));
+}
 
-// ========== 目标管理 ==========
+	// ========== 目标管理 ==========
 
 /**
  * @brief 查找最近的目标
  * @return 最近的敌方单位或主城
  * @details
  * 功能说明：
- * - 优先查找最近的敌方单位（人形或兵器）
- * - 如果没有单位，查找敌方主城
- * 详细流程：
- * 1. 获取所有敌方单位
- * 2. 计算距离，找到最近的
- * 3. 如果没有单位，查找主城
- * 4. 🔧 修改：使用单位的寻敌范围（DetectionRange）
- * 注意事项：
- * - 只查找不同阵营的目标
- * - 排除已死亡的单位
+ * - 🔧 修改 - 正方形寻敌范围使用 DetectionRange
+ * - 🔧 修改 - 排除已死亡的单位
  */
 AActor* ASG_AIControllerBase::FindNearestTarget()
 {
-// 获取控制的单位
-	ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
-	if (!ControlledUnit)
-	{
-		return nullptr;
-	}
-	
-	FGameplayTag MyFaction = ControlledUnit->FactionTag;
-	float DetectionRange = ControlledUnit->GetDetectionRange();
-	
-	UE_LOG(LogSGGameplay, Verbose, TEXT("%s 开始查找目标（寻敌范围：%.0f）"), 
-		*ControlledUnit->GetName(), DetectionRange);
-	
-	// ========== 查找敌方单位 ==========
-	TArray<AActor*> AllUnits;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_UnitsBase::StaticClass(), AllUnits);
-	
-	AActor* NearestEnemy = nullptr;
-	float MinDistance = FLT_MAX;
-	
-	for (AActor* Actor : AllUnits)
-	{
-		if (Actor == ControlledUnit)
-		{
-			continue;
-		}
-		
-		ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(Actor);
-		if (!Unit)
-		{
-			continue;
-		}
-		
-		// 检查阵营
-		if (Unit->FactionTag != MyFaction)
-		{
-			// 🔧 检查是否已死亡
-			if (Unit->bIsDead)
-			{
-				continue;
-			}
-			
-			float Distance = FVector::Dist(ControlledUnit->GetActorLocation(), Unit->GetActorLocation());
-			
-			if (Distance > DetectionRange)
-			{
-				continue;
-			}
-			
-			if (Distance < MinDistance)
-			{
-				MinDistance = Distance;
-				NearestEnemy = Unit;
-			}
-		}
-	}
-	
-	if (NearestEnemy)
-	{
-		UE_LOG(LogSGGameplay, Verbose, TEXT("%s 找到最近的敌方单位：%s (距离: %.0f)"), 
-			*ControlledUnit->GetName(), *NearestEnemy->GetName(), MinDistance);
-		return NearestEnemy;
-	}
-	
-	// ========== 🔧 修复 - 查找敌方主城（排除已摧毁的）==========
-	UE_LOG(LogSGGameplay, Verbose, TEXT("%s 未找到敌方单位，尝试查找敌方主城"), *ControlledUnit->GetName());
-	
-	TArray<AActor*> AllMainCities;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_MainCityBase::StaticClass(), AllMainCities);
-	
-	for (AActor* Actor : AllMainCities)
-	{
-		ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(Actor);
-		if (!MainCity)
-		{
-			continue;
-		}
-		
-		// 检查阵营
-		if (MainCity->FactionTag != MyFaction)
-		{
-			// ✨ 关键新增：检查主城是否已被摧毁
-			float MainCityHealth = MainCity->GetCurrentHealth();
-			if (MainCityHealth <= 0.0f)
-			{
-				UE_LOG(LogSGGameplay, Verbose, TEXT("  跳过已摧毁的主城：%s（生命值：%.0f）"), 
-					*MainCity->GetName(), MainCityHealth);
-				continue;
-			}
-			
-			// 计算距离
-			UBoxComponent* DetectionBox = MainCity->GetAttackDetectionBox();
-			FVector TargetLocation;
-			
-			if (DetectionBox)
-			{
-				TargetLocation = DetectionBox->GetComponentLocation();
-			}
-			else
-			{
-				TargetLocation = MainCity->GetActorLocation();
-			}
-			
-			float DistanceToMainCity = FVector::Dist(
-				ControlledUnit->GetActorLocation(), 
-				TargetLocation
-			);
-			
-			if (DistanceToMainCity <= DetectionRange)
-			{
-				UE_LOG(LogSGGameplay, Log, TEXT("%s 找到敌方主城：%s (距离: %.0f, 生命值: %.0f)"), 
-					*ControlledUnit->GetName(), *MainCity->GetName(), DistanceToMainCity, MainCityHealth);
-				return MainCity;
-			}
-		}
-	}
-	
-	UE_LOG(LogSGGameplay, Verbose, TEXT("%s 未找到任何目标"), *ControlledUnit->GetName());
-	return nullptr;
+	 // 1. 获取控制的单位
+    ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
+    if (!ControlledUnit) return nullptr;
+
+    FGameplayTag MyFaction = ControlledUnit->FactionTag;
+    FVector MyLoc = ControlledUnit->GetActorLocation();
+    
+    // 获取寻敌配置
+    float DetectionRadius = ControlledUnit->GetDetectionRange();
+    ESGTargetSearchShape SearchShape = ControlledUnit->TargetSearchShape;
+    bool bPrioritizeFrontmost = ControlledUnit->bPrioritizeFrontmost;
+
+    // 2. 准备候选列表
+    TArray<AActor*> AllCandidates;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_UnitsBase::StaticClass(), AllCandidates);
+    
+    // 添加主城作为备选
+    TArray<AActor*> AllMainCities;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_MainCityBase::StaticClass(), AllMainCities);
+    AllCandidates.Append(AllMainCities);
+
+    // 3. 筛选有效目标
+    TArray<AActor*> ValidTargets;
+    
+    for (AActor* Actor : AllCandidates)
+    {
+        if (Actor == ControlledUnit) continue;
+
+        // 检查有效性
+        bool bIsValidTarget = false;
+        bool bIsEnemy = false;
+
+        // 检查单位
+        if (ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(Actor))
+        {
+            // 🔧 修改 - 排除已死亡的单位
+            if (Unit->bIsDead)
+            {
+                continue;
+            }
+            
+            if (Unit->FactionTag != MyFaction)
+            {
+                bIsEnemy = true;
+                bIsValidTarget = true;
+            }
+        }
+        // 检查主城
+        else if (ASG_MainCityBase* City = Cast<ASG_MainCityBase>(Actor))
+        {
+            if (City->IsAlive() && City->FactionTag != MyFaction)
+            {
+                bIsEnemy = true;
+                bIsValidTarget = true;
+            }
+        }
+
+        if (!bIsEnemy || !bIsValidTarget) continue;
+
+        // 范围检查
+        FVector TargetLoc = Actor->GetActorLocation();
+        
+        // 处理主城的大体积
+        if (ASG_MainCityBase* City = Cast<ASG_MainCityBase>(Actor))
+        {
+            if (City->GetAttackDetectionBox())
+            {
+               TargetLoc = City->GetAttackDetectionBox()->GetComponentLocation();
+            }
+        }
+
+        bool bInRange = false;
+        if (SearchShape == ESGTargetSearchShape::Square)
+        {
+            // 🔧 修改 - 正方形检测使用 DetectionRadius 作为半边长
+            float DiffX = FMath::Abs(TargetLoc.X - MyLoc.X);
+            float DiffY = FMath::Abs(TargetLoc.Y - MyLoc.Y);
+            if (DiffX <= DetectionRadius && DiffY <= DetectionRadius)
+            {
+                bInRange = true;
+            }
+        }
+        else // Circle
+        {
+            if (FVector::DistSquared(TargetLoc, MyLoc) <= (DetectionRadius * DetectionRadius))
+            {
+                bInRange = true;
+            }
+        }
+
+        if (bInRange)
+        {
+            ValidTargets.Add(Actor);
+        }
+    }
+
+    if (ValidTargets.Num() == 0) return nullptr;
+
+    // 4. 选择最佳目标
+    AActor* BestTarget = nullptr;
+
+    if (bPrioritizeFrontmost)
+    {
+        // 最前排优先
+        bool bPlayerIsLeft = true;
+        if (ASG_FrontLineManager* FLM = ASG_FrontLineManager::GetFrontLineManager(this))
+        {
+            bPlayerIsLeft = FLM->IsPlayerOnLeftSide();
+        }
+        
+        bool bAmILeft = bPlayerIsLeft; 
+        if (MyFaction.MatchesTag(FGameplayTag::RequestGameplayTag(TEXT("Unit.Faction.Enemy"))))
+        {
+            bAmILeft = !bPlayerIsLeft;
+        }
+
+        float BestXDiff = FLT_MAX;
+        
+        for (AActor* Target : ValidTargets)
+        {
+            float DistX = FMath::Abs(Target->GetActorLocation().X - MyLoc.X);
+            
+            if (DistX < BestXDiff)
+            {
+                BestXDiff = DistX;
+                BestTarget = Target;
+            }
+        }
+    }
+    else
+    {
+        // 纯距离优先
+        float BestDistSq = FLT_MAX;
+        for (AActor* Target : ValidTargets)
+        {
+            float DistSq = FVector::DistSquared(Target->GetActorLocation(), MyLoc);
+            if (DistSq < BestDistSq)
+            {
+                BestDistSq = DistSq;
+                BestTarget = Target;
+            }
+        }
+    }
+
+    if (BestTarget)
+    {
+        UE_LOG(LogSGGameplay, Verbose, TEXT("%s 锁定目标: %s (策略: %s)"), 
+            *ControlledUnit->GetName(), *BestTarget->GetName(), 
+            bPrioritizeFrontmost ? TEXT("最前排/X轴最近") : TEXT("直线最近"));
+    }
+
+    return BestTarget;
 }
 
 /**
@@ -330,8 +412,7 @@ bool ASG_AIControllerBase::DetectNearbyThreats(float DetectionRadius)
  * @param NewTarget 新目标
  * @details
  * 功能说明：
- * - 更新黑板中的目标数据
- * - 通知行为树目标已改变
+ * - 🔧 修改 - 增加目标死亡事件监听
  */
 void ASG_AIControllerBase::SetCurrentTarget(AActor* NewTarget)
 {
@@ -340,30 +421,43 @@ void ASG_AIControllerBase::SetCurrentTarget(AActor* NewTarget)
 	{
 		return;
 	}
-	
+    
+	// ✨ 新增 - 解绑旧目标的死亡事件
+	if (CurrentListenedTarget.IsValid())
+	{
+		UnbindTargetDeathEvent(CurrentListenedTarget.Get());
+		CurrentListenedTarget = nullptr;
+	}
+    
 	// 更新黑板
 	BlackboardComp->SetValueAsObject(BB_CurrentTarget, NewTarget);
-	
-	// 🔧 修改 - 使用 ASG_MainCityBase 类型判断目标是否为主城
+    
+	// 检查目标是否为主城
 	bool bTargetIsMainCity = false;
 	if (NewTarget)
 	{
-		// 检查目标是否为主城类型
 		bTargetIsMainCity = NewTarget->IsA(ASG_MainCityBase::StaticClass());
 	}
 	BlackboardComp->SetValueAsBool(BB_IsTargetMainCity, bTargetIsMainCity);
-	
-	// 锁定目标（只有在目标死亡后才会切换）
+    
+	// 锁定目标
 	BlackboardComp->SetValueAsBool(BB_IsTargetLocked, NewTarget != nullptr);
-	
-	// 更新单位的目标（用于 GAS 攻击）
+    
+	// 更新单位的目标
 	if (ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn()))
 	{
 		ControlledUnit->SetTarget(NewTarget);
 	}
-	
+    
+	// ✨ 新增 - 绑定新目标的死亡事件
 	if (NewTarget)
 	{
+		if (ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(NewTarget))
+		{
+			BindTargetDeathEvent(TargetUnit);
+			CurrentListenedTarget = TargetUnit;
+		}
+        
 		UE_LOG(LogSGGameplay, Verbose, TEXT("🎯 设置目标：%s%s"), 
 			*NewTarget->GetName(),
 			bTargetIsMainCity ? TEXT(" (主城)") : TEXT(""));
@@ -400,6 +494,7 @@ AActor* ASG_AIControllerBase::GetCurrentTarget() const
  * 功能说明：
  * - 检查目标是否存在、是否存活
  * - 用于行为树装饰器
+ * - 🔧 修改 - 增强死亡检测
  */
 bool ASG_AIControllerBase::IsTargetValid() const
 {
@@ -408,18 +503,18 @@ bool ASG_AIControllerBase::IsTargetValid() const
 	{
 		return false;
 	}
-	
-	// ========== 检查单位是否已死亡 ==========
+    
+	// 检查单位是否已死亡
 	ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(CurrentTarget);
 	if (TargetUnit)
 	{
-		// 检查死亡标记
+		// 🔧 修改 - 优先检查死亡标记
 		if (TargetUnit->bIsDead)
 		{
-			UE_LOG(LogSGGameplay, Verbose, TEXT("  目标单位已死亡：%s"), *TargetUnit->GetName());
+			UE_LOG(LogSGGameplay, Verbose, TEXT("  目标单位已死亡（bIsDead）：%s"), *TargetUnit->GetName());
 			return false;
 		}
-		
+        
 		// 检查生命值
 		if (TargetUnit->AttributeSet && TargetUnit->AttributeSet->GetHealth() <= 0.0f)
 		{
@@ -427,12 +522,11 @@ bool ASG_AIControllerBase::IsTargetValid() const
 			return false;
 		}
 	}
-	
-	// ========== ✨ 新增 - 检查主城是否被摧毁 ==========
+    
+	// 检查主城是否被摧毁
 	ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(CurrentTarget);
 	if (TargetMainCity)
 	{
-		// 检查主城生命值
 		float MainCityHealth = TargetMainCity->GetCurrentHealth();
 		if (MainCityHealth <= 0.0f)
 		{
@@ -440,11 +534,8 @@ bool ASG_AIControllerBase::IsTargetValid() const
 				*TargetMainCity->GetName(), MainCityHealth);
 			return false;
 		}
-		
-		UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 目标主城存活：%s（生命值：%.0f）"), 
-			*TargetMainCity->GetName(), MainCityHealth);
 	}
-	
+    
 	return true;
 }
 
@@ -500,5 +591,100 @@ void ASG_AIControllerBase::ResumeAttack()
 	}
 	
 	UE_LOG(LogSGGameplay, Log, TEXT("▶️ 主城恢复攻击"));
+}
+
+
+// ✨ 新增 - 目标死亡回调
+/**
+ * @brief 目标死亡回调
+ * @param DeadUnit 死亡的单位
+ * @details
+ * 功能说明：
+ * - 当锁定的目标死亡时触发
+ * - 清除当前目标
+ * - 立即寻找新目标
+ * 详细流程：
+ * 1. 验证死亡的单位是当前目标
+ * 2. 清除当前目标
+ * 3. 立即寻找新目标
+ * 4. 如果找到新目标，更新黑板
+ */
+void ASG_AIControllerBase::OnTargetDeath(ASG_UnitsBase* DeadUnit)
+{
+	// 验证死亡的单位是当前目标
+	AActor* CurrentTarget = GetCurrentTarget();
+	if (CurrentTarget != DeadUnit)
+	{
+		return;
+	}
+    
+	UE_LOG(LogSGGameplay, Log, TEXT("🎯 目标死亡，需要重新寻找目标"));
+	UE_LOG(LogSGGameplay, Log, TEXT("  死亡目标：%s"), *DeadUnit->GetName());
+    
+	// 清除监听引用
+	CurrentListenedTarget = nullptr;
+    
+	// 清除当前目标（不触发解绑，因为目标已死亡）
+	UBlackboardComponent* BlackboardComp = GetBlackboardComponent();
+	if (BlackboardComp)
+	{
+		BlackboardComp->SetValueAsObject(BB_CurrentTarget, nullptr);
+		BlackboardComp->SetValueAsBool(BB_IsTargetLocked, false);
+		BlackboardComp->SetValueAsBool(BB_IsTargetMainCity, false);
+	}
+    
+	// 更新单位的目标
+	if (ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn()))
+	{
+		ControlledUnit->SetTarget(nullptr);
+	}
+    
+	// 立即寻找新目标
+	AActor* NewTarget = FindNearestTarget();
+	if (NewTarget)
+	{
+		SetCurrentTarget(NewTarget);
+		UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 找到新目标：%s"), *NewTarget->GetName());
+	}
+	else
+	{
+		UE_LOG(LogSGGameplay, Log, TEXT("  ⚠️ 未找到新目标"));
+	}
+}
+
+// ✨ 新增 - 绑定目标死亡事件
+/**
+ * @brief 绑定目标死亡事件
+ * @param Target 目标单位
+ */
+void ASG_AIControllerBase::BindTargetDeathEvent(ASG_UnitsBase* Target)
+{
+	if (!Target)
+	{
+		return;
+	}
+    
+	// 绑定死亡事件
+	Target->OnUnitDeathEvent.AddDynamic(this, &ASG_AIControllerBase::OnTargetDeath);
+    
+	UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 绑定目标死亡事件：%s"), *Target->GetName());
+}
+
+// ✨ 新增 - 解绑目标死亡事件
+/**
+ * @brief 解绑目标死亡事件
+ * @param Target 目标单位
+ */
+void ASG_AIControllerBase::UnbindTargetDeathEvent(ASG_UnitsBase* Target)
+{
+	if (!Target)
+	{
+		return;
+	}
+    
+	// 解绑死亡事件
+	Target->OnUnitDeathEvent.RemoveDynamic(this, &ASG_AIControllerBase::OnTargetDeath);
+    
+	UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 解绑目标死亡事件：%s"), *Target->GetName());
 }
 

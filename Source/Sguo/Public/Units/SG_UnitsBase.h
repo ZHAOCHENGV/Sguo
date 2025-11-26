@@ -16,10 +16,18 @@ class UGameplayAbility;
 class UAnimMontage;
 struct FOnAttributeChangeData;
 struct FSGUnitDataRow;
-struct FSGUnitAttackDefinition; // ✨ 新增 - 前向声明
+struct FSGUnitAttackDefinition;
 class USG_CharacterCardData;
 
-// ✨ 新增 - 单位死亡委托声明
+// 寻敌范围形状枚举
+UENUM(BlueprintType)
+enum class ESGTargetSearchShape : uint8
+{
+    Circle UMETA(DisplayName = "圆形"),
+    Square UMETA(DisplayName = "正方形")
+};
+
+// 单位死亡委托声明
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSGUnitDeathSignature, ASG_UnitsBase*, DeadUnit);
 
 /**
@@ -31,10 +39,9 @@ class SGUO_API ASG_UnitsBase : public ACharacter, public IAbilitySystemInterface
     GENERATED_BODY()
 
 public:
-    // 构造函数
     ASG_UnitsBase();
     
-    // ✨ 新增 - 单位死亡事件
+    // 单位死亡事件
     UPROPERTY(BlueprintAssignable, Category = "Unit Events")
     FSGUnitDeathSignature OnUnitDeathEvent;
 
@@ -74,25 +81,15 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Base Attributes", meta = (DisplayName = "基础攻击范围"))
     float BaseAttackRange = 150.0f;
 
-    // ========== ✨ 新增 - 卡牌数据引用 ==========
+    // ========== 卡牌数据引用 ==========
     
     UPROPERTY(BlueprintReadOnly, Category = "Unit Config", meta = (DisplayName = "源卡牌数据"))
     TObjectPtr<USG_CharacterCardData> SourceCardData;
 
-    /**
-     * @brief 设置源卡牌数据
-     * @param CardData 卡牌数据
-     * @details
-     * 功能说明：
-     * - 在生成单位后立即调用
-     * - 缓存卡牌数据引用
-     * - 供后续读取倍率使用
-     */
     UFUNCTION(BlueprintCallable, Category = "Unit Config")
     void SetSourceCardData(USG_CharacterCardData* CardData);
 
     // ========== DataTable 配置 ==========
-    
     
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Unit Config", meta = (DisplayName = "单位数据表"))
     TObjectPtr<UDataTable> UnitDataTable;
@@ -103,103 +100,45 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Unit Config", meta = (DisplayName = "使用数据表配置"))
     bool bUseDataTable = false;
 
-    // ========== ✨ 新增 - 攻击技能配置（从 DataTable 加载）==========
+    // ========== 攻击技能配置 ==========
     
-    /**
-     * @brief 攻击技能列表（从 DataTable 加载）
-     */
     UPROPERTY(BlueprintReadOnly, Category = "Attack Config", meta = (DisplayName = "攻击技能列表"))
     TArray<FSGUnitAttackDefinition> CachedAttackAbilities;
 
-    /**
-     * @brief 当前攻击技能索引
-     */
     UPROPERTY(BlueprintReadOnly, Category = "Attack Config", meta = (DisplayName = "当前攻击索引"))
     int32 CurrentAttackIndex = 0;
 
-    /**
-     * @brief 通用攻击能力类
-     */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack Config", meta = (DisplayName = "通用攻击能力类"))
     TSubclassOf<UGameplayAbility> CommonAttackAbilityClass;
 
-    /**
-     * @brief 已授予的通用攻击能力
-     */
     UPROPERTY(BlueprintReadOnly, Category = "Attack Config", meta = (DisplayName = "通用攻击能力句柄"))
     FGameplayAbilitySpecHandle GrantedCommonAttackHandle;
 
-    /**
-    * @brief 已授予的特定攻击能力映射
-    * @details
-    * 功能说明：
-    * - 缓存已授予的特定 GA，避免重复授予
-    * - Key: SpecificAbilityClass（GA 类型）
-    * - Value: GrantedAbilityHandle（已授予的能力句柄）
-    * 使用场景：
-    * - 当 DataTable 中配置了 SpecificAbilityClass 时使用
-    * - 第一次使用时授予并缓存
-    * - 后续直接使用缓存的 Handle
-    * 注意事项：
-    * - 不需要网络复制（服务器权威）
-    * - 在单位销毁时自动清理
-    */
     UPROPERTY()
     TMap<TSubclassOf<UGameplayAbility>, FGameplayAbilitySpecHandle> GrantedSpecificAbilities;
 
-    // ========== ✨ 新增 - 攻击冷却系统 ==========
+    // ========== 攻击冷却系统 ==========
     
-    /**
-     * @brief 攻击是否在冷却中
-     * @details 用于快速检查是否可以攻击
-     */
     UPROPERTY(BlueprintReadOnly, Category = "Attack Config", meta = (DisplayName = "攻击冷却中"))
     bool bIsAttackOnCooldown = false;
 
-    /**
-     * @brief 冷却剩余时间
-     * @details 当前冷却还剩多少秒
-     */
     UPROPERTY(BlueprintReadOnly, Category = "Attack Config", meta = (DisplayName = "冷却剩余时间"))
     float CooldownRemainingTime = 0.0f;
 
-    /**
-     * @brief 冷却计时器句柄
-     * @details 用于管理冷却定时器
-     */
     FTimerHandle AttackCooldownTimerHandle;
 
-    
-    // ========== ✨ 新增 - 冷却系统函数 ==========
-    
-    /**
-     * @brief 检查攻击是否在冷却中
-     * @return 是否在冷却中
-     */
     UFUNCTION(BlueprintPure, Category = "Attack")
     bool IsAttackOnCooldown() const { return bIsAttackOnCooldown; }
 
-    /**
-     * @brief 获取冷却剩余时间
-     * @return 剩余秒数
-     */
     UFUNCTION(BlueprintPure, Category = "Attack")
     float GetCooldownRemainingTime() const { return CooldownRemainingTime; }
 
-    /**
-     * @brief 开始攻击冷却
-     * @param Duration 冷却时间（秒）
-     */
     UFUNCTION(BlueprintCallable, Category = "Attack")
     void StartAttackCooldown(float Duration);
 
-    /**
-     * @brief 冷却结束回调
-     */
     UFUNCTION()
     void OnAttackCooldownEnd();
 
-    
     // ========== GAS 接口实现 ==========
     
     virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
@@ -214,29 +153,17 @@ public:
         float SpeedMultiplier = 1.0f
     );
 
-    // ========== ✨ 新增 - 攻击系统函数 ==========
+    // ========== 攻击系统函数 ==========
     
-    /**
-     * @brief 从 DataTable 加载攻击技能配置
-     */
     UFUNCTION(BlueprintCallable, Category = "Attack")
     void LoadAttackAbilitiesFromDataTable();
 
-    /**
-     * @brief 授予通用攻击能力
-     */
     UFUNCTION(BlueprintCallable, Category = "Attack")
     void GrantCommonAttackAbility();
 
-    /**
-     * @brief 执行攻击（随机选择技能）
-     */
     UFUNCTION(BlueprintCallable, Category = "Attack")
     bool PerformAttack();
 
-    /**
-     * @brief 获取当前攻击配置
-     */
     UFUNCTION(BlueprintPure, Category = "Attack")
     FSGUnitAttackDefinition GetCurrentAttackDefinition() const;
 
@@ -252,18 +179,12 @@ public:
     bool IsTargetValid() const;
 
 protected:
-    // ========== 生命周期函数 ==========
-    
     virtual void BeginPlay() override;
     virtual void PossessedBy(AController* NewController) override;
 
-    // ========== GAS 初始化 ==========
-    
     void InitializeAttributes(float HealthMult, float DamageMult, float SpeedMult);
     void BindAttributeDelegates();
 
-    // ========== 属性变化回调 ==========
-    
     void OnHealthChanged(const FOnAttributeChangeData& Data);
     
     UFUNCTION(BlueprintNativeEvent, Category = "Character")
@@ -310,15 +231,6 @@ public:
     UFUNCTION(BlueprintPure, Category = "AI")
     float GetAttackRangeForAI() const;
 
-    // ========== ❌ 删除 - 旧的 DataTable 加载函数 ==========
-    // UFUNCTION(BlueprintCallable, Category = "Character")
-    // void LoadUnitDataFromTable();
-    
-    // ========== ✨ 新增 - 重命名的 DataTable 加载函数 ==========
-    /**
-     * @brief 从 DataTable 加载单位配置
-     * @return 是否加载成功
-     */
     UFUNCTION(BlueprintCallable, Category = "Character")
     bool IsLoadUnitDataFromTable();
 
@@ -330,37 +242,65 @@ protected:
     void InitializeWithDefaults();
 
 public:
-    // ========== ✨ 新增 - 攻击状态控制 ==========
+    // ========== 攻击状态控制 ==========
 
-    /**
-     * @brief 是否正在执行攻击动作
-     * @details 
-     * True：技能正在运行（播放动画中）
-     * False：技能已结束
-     * 用于防止在动画播放期间再次尝试激活技能
-     */
     UPROPERTY(BlueprintReadOnly, Category = "Attack State")
     bool bIsAttacking = false;
-    /**
-         * @brief 开始攻击循环（由 GA 在播放动画时调用）
-         * @param AnimDuration 动画实际播放时长（受攻速影响后的时长）
-         * @details 
-         * 功能说明：
-         * - 立即设置正在攻击状态
-         * - 立即开始计算冷却（冷却时间 = 动画时长 + 配置冷却）
-         * - 确保冷却从动作开始时计算
-         */
+
     UFUNCTION(BlueprintCallable, Category = "Attack")
     void StartAttackCycle(float AnimDuration);
     
-    /**
-     * @brief 攻击技能结束回调
-     * @details 
-     * 功能说明：
-     * - 供 GA_Attack 在 EndAbility 时调用
-     * - 标记攻击结束
-     * - 正式开始计算冷却时间
-     */
     UFUNCTION(BlueprintCallable, Category = "Attack")
     void OnAttackAbilityFinished();
+
+    // ========== 战斗表现配置 ==========
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Visuals", meta = (DisplayName = "死亡动画"))
+    TObjectPtr<UAnimMontage> DeathMontage;
+
+    // ========== 寻敌逻辑配置 ==========
+
+    /**
+     * @brief 寻敌范围形状
+     * @details 选择圆形（半径）或正方形（使用 DetectionRange 作为半边长）进行索敌
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Search", meta = (DisplayName = "寻敌形状"))
+    ESGTargetSearchShape TargetSearchShape = ESGTargetSearchShape::Circle;
+
+    // 🔧 修改 - 移除 SearchBoxExtent，改用 DetectionRange
+    // ❌ 删除 - 以下属性不再需要，正方形寻敌范围直接使用 DetectionRange
+    // UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Search", 
+    //     meta = (DisplayName = "正方形寻敌范围(半长宽)", EditCondition = "TargetSearchShape == ESGTargetSearchShape::Square", EditConditionHides))
+    // FVector2D SearchBoxExtent = FVector2D(800.0f, 800.0f);
+
+    /**
+     * @brief 是否优先攻击最前排的敌人
+     * @details 
+     * - True: 忽略Y轴距离，优先选择X轴最靠近己方的敌人（防守逻辑）
+     * - False: 选择直线距离最近的敌人（标准逻辑）
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Search", meta = (DisplayName = "优先攻击最前排"))
+    bool bPrioritizeFrontmost = true;
+
+    /**
+     * @brief 调试：显示寻敌范围
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Visualization", meta = (DisplayName = "显示寻敌范围"))
+    bool bShowSearchRange = false;
+
+    // ✨ 新增 - 强制停止所有行为（用于死亡时调用）
+    /**
+     * @brief 强制停止所有行为
+     * @details
+     * 功能说明：
+     * - 停止移动
+     * - 取消所有正在执行的能力
+     * - 停止攻击动画
+     * - 清除目标
+     * 使用场景：
+     * - 单位死亡时调用
+     * - 游戏暂停时调用
+     */
+    UFUNCTION(BlueprintCallable, Category = "Combat")
+    void ForceStopAllActions();
 };

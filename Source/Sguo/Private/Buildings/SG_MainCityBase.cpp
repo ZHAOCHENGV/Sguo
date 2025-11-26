@@ -12,6 +12,10 @@
 #include "Components/BoxComponent.h"
 #include "Debug/SG_LogCategories.h"
 #include "Units/SG_UnitsBase.h"
+#include "Actors/SG_EnemySpawner.h"
+#include "AI/SG_AIControllerBase.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "Kismet/GameplayStatics.h"
 
 /**
  * @brief 构造函数
@@ -273,6 +277,9 @@ void ASG_MainCityBase::OnHealthChanged(const FOnAttributeChangeData& Data)
  */
 void ASG_MainCityBase::OnMainCityDestroyed_Implementation()
 {
+	// 防止重复执行
+	if (bIsDestroyed) return;
+	
 	bIsDestroyed = true;
 	
 	UE_LOG(LogSGGameplay, Log, TEXT("========== %s 执行摧毁逻辑 =========="), *GetName());
@@ -292,6 +299,56 @@ void ASG_MainCityBase::OnMainCityDestroyed_Implementation()
 	{
 		AttackDetectionBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 禁用攻击检测盒碰撞"));
+	}
+
+	// ========== ✨ 新增：停止全场逻辑 ==========
+	
+	UWorld* World = GetWorld();
+	if (World)
+	{
+		// A. 停止所有敌方生成器
+		TArray<AActor*> AllSpawners;
+		UGameplayStatics::GetAllActorsOfClass(World, ASG_EnemySpawner::StaticClass(), AllSpawners);
+		
+		for (AActor* Actor : AllSpawners)
+		{
+			if (ASG_EnemySpawner* Spawner = Cast<ASG_EnemySpawner>(Actor))
+			{
+				// 可以在这里加判断：只停止同阵营的 Spawner
+				// if (Spawner->FactionTag == this->FactionTag)
+				Spawner->StopSpawning();
+				UE_LOG(LogSGGameplay, Verbose, TEXT("  已停止生成器：%s"), *Spawner->GetName());
+			}
+		}
+
+		// B. 冻结所有单位 (包括敌我双方)
+		TArray<AActor*> AllUnits;
+		UGameplayStatics::GetAllActorsOfClass(World, ASG_UnitsBase::StaticClass(), AllUnits);
+		
+		for (AActor* Actor : AllUnits)
+		{
+			ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(Actor);
+			if (Unit)
+			{
+				// 1. 冻结 AI
+				if (ASG_AIControllerBase* AICon = Cast<ASG_AIControllerBase>(Unit->GetController()))
+				{
+					AICon->FreezeAI();
+				}
+				
+				// 2. 强制重置攻击状态（防止动画卡在半空）
+				Unit->bIsAttacking = false;
+				
+				// 3. 停止移动组件 (双重保险)
+				if (Unit->GetCharacterMovement())
+				{
+					Unit->GetCharacterMovement()->StopMovementImmediately();
+					Unit->GetCharacterMovement()->DisableMovement();
+				}
+			}
+		}
+		
+		UE_LOG(LogSGGameplay, Warning, TEXT("🛑 游戏结束：已停止 %d 个生成器和 %d 个单位"), AllSpawners.Num(), AllUnits.Num());
 	}
 }
 

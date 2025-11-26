@@ -290,6 +290,20 @@ public:
     UFUNCTION(BlueprintPure, Category = "Front Line", meta = (WorldContext = "WorldContextObject", DisplayName = "获取前线管理器"))
     static ASG_FrontLineManager* GetFrontLineManager(UObject* WorldContextObject);
 
+
+    /**
+     * @brief 单位死亡回调
+     * @param DeadUnit 死亡的单位
+     * @details
+     * 功能说明：
+     * - 当最前方单位死亡时触发
+     * - 立即清除缓存并重新扫描
+     * - 确保前线始终跟踪有效单位
+     */
+    UFUNCTION()
+    void OnUnitDeath(ASG_UnitsBase* DeadUnit);
+    
+    
 protected:
     /**
      * @brief 游戏开始时调用
@@ -317,6 +331,23 @@ protected:
      * 5. 绘制调试信息
      */
     virtual void Tick(float DeltaTime) override;
+
+    /**
+     * @brief 绑定单位死亡事件
+     * @param Unit 要绑定的单位
+     * @details 将 OnUnitDeath 函数绑定到单位的死亡委托
+     */
+    UFUNCTION()
+    void BindUnitDeathEvent(ASG_UnitsBase* Unit);
+    
+    /**
+     * @brief 解绑单位死亡事件
+     * @param Unit 要解绑的单位
+     * @details 从单位的死亡委托中移除 OnUnitDeath 函数
+     */
+    UFUNCTION()
+    void UnbindUnitDeathEvent(ASG_UnitsBase* Unit);
+
 
 private:
     /**
@@ -395,30 +426,8 @@ private:
      */
     void FindAndCacheMainCities();
     
-    /**
-     * @brief 单位死亡回调
-     * @param DeadUnit 死亡的单位
-     * @details 
-     * 功能说明：
-     * - 当最前方单位死亡时触发
-     * - 立即清除缓存并重新扫描
-     * - 确保前线始终跟踪有效单位
-     */
-    void OnUnitDeath(ASG_UnitsBase* DeadUnit);
-    
-    /**
-     * @brief 绑定单位死亡事件
-     * @param Unit 要绑定的单位
-     * @details 将 OnUnitDeath 函数绑定到单位的死亡委托
-     */
-    void BindUnitDeathEvent(ASG_UnitsBase* Unit);
-    
-    /**
-     * @brief 解绑单位死亡事件
-     * @param Unit 要解绑的单位
-     * @details 从单位的死亡委托中移除 OnUnitDeath 函数
-     */
-    void UnbindUnitDeathEvent(ASG_UnitsBase* Unit);
+ 
+
 
 private:
     // ========== 运行时数据 ==========

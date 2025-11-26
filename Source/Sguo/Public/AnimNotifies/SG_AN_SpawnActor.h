@@ -1,19 +1,22 @@
-﻿// 📄 文件：Source/Sguo/Public/AnimNotifies/SG_AN_SpawnProjectile.h
+// Fill out your copyright notice in the Description page of Project Settings.
 
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Animation/AnimNotifies/AnimNotify.h"
 #include "GameplayTagContainer.h"
-#include "SG_AN_SpawnProjectile.generated.h"
+#include "Animation/AnimNotifies/AnimNotify.h"
+#include "SG_AN_SpawnActor.generated.h"
 
+/**
+ * 
+ */
 UCLASS()
-class SGUO_API USG_AN_SpawnProjectile : public UAnimNotify
+class SGUO_API USG_AN_SpawnActor : public UAnimNotify
 {
 	GENERATED_BODY()
 
 public:
-	USG_AN_SpawnProjectile();
+	USG_AN_SpawnActor();
 
 	// ========== 发射点配置 ==========
 
@@ -63,4 +66,7 @@ public:
 #if WITH_EDITORONLY_DATA
 	FColor NotifyColor;
 #endif
+
+	
+	
 };

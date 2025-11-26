@@ -1,22 +1,12 @@
-﻿// 📄 文件：Source/Sguo/Private/AnimNotifies/SG_AN_SpawnProjectile.cpp
+// Fill out your copyright notice in the Description page of Project Settings.
 
-#include "AnimNotifies/SG_AN_SpawnProjectile.h"
+
+#include "AnimNotifies/SG_AN_SpawnActor.h"
+
 #include "AbilitySystemBlueprintLibrary.h"
-#include "AbilitySystemComponent.h"
-#include "Components/SkeletalMeshComponent.h"
-#include "DrawDebugHelpers.h"
-#include "Abilities/GameplayAbilityTargetTypes.h"
-#include "Debug/SG_LogCategories.h" // ✨ 新增 - 引入日志分类
+#include "Debug/SG_LogCategories.h"
 
-/**
- * @brief 构造函数
- * @details
- * 功能说明：
- * - 初始化所有默认值
- * - 设置默认事件标签
- * - 设置编辑器显示颜色
- */
-USG_AN_SpawnProjectile::USG_AN_SpawnProjectile()
+USG_AN_SpawnActor::USG_AN_SpawnActor()
 : SocketName(NAME_None)
 	, LocationOffset(FVector::ZeroVector)
 	, RotationOffset(FRotator::ZeroRotator)
@@ -30,6 +20,7 @@ USG_AN_SpawnProjectile::USG_AN_SpawnProjectile()
 	NotifyColor = FColor(255, 128, 0, 255);
 #endif
 }
+
 
 /**
  * @brief 通知触发回调
@@ -52,7 +43,8 @@ USG_AN_SpawnProjectile::USG_AN_SpawnProjectile()
  * - Scale3D.Y = 重力
  * - Scale3D.Z = 保留（默认 1.0）
  */
-void USG_AN_SpawnProjectile::Notify(USkeletalMeshComponent* MeshComp, UAnimSequenceBase* Animation, const FAnimNotifyEventReference& EventReference)
+void USG_AN_SpawnActor::Notify(USkeletalMeshComponent* MeshComp, UAnimSequenceBase* Animation,
+                               const FAnimNotifyEventReference& EventReference)
 {
 	Super::Notify(MeshComp, Animation, EventReference);
 
@@ -119,6 +111,7 @@ void USG_AN_SpawnProjectile::Notify(USkeletalMeshComponent* MeshComp, UAnimSeque
 	UAbilitySystemBlueprintLibrary::SendGameplayEventToActor(OwnerActor, EventTag, Payload);
 }
 
+
 /**
  * @brief 获取通知名称（编辑器显示）
  * @return 格式化的通知名称
@@ -127,8 +120,7 @@ void USG_AN_SpawnProjectile::Notify(USkeletalMeshComponent* MeshComp, UAnimSeque
  * - 在动画编辑器的时间轴上显示
  * - 包含 Socket 名称便于识别
  */
-FString USG_AN_SpawnProjectile::GetNotifyName_Implementation() const
+FString USG_AN_SpawnActor::GetNotifyName_Implementation() const
 {
-	return FString::Printf(TEXT("Spawn Proj (%s)"), SocketName.IsNone() ? TEXT("Root") : *SocketName.ToString());
-
+	return FString::Printf(TEXT("生成Actor插槽： (%s)"), SocketName.IsNone() ? TEXT("Root") : *SocketName.ToString());
 }

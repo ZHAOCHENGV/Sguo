@@ -19,6 +19,7 @@ public class Sguo : ModuleRules
 			"Niagara",
 			"UMG",
 			"Slate",
+			"StateTreeModule",
 			"GameplayTasks",
 			"GameplayTags",
 			"SlateCore",
@@ -26,8 +27,6 @@ public class Sguo : ModuleRules
 			// 添加 MVVM 模块以使用 ViewModel API
 			"ModelViewViewModel",
 			"DeveloperSettings",
-			"StateTreeModule",
-			"StateTreeEditorModule",
 			"GameplayStateTreeModule"
 		});
 

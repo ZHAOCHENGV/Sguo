@@ -504,70 +504,28 @@ void USG_CardDeckComponent::DrawCards(int32 Count)
     UE_LOG(LogSGCard, Log, TEXT("  弃牌池：%d 张"), DiscardPile.Num());
     
     // 记录成功抽取的数量
-    int32 SuccessCount = 0;
+    int32 DrawnCount  = 0;
     
-    // 循环抽取指定数量的卡牌
-    for (int32 i = 0; i < Count; ++i)
-    {
-        // 输出当前抽取进度
-        UE_LOG(LogSGCard, Verbose, TEXT("  [%d/%d] 抽取卡牌..."), i + 1, Count);
-        
-        // 准备新卡实例
-        FSGCardInstance NewCard;
-        
-        // 尝试抽牌
-        if (DrawSingleCard(NewCard))
-        {
-            // 添加到手牌
-            HandCards.Add(NewCard);
-            // 增加成功计数
-            SuccessCount++;
+	for (int32 i = 0; i < Count; ++i)
+	{
+		FSGCardInstance NewCard;
+		if (DrawSingleCard(NewCard))
+		{
+			HandCards.Add(NewCard);
+			DrawnCount++;
             
-            // 输出成功日志
-            FString CardName = NewCard.CardData ? NewCard.CardData->CardName.ToString() : TEXT("无效卡牌");
-            UE_LOG(LogSGCard, Log, TEXT("  ✓ [%d/%d] 抽到卡牌 - 名称: %s, 实例 ID: %s, 是否唯一: %s"), 
-                i + 1, Count,
-                *CardName, 
-                *NewCard.InstanceId.ToString(),
-                NewCard.bIsUnique ? TEXT("是") : TEXT("否"));
-        }
-        else
-        {
-            // 🔧 MODIFIED - 输出详细的失败原因
-            UE_LOG(LogSGCard, Warning, TEXT("  ❌ [%d/%d] 抽牌失败"), i + 1, Count);
-            
-            // 检查抽牌池状态
-            if (DrawPile.Num() == 0 && DiscardPile.Num() == 0)
-            {
-                UE_LOG(LogSGCard, Error, TEXT("    原因：抽牌池和弃牌池都为空，无法继续抽卡"));
-            }
-            else if (DrawPile.Num() == 0)
-            {
-                UE_LOG(LogSGCard, Warning, TEXT("    原因：抽牌池为空，尝试重新填充失败"));
-            }
-            else
-            {
-                UE_LOG(LogSGCard, Warning, TEXT("    原因：所有卡牌都已被消耗（唯一卡）"));
-            }
-            
-            // 终止抽卡
-            break;
-        }
-    }
+			UE_LOG(LogSGCard, Log, TEXT("  [%d] %s"), 
+				i + 1, 
+				NewCard.CardData ? *NewCard.CardData->CardName.ToString() : TEXT("未知"));
+		}
+		else
+		{
+			UE_LOG(LogSGCard, Warning, TEXT("  [%d] 抽卡失败"), i + 1);
+		}
+	}
     
-    // 🔧 MODIFIED - 输出抽卡结果统计
-    UE_LOG(LogSGCard, Log, TEXT("========================================"));
-    UE_LOG(LogSGCard, Log, TEXT("抽卡结果：成功 %d/%d 张"), SuccessCount, Count);
-    UE_LOG(LogSGCard, Log, TEXT("  当前手牌数：%d"), HandCards.Num());
-    UE_LOG(LogSGCard, Log, TEXT("  剩余抽牌池：%d 张"), DrawPile.Num());
-    UE_LOG(LogSGCard, Log, TEXT("========================================"));
-    
-    // 只有成功抽取卡牌时才广播手牌变化
-    if (SuccessCount > 0)
-    {
-        // 广播手牌变化
-        OnHandChanged.Broadcast(HandCards);
-    }
+	UE_LOG(LogSGCard, Log, TEXT("成功抽取 %d/%d 张卡牌，当前手牌数：%d"), 
+		DrawnCount, Count, HandCards.Num());
 }
 
 // 抽取单张卡牌
@@ -877,60 +835,30 @@ void USG_CardDeckComponent::StartCooldown()
  */
 void USG_CardDeckComponent::CompleteCooldown()
 {
-	// 输出日志
-	UE_LOG(LogSGCard, Warning, TEXT("========================================"));
-	UE_LOG(LogSGCard, Warning, TEXT("🔔 CompleteCooldown 被调用"));
-	UE_LOG(LogSGCard, Warning, TEXT("========================================"));
-    
-	// 🔧 MODIFIED - 防止重复调用
-	if (bActionAvailable)
-	{
-		// 输出警告
-		UE_LOG(LogSGCard, Warning, TEXT("  ⚠️ CompleteCooldown 重复调用，已经可以行动了"));
-		// 直接返回
-		return;
-	}
-    
-	// 输出当前手牌数量
-	UE_LOG(LogSGCard, Log, TEXT("  当前手牌数：%d"), HandCards.Num());
-    
-	// 检查抽牌池状态
-	int32 DrawPileCount = DrawPile.Num();
-	int32 DiscardPileCount = DiscardPile.Num();
-	UE_LOG(LogSGCard, Log, TEXT("  抽牌池：%d 张，弃牌池：%d 张"), DrawPileCount, DiscardPileCount);
+	UE_LOG(LogSGCard, Log, TEXT("冷却结束，抽取新卡"));
     
 	// 抽取一张新卡
-	UE_LOG(LogSGCard, Log, TEXT("  开始抽取新卡..."));
-	DrawCards(1);
-    
-	// 输出抽卡后的手牌数量
-	UE_LOG(LogSGCard, Log, TEXT("  抽卡后手牌数：%d"), HandCards.Num());
-    
-	// 🔧 MODIFIED - 先广播手牌变化，再恢复行动状态
-	// 确保 UI 先更新，再允许新的操作
-	UE_LOG(LogSGCard, Log, TEXT("📢 广播手牌变化事件..."));
-	OnHandChanged.Broadcast(HandCards);
-    
-	// 恢复行动
-	bActionAvailable = true;
-	// 重置冷却时间
-	CooldownRemaining = 0.0f;
-    
-	// 🔧 MODIFIED - 清除计时器句柄
-	if (GetWorld())
+	FSGCardInstance NewCard;
+	if (DrawSingleCard(NewCard))
 	{
-		GetWorld()->GetTimerManager().ClearTimer(CooldownTimerHandle);
-		UE_LOG(LogSGCard, Verbose, TEXT("  ✓ 已清除计时器句柄"));
+		HandCards.Add(NewCard);
+		UE_LOG(LogSGCard, Log, TEXT("  抽到：%s"), 
+			NewCard.CardData ? *NewCard.CardData->CardName.ToString() : TEXT("未知"));
+        
+		// 🔧 修改 - 在这里广播手牌变化
+		OnHandChanged.Broadcast(HandCards);
+	}
+	else
+	{
+		UE_LOG(LogSGCard, Warning, TEXT("  抽卡失败"));
 	}
     
-	// 输出日志
-	UE_LOG(LogSGCard, Log, TEXT("✓ 冷却完成，可以再次行动"));
+	// 恢复行动可用状态
+	bActionAvailable = true;
+	CooldownRemaining = 0.0f;
     
-	// 广播状态
+	// 广播行动状态变化
 	BroadcastActionState();
-    
-	// 输出日志
-	UE_LOG(LogSGCard, Log, TEXT("========================================"));
 }
 
 // 广播行动状态
@@ -971,58 +899,86 @@ USG_CardDataBase* USG_CardDeckComponent::ResolveCardData(const FPrimaryAssetId& 
 // 卡牌资产加载完成回调
 void USG_CardDeckComponent::HandleCardAssetsLoaded()
 {
-	// 记录加载完成日志
-	UE_LOG(LogSGCard, Log, TEXT("HandleCardAssetsLoaded 被调用"));
-	
-	// 重置加载句柄
-	CurrentLoadHandle.Reset();
-	// 标记加载完成
-	bAssetsLoading = false;
-	
-	// 检查配置有效性
-	if (!ResolvedDeckConfig)
-	{
-		UE_LOG(LogSGCard, Error, TEXT("❌ 加载完成但配置为空"));
-		return;
-	}
-	
-	// 记录初始化开始
-	UE_LOG(LogSGCard, Log, TEXT("清空运行时数据并构建抽牌堆..."));
-	
-	// 初始化数据结构
-	HandCards.Reset();
-	DrawPile.Reset();
-	DiscardPile.Reset();
-	SelectedCardId.Invalidate();
-	
-	// 构建抽牌池
-	BuildDrawPile();
-	
-	// 记录抽取初始手牌
-	UE_LOG(LogSGCard, Log, TEXT("抽取初始 %d 张手牌..."), ResolvedDeckConfig->InitialHand);
-	
-	// 🔧 MODIFIED - 直接抽取初始手牌，不延迟
-	// 抽取初始手牌
-	DrawCards(ResolvedDeckConfig->InitialHand);
-	
-	// ✨ NEW - 标记为已初始化（在广播前）
-	bInitialized = true;
-	bActionAvailable = true;
-	CooldownRemaining = 0.0f;
-	
-	// 🔧 MODIFIED - 立即广播初始化事件，不延迟
-	// 广播选中状态（初始为空）
-	OnSelectionChanged.Broadcast(SelectedCardId);
-	// 广播行动状态
-	BroadcastActionState();
-	
-	// ✨ NEW - 广播初始化完成事件
-	// UI 可以监听此事件来确保在正确的时机初始化
-	UE_LOG(LogSGCard, Log, TEXT("广播 OnDeckInitialized 事件..."));
-	OnDeckInitialized.Broadcast();
-	
-	// 记录初始化完成
-	UE_LOG(LogSGCard, Log, TEXT("✓ 卡组初始化完成！当前手牌数：%d"), HandCards.Num());
+	  // 重置加载状态
+    bAssetsLoading = false;
+    CurrentLoadHandle.Reset();
+
+    UE_LOG(LogSGCard, Log, TEXT("========== 卡牌资产加载完成 =========="));
+
+    // 检查配置有效性
+    if (!ResolvedDeckConfig)
+    {
+        UE_LOG(LogSGCard, Error, TEXT("❌ 卡组配置无效！"));
+        return;
+    }
+
+    // 初始化数据结构
+    HandCards.Empty();
+    DrawPile.Empty();
+    DiscardPile.Empty();
+    ConsumedUniqueCards.Empty();
+
+    // 初始化随机流
+    int32 Seed = ResolvedDeckConfig->GetEffectiveRNGSeed();
+    RandomStream.Initialize(Seed);
+    UE_LOG(LogSGCard, Log, TEXT("随机种子：%d"), Seed);
+
+    // 构建抽牌池
+    BuildDrawPile();
+
+    // 标记为已初始化
+    bInitialized = true;
+
+    // 🔧 修改 - 延迟一帧后抽取初始手牌（包含保证卡牌逻辑）
+    GetWorld()->GetTimerManager().SetTimerForNextTick([this]()
+    {
+        if (!bInitialized || !ResolvedDeckConfig)
+        {
+            return;
+        }
+
+        int32 InitialHandSize = ResolvedDeckConfig->InitialHand;
+        UE_LOG(LogSGCard, Log, TEXT("开始抽取初始手牌，目标数量：%d"), InitialHandSize);
+
+        // ✨ 新增 - 步骤1：先抽取保证初始手牌的卡牌
+        TArray<FSGCardInstance> GuaranteedCards;
+        int32 GuaranteedCount = DrawGuaranteedCards(GuaranteedCards);
+        
+        if (GuaranteedCount > 0)
+        {
+            UE_LOG(LogSGCard, Log, TEXT("  ✓ 抽取了 %d 张保证卡牌"), GuaranteedCount);
+            
+            // 将保证卡牌加入手牌
+            for (const FSGCardInstance& Card : GuaranteedCards)
+            {
+                HandCards.Add(Card);
+                UE_LOG(LogSGCard, Log, TEXT("    - %s"), 
+                    Card.CardData ? *Card.CardData->CardName.ToString() : TEXT("未知"));
+            }
+        }
+
+        // ✨ 新增 - 步骤2：计算还需要抽取多少张卡牌
+        int32 RemainingToDraw = InitialHandSize - HandCards.Num();
+        
+        if (RemainingToDraw > 0)
+        {
+            UE_LOG(LogSGCard, Log, TEXT("  继续抽取 %d 张普通卡牌"), RemainingToDraw);
+            DrawCards(RemainingToDraw);
+        }
+
+        // 广播手牌变化
+        OnHandChanged.Broadcast(HandCards);
+
+        // 设置行动可用
+        bActionAvailable = true;
+        BroadcastActionState();
+
+        // 广播初始化完成
+        OnDeckInitialized.Broadcast();
+
+        UE_LOG(LogSGCard, Log, TEXT("✓ 初始手牌抽取完成，共 %d 张"), HandCards.Num());
+        UE_LOG(LogSGCard, Log, TEXT("========================================"));
+    });
 }
 
 // ✨ NEW - 强制同步状态（供 UI 主动拉取）
@@ -1096,5 +1052,106 @@ TArray<FPrimaryAssetId> USG_CardDeckComponent::GatherCardAssetIds() const
 	}
 	
 	return Result;
+}
+
+int32 USG_CardDeckComponent::DrawGuaranteedCards(TArray<FSGCardInstance>& OutInstances)
+{
+	 // 清空输出数组
+    OutInstances.Empty();
+    
+    // 检查配置有效性
+    if (!ResolvedDeckConfig)
+    {
+        UE_LOG(LogSGCard, Warning, TEXT("DrawGuaranteedCards：配置无效"));
+        return 0;
+    }
+    
+    // 获取初始手牌数量限制
+    int32 MaxGuaranteed = ResolvedDeckConfig->InitialHand;
+    
+    UE_LOG(LogSGCard, Log, TEXT("========== 抽取保证卡牌 =========="));
+    
+    // 遍历所有配置槽位，找出标记为保证初始手牌的卡牌
+    for (int32 i = 0; i < ResolvedDeckConfig->AllowedCards.Num(); ++i)
+    {
+        const FSGCardConfigSlot& ConfigSlot = ResolvedDeckConfig->AllowedCards[i];
+        
+        // 检查是否标记为保证初始手牌
+        if (!ConfigSlot.bGuaranteedInInitialHand)
+        {
+            continue;
+        }
+        
+        // 检查是否已达到上限
+        if (OutInstances.Num() >= MaxGuaranteed)
+        {
+            UE_LOG(LogSGCard, Warning, TEXT("  ⚠️ 保证卡牌数量已达到初始手牌上限 %d，跳过剩余保证卡牌"), MaxGuaranteed);
+            break;
+        }
+        
+        // 加载卡牌数据
+        USG_CardDataBase* CardData = ConfigSlot.CardData.IsValid() 
+            ? ConfigSlot.CardData.Get() 
+            : ConfigSlot.CardData.LoadSynchronous();
+        
+        if (!CardData)
+        {
+            UE_LOG(LogSGCard, Warning, TEXT("  ⚠️ 槽位 %d 的卡牌数据加载失败"), i);
+            continue;
+        }
+        
+        // 检查唯一卡牌是否已被消耗
+        FPrimaryAssetId CardId = CardData->GetPrimaryAssetId();
+        if (CardData->bIsUnique && ConsumedUniqueCards.Contains(CardId))
+        {
+            UE_LOG(LogSGCard, Log, TEXT("  跳过已消耗的唯一卡牌：%s"), *CardData->CardName.ToString());
+            continue;
+        }
+        
+        // 创建卡牌实例
+        FSGCardInstance NewInstance;
+        NewInstance.InstanceId = FGuid::NewGuid();
+        NewInstance.CardData = CardData;
+        NewInstance.CardId = CardId;
+        NewInstance.bIsUnique = CardData->bIsUnique;
+        
+        // 添加到输出数组
+        OutInstances.Add(NewInstance);
+        
+        UE_LOG(LogSGCard, Log, TEXT("  ✓ 保证卡牌：%s (唯一: %s)"), 
+            *CardData->CardName.ToString(),
+            CardData->bIsUnique ? TEXT("是") : TEXT("否"));
+        
+        // 如果是唯一卡牌，标记为已消耗
+        if (CardData->bIsUnique)
+        {
+            ConsumedUniqueCards.Add(CardId);
+            UE_LOG(LogSGCard, Log, TEXT("    已标记为已消耗"));
+        }
+        
+        // 从抽牌池中移除对应槽位（避免重复抽到）
+        // 查找并移除
+        for (int32 j = DrawPile.Num() - 1; j >= 0; --j)
+        {
+            if (DrawPile[j].CardId == CardId)
+            {
+                // 如果是唯一卡牌，直接移除
+                // 如果不是唯一卡牌，只移除一个槽位
+                DrawPile.RemoveAt(j);
+                UE_LOG(LogSGCard, Verbose, TEXT("    从抽牌池移除槽位"));
+                
+                // 非唯一卡牌只移除一个
+                if (!CardData->bIsUnique)
+                {
+                    break;
+                }
+            }
+        }
+    }
+    
+    UE_LOG(LogSGCard, Log, TEXT("  共抽取 %d 张保证卡牌"), OutInstances.Num());
+    UE_LOG(LogSGCard, Log, TEXT("========================================"));
+    
+    return OutInstances.Num();
 }
 

@@ -529,5 +529,21 @@ protected:
 	 */
 	TArray<FPrimaryAssetId> GatherCardAssetIds() const;
 
+	// ✨ 新增 - 抽取保证初始手牌的卡牌
+	/**
+	 * @brief 抽取保证初始手牌的卡牌
+	 * @param OutInstances 输出的卡牌实例数组
+	 * @return 成功抽取的卡牌数量
+	 * @details
+	 * 功能说明：
+	 * - 从配置中找出所有标记为 bGuaranteedInInitialHand 的卡牌
+	 * - 优先将这些卡牌加入初始手牌
+	 * - 如果保证卡牌数量超过初始手牌数，只取前 N 张
+	 * 注意事项：
+	 * - 此函数在 DrawCards 之前调用
+	 * - 保证卡牌会从抽牌池中移除（如果是唯一卡牌）
+	 */
+	int32 DrawGuaranteedCards(TArray<FSGCardInstance>& OutInstances);
+
 };
 

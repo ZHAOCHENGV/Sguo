@@ -19,6 +19,7 @@
 #include "Player/SG_Player.h"
 #include "Buildings/SG_MainCityBase.h"
 #include "Kismet/GameplayStatics.h"
+#include "Strategies/SG_StrategyEffectBase.h"
 
 ASG_PlayerController::ASG_PlayerController()
 {
@@ -150,13 +151,33 @@ void ASG_PlayerController::StartCardPlacement(USG_CardDataBase* CardData, const 
 		return;
 	}
 
+	UE_LOG(LogTemp, Log, TEXT("========== 开始放置卡牌：%s =========="), *CardData->CardName.ToString());
+
+	// ✨ 新增 - 检查是否需要预览
+	if (!DoesCardRequirePreview(CardData))
+	{
+		// 全局效果计谋卡，直接使用
+		USG_StrategyCardData* StrategyCard = Cast<USG_StrategyCardData>(CardData);
+		if (StrategyCard)
+		{
+			UE_LOG(LogSGGameplay, Log, TEXT("  全局效果卡牌，直接使用"));
+			UseStrategyCardDirectly(StrategyCard, CardInstanceId);
+            
+			// 清除选中状态
+			if (CardDeckComponent)
+			{
+				CardDeckComponent->SelectCard(FGuid());
+			}
+			return;
+		}
+	}
+
+	// 需要预览的卡牌，继续原有逻辑
 	if (!PlacementPreviewClass)
 	{
 		UE_LOG(LogTemp, Error, TEXT("StartCardPlacement 失败：PlacementPreviewClass 未设置"));
 		return;
 	}
-
-	UE_LOG(LogTemp, Log, TEXT("========== 开始放置卡牌：%s =========="), *CardData->CardName.ToString());
 
 	if (CurrentPreviewActor)
 	{
@@ -215,18 +236,27 @@ void ASG_PlayerController::ConfirmPlacement()
 
 	// 获取生成位置
 	FVector UnitSpawnLocation = CurrentPreviewActor->GetPreviewLocation();
-    
-	// 🔧 MODIFIED - 使用计算函数获取朝向（基于敌方主城位置）
 	FRotator UnitSpawnRotation = CalculateUnitSpawnRotation(UnitSpawnLocation);
 
 	// 输出生成信息
 	UE_LOG(LogSGGameplay, Log, TEXT("放置位置：%s"), *UnitSpawnLocation.ToString());
 	UE_LOG(LogSGGameplay, Log, TEXT("放置旋转：%s"), *UnitSpawnRotation.ToString());
 
+	// ✨ 新增 - 检查是否是计谋卡
+	USG_StrategyCardData* StrategyCard = Cast<USG_StrategyCardData>(CurrentSelectedCardData);
+	if (StrategyCard)
+	{
+		// 区域效果计谋卡
+		UE_LOG(LogSGGameplay, Log, TEXT("使用区域计谋卡：%s"), *StrategyCard->CardName.ToString());
+		UseStrategyCard(StrategyCard, UnitSpawnLocation);
+	}
+	else
+	{
+		// 角色卡
+		SpawnUnitFromCard(CurrentSelectedCardData, UnitSpawnLocation, UnitSpawnRotation);
+	}
 
-	// 🔧 MODIFIED - 使用新的变量名
-	SpawnUnitFromCard(CurrentSelectedCardData, UnitSpawnLocation, UnitSpawnRotation);
-
+	// 使用卡牌
 	if (CardDeckComponent)
 	{
 		bool bSuccess = CardDeckComponent->UseCard(CurrentSelectedCardInstanceId);
@@ -240,6 +270,7 @@ void ASG_PlayerController::ConfirmPlacement()
 		}
 	}
 
+	// 销毁预览 Actor
 	if (CurrentPreviewActor)
 	{
 		CurrentPreviewActor->Destroy();
@@ -274,6 +305,55 @@ void ASG_PlayerController::CancelPlacement()
 	CurrentSelectedCardInstanceId.Invalidate();
 
 	UE_LOG(LogTemp, Log, TEXT("========================================"));
+}
+
+void ASG_PlayerController::UseStrategyCard(USG_StrategyCardData* StrategyCardData, const FVector& TargetLocation)
+{
+	// 检查参数有效性
+	if (!StrategyCardData)
+	{
+		UE_LOG(LogTemp, Error, TEXT("UseStrategyCard 失败：StrategyCardData 为空"));
+		return;
+	}
+    
+	UE_LOG(LogSGGameplay, Log, TEXT("========== 使用计谋卡：%s =========="), 
+		*StrategyCardData->CardName.ToString());
+    
+	// 检查效果 Actor 类是否设置
+	if (!StrategyCardData->EffectActorClass)
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ EffectActorClass 未设置！"));
+		return;
+	}
+    
+	// 生成效果 Actor
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Owner = this;
+	SpawnParams.Instigator = GetPawn();
+    
+	ASG_StrategyEffectBase* EffectActor = GetWorld()->SpawnActor<ASG_StrategyEffectBase>(
+		StrategyCardData->EffectActorClass,
+		TargetLocation,
+		FRotator::ZeroRotator,
+		SpawnParams
+	);
+    
+	if (EffectActor)
+	{
+		// 初始化效果
+		EffectActor->InitializeEffect(StrategyCardData, GetPawn(), TargetLocation);
+        
+		// 执行效果
+		EffectActor->ExecuteEffect();
+        
+		UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 计谋效果已生成并执行"));
+	}
+	else
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 效果 Actor 生成失败"));
+	}
+    
+	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 }
 
 void ASG_PlayerController::OnConfirmInput()
@@ -501,9 +581,9 @@ void ASG_PlayerController::SpawnUnitFromCard(USG_CardDataBase* CardData, const F
 	{
 		// 输出日志
 		UE_LOG(LogTemp, Log, TEXT("生成计谋效果"));
-		UE_LOG(LogTemp, Warning, TEXT("⚠️ 计谋卡生成逻辑尚未实现"));
-		
-		// TODO: 实现计谋卡逻辑
+    
+		// ✨ 新增 - 调用 UseStrategyCard
+		UseStrategyCard(StrategyCard, UnitSpawnLocation);
 	}
 	// ========== 步骤4：未知卡牌类型 ==========
 	else
@@ -663,4 +743,194 @@ FRotator ASG_PlayerController::CalculateUnitSpawnRotation(const FVector& UnitLoc
     UE_LOG(LogSGGameplay, Verbose, TEXT("使用默认朝向：+X 方向"));
     // 返回默认旋转
     return FRotator(0.0f, 0.0f, 0.0f);
+}
+
+bool ASG_PlayerController::DoesCardRequirePreview(USG_CardDataBase* CardData) const
+{
+	if (!CardData)
+	{
+		return false;
+	}
+    
+	// 检查是否是计谋卡
+	USG_StrategyCardData* StrategyCard = Cast<USG_StrategyCardData>(CardData);
+	if (StrategyCard)
+	{
+		// 根据放置类型判断
+		// Global（全局）：不需要预览
+		// Single（单点）或 Area（区域）：需要预览
+		if (CardData->PlacementType == ESGPlacementType::Global)
+		{
+			UE_LOG(LogSGGameplay, Log, TEXT("  计谋卡 [%s] 是全局效果，不需要预览"), 
+				*CardData->CardName.ToString());
+			return false;
+		}
+		else
+		{
+			UE_LOG(LogSGGameplay, Log, TEXT("  计谋卡 [%s] 需要选择目标位置"), 
+				*CardData->CardName.ToString());
+			return true;
+		}
+	}
+    
+	// 角色卡：需要预览
+	USG_CharacterCardData* CharacterCard = Cast<USG_CharacterCardData>(CardData);
+	if (CharacterCard)
+	{
+		UE_LOG(LogSGGameplay, Log, TEXT("  角色卡 [%s] 需要预览"), 
+			*CardData->CardName.ToString());
+		return true;
+	}
+    
+	// 默认需要预览
+	return true;
+}
+
+void ASG_PlayerController::UseStrategyCardDirectly(USG_StrategyCardData* StrategyCardData, const FGuid& CardInstanceId)
+{
+	    if (!StrategyCardData)
+    {
+        UE_LOG(LogTemp, Error, TEXT("UseStrategyCardDirectly 失败：StrategyCardData 为空"));
+        return;
+    }
+    
+    UE_LOG(LogSGGameplay, Log, TEXT("========== 直接使用计谋卡：%s =========="), 
+        *StrategyCardData->CardName.ToString());
+    
+    // ========== 分支1：纯 GE 效果（如神速计、强攻计）==========
+    if (StrategyCardData->GameplayEffectClass && !StrategyCardData->EffectActorClass)
+    {
+        UE_LOG(LogSGGameplay, Log, TEXT("  使用纯 GE 模式"));
+        UE_LOG(LogSGGameplay, Log, TEXT("  持续时间：%.1f 秒"), StrategyCardData->Duration);
+        
+        // 获取施放者阵营
+        FGameplayTag PlayerFactionTag = FGameplayTag::RequestGameplayTag(FName("Unit.Faction.Player"), false);
+        
+        // 获取所有友方单位
+        TArray<AActor*> FriendlyUnits;
+        TArray<AActor*> AllUnits;
+        UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_UnitsBase::StaticClass(), AllUnits);
+        
+        for (AActor* Actor : AllUnits)
+        {
+            ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(Actor);
+            if (Unit && !Unit->bIsDead && Unit->FactionTag.MatchesTag(PlayerFactionTag))
+            {
+                FriendlyUnits.Add(Unit);
+            }
+        }
+        
+        UE_LOG(LogSGGameplay, Log, TEXT("  找到 %d 个友方单位"), FriendlyUnits.Num());
+        
+        // ✨ 新增 - 获取 Duration Tag（用于 SetByCaller）
+        FGameplayTag DurationTag = FGameplayTag::RequestGameplayTag(FName("Data.Duration"), false);
+        
+        // 对每个友方单位应用 GE
+        int32 SuccessCount = 0;
+        for (AActor* Actor : FriendlyUnits)
+        {
+            ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(Actor);
+            if (!Unit)
+            {
+                continue;
+            }
+            
+            UAbilitySystemComponent* UnitASC = Unit->GetAbilitySystemComponent();
+            if (!UnitASC)
+            {
+                UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 单位 %s 没有 ASC"), *Unit->GetName());
+                continue;
+            }
+            
+            // 创建效果上下文
+            FGameplayEffectContextHandle ContextHandle = UnitASC->MakeEffectContext();
+            ContextHandle.AddInstigator(GetPawn(), GetPawn());
+            
+            // 创建效果规格
+            FGameplayEffectSpecHandle SpecHandle = UnitASC->MakeOutgoingSpec(
+                StrategyCardData->GameplayEffectClass, 
+                1.0f, 
+                ContextHandle
+            );
+            
+            if (!SpecHandle.IsValid())
+            {
+                UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 无法为 %s 创建 GE 规格"), *Unit->GetName());
+                continue;
+            }
+            
+            // ✨ 新增 - 通过 SetByCaller 传递 Duration
+            if (DurationTag.IsValid())
+            {
+                SpecHandle.Data->SetSetByCallerMagnitude(DurationTag, StrategyCardData->Duration);
+                UE_LOG(LogSGGameplay, Verbose, TEXT("  设置 Duration = %.1f"), StrategyCardData->Duration);
+            }
+            
+            // 应用效果
+            FActiveGameplayEffectHandle ActiveHandle = UnitASC->ApplyGameplayEffectSpecToSelf(
+                *SpecHandle.Data.Get()
+            );
+            
+            if (ActiveHandle.IsValid())
+            {
+                SuccessCount++;
+                UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 对 %s 应用效果成功"), *Unit->GetName());
+            }
+        }
+        
+        UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 成功对 %d/%d 个单位应用效果"), 
+            SuccessCount, FriendlyUnits.Num());
+    }
+    // ========== 分支2：效果 Actor 模式（如流木计、火矢计）==========
+    else if (StrategyCardData->EffectActorClass)
+    {
+        UE_LOG(LogSGGameplay, Log, TEXT("  使用效果 Actor 模式"));
+        
+        FActorSpawnParameters SpawnParams;
+        SpawnParams.Owner = this;
+        SpawnParams.Instigator = GetPawn();
+        
+        FVector EffectLocation = GetPawn() ? GetPawn()->GetActorLocation() : FVector::ZeroVector;
+        
+        ASG_StrategyEffectBase* EffectActor = GetWorld()->SpawnActor<ASG_StrategyEffectBase>(
+            StrategyCardData->EffectActorClass,
+            EffectLocation,
+            FRotator::ZeroRotator,
+            SpawnParams
+        );
+        
+        if (EffectActor)
+        {
+            EffectActor->InitializeEffect(StrategyCardData, GetPawn(), EffectLocation);
+            EffectActor->ExecuteEffect();
+            UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 效果 Actor 已生成并执行"));
+        }
+        else
+        {
+            UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 效果 Actor 生成失败"));
+            return;
+        }
+    }
+    // ========== 分支3：都没设置 ==========
+    else
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ GameplayEffectClass 和 EffectActorClass 都未设置！"));
+        return;
+    }
+    
+    // ========== 使用卡牌（进入冷却）==========
+    if (CardDeckComponent)
+    {
+        bool bSuccess = CardDeckComponent->UseCard(CardInstanceId);
+        if (bSuccess)
+        {
+            UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 卡牌使用成功，进入冷却"));
+        }
+        else
+        {
+            UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 卡牌使用失败"));
+        }
+    }
+    
+    UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 }

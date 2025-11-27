@@ -17,6 +17,9 @@ class USG_CardDeckComponent;
 class USG_CardHandWidget;
 class ASG_PlacementPreview;
 class USG_CardDataBase;
+class USG_StrategyCardData;
+// ✨ 新增 - 前向声明
+class USG_StrategyCardData;
 
 UCLASS()
 class SGUO_API ASG_PlayerController : public APlayerController
@@ -160,6 +163,20 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Placement")
 	void CancelPlacement();
 
+	// ✨ 新增 - 使用计谋卡
+	/**
+	 * @brief 使用计谋卡
+	 * @param StrategyCardData 计谋卡数据
+	 * @param TargetLocation 目标位置（区域效果使用）
+	 * @details
+	 * 功能说明：
+	 * - 根据计谋卡类型生成对应的效果 Actor
+	 * - 全局效果直接生效
+	 * - 区域效果在目标位置生效
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Strategy")
+	void UseStrategyCard(USG_StrategyCardData* StrategyCardData, const FVector& TargetLocation);
+
 private:
 	// ✨ NEW - 绑定 Pawn 输入事件
 	/**
@@ -243,4 +260,33 @@ private:
 	 */
 	UPROPERTY(Transient)
 	TObjectPtr<ASG_MainCityBase> CachedEnemyMainCity = nullptr;
+
+public:
+	// ✨ 新增 - 检查卡牌是否需要预览
+	/**
+	 * @brief 检查卡牌是否需要放置预览
+	 * @param CardData 卡牌数据
+	 * @return 是否需要预览
+	 * @details
+	 * 功能说明：
+	 * - 角色卡：需要预览（选择放置位置）
+	 * - 区域计谋卡：需要预览（选择目标区域）
+	 * - 全局计谋卡：不需要预览（直接生效）
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Placement")
+	bool DoesCardRequirePreview(USG_CardDataBase* CardData) const;
+
+	// ✨ 新增 - 直接使用计谋卡（全局效果）
+	/**
+	 * @brief 直接使用计谋卡（不需要选择位置）
+	 * @param StrategyCardData 计谋卡数据
+	 * @param CardInstanceId 卡牌实例 ID
+	 * @details
+	 * 功能说明：
+	 * - 用于全局效果的计谋卡
+	 * - 直接生成效果 Actor 并执行
+	 * - 不需要预览和位置选择
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Strategy")
+	void UseStrategyCardDirectly(USG_StrategyCardData* StrategyCardData, const FGuid& CardInstanceId);
 };

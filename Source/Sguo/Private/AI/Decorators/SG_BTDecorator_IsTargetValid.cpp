@@ -74,15 +74,24 @@ bool USG_BTDecorator_IsTargetValid::CalculateRawConditionValue(UBehaviorTreeComp
 	ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(Target);
 	if (TargetUnit)
 	{
+		// 检查死亡状态
 		if (TargetUnit->bIsDead)
 		{
 			UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位已死亡：%s"), *TargetUnit->GetName());
 			return false;
 		}
         
+		// 检查生命值
 		if (TargetUnit->AttributeSet && TargetUnit->AttributeSet->GetHealth() <= 0.0f)
 		{
 			UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位生命值为 0：%s"), *TargetUnit->GetName());
+			return false;
+		}
+        
+		// ✨ 新增 - 检查是否可被选为目标
+		if (!TargetUnit->CanBeTargeted())
+		{
+			UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位不可被选中：%s"), *TargetUnit->GetName());
 			return false;
 		}
 	}
@@ -120,7 +129,7 @@ void USG_BTDecorator_IsTargetValid::TickNode(UBehaviorTreeComponent& OwnerComp, 
 	// 计算当前条件
 	bool bCurrentCondition = CalculateRawConditionValue(OwnerComp, NodeMemory);
     
-	// 如果条件变为 false（目标死亡），请求重新评估
+	// 如果条件变为 false（目标死亡或不可选中），请求重新评估
 	if (!bCurrentCondition)
 	{
 		// 请求行为树重新评估此节点

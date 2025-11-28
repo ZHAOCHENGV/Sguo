@@ -279,6 +279,12 @@ bool USG_BTTask_AttackTarget::IsTargetAlive(AActor* Target) const
             return false;
         }
         
+        // ✨ 新增 - 检查是否可被选为目标
+        if (!TargetUnit->CanBeTargeted())
+        {
+            return false;
+        }
+        
         return true;
     }
     

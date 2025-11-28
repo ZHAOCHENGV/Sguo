@@ -36,6 +36,7 @@ USG_BTDecorator_IsInAttackRange::USG_BTDecorator_IsInAttackRange()
  * - 🔧 修复：主城使用检测盒表面距离
  * - ✨ 新增：进入攻击范围时立即停止移动
  * 🔧 修改 - 增加目标有效性检查
+ * - 🔧 修改 - 增加 CanBeTargeted 检查
  */
 bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) const
 {
@@ -71,8 +72,15 @@ bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeCo
 			UE_LOG(LogSGGameplay, Verbose, TEXT("  IsInAttackRange: 目标单位已死亡，返回 false"));
 			return false;
 		}
+		// ✨ 新增 - 检查是否可被选为目标
+		if (!TargetUnit->CanBeTargeted())
+		{
+			UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位不可被选中：%s"), *TargetUnit->GetName());
+			return false;
+		}
 	}
-    
+
+	
 	// ✨ 新增 - 检查主城是否已摧毁
 	if (ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(Target))
 	{

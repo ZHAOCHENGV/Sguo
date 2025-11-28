@@ -46,7 +46,7 @@ USG_BTService_UpdateTarget::USG_BTService_UpdateTarget()
  */
 void USG_BTService_UpdateTarget::TickNode(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds)
 {
-	 Super::TickNode(OwnerComp, NodeMemory, DeltaSeconds);
+	Super::TickNode(OwnerComp, NodeMemory, DeltaSeconds);
     
     ASG_AIControllerBase* AIController = Cast<ASG_AIControllerBase>(OwnerComp.GetAIOwner());
     if (!AIController)
@@ -54,7 +54,7 @@ void USG_BTService_UpdateTarget::TickNode(UBehaviorTreeComponent& OwnerComp, uin
         return;
     }
     
-    // ✨ 新增 - 获取控制的单位，检查攻击状态
+    // 获取控制的单位，检查攻击状态
     ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
     if (!ControlledUnit)
     {
@@ -77,8 +77,16 @@ void USG_BTService_UpdateTarget::TickNode(UBehaviorTreeComponent& OwnerComp, uin
         ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(CurrentTarget);
         if (TargetUnit)
         {
+            // 🔧 修改 - 增加 CanBeTargeted 检查
             bIsTargetValid = !TargetUnit->bIsDead && 
+                             TargetUnit->CanBeTargeted() &&  // ✨ 新增
                              (!TargetUnit->AttributeSet || TargetUnit->AttributeSet->GetHealth() > 0.0f);
+            
+            // ✨ 新增 - 如果目标不可被选中，输出日志
+            if (!TargetUnit->CanBeTargeted())
+            {
+                UE_LOG(LogSGGameplay, Log, TEXT("🔄 目标不可被选中，需要重新寻找目标：%s"), *TargetUnit->GetName());
+            }
         }
         // 检查主城
         else
@@ -99,9 +107,6 @@ void USG_BTService_UpdateTarget::TickNode(UBehaviorTreeComponent& OwnerComp, uin
     // ========== 如果目标无效，查找新目标 ==========
     if (!bIsTargetValid)
     {
-        // ✨ 新增 - 检查是否正在攻击动画中
-        // 如果正在攻击，只更新目标但不强制中断
-        // 攻击任务会在 Tick 中检测到目标死亡并处理
         bool bIsAttacking = ControlledUnit->bIsAttacking;
         
         UE_LOG(LogSGGameplay, Log, TEXT("🔄 目标无效，查找新目标 (正在攻击: %s)"), 
@@ -116,10 +121,9 @@ void USG_BTService_UpdateTarget::TickNode(UBehaviorTreeComponent& OwnerComp, uin
             
             UE_LOG(LogSGGameplay, Log, TEXT("✓ 找到新目标：%s"), *NewTarget->GetName());
             
-            // ✨ 新增 - 如果不在攻击中，请求行为树重新评估
+            // 如果不在攻击中，请求行为树重新评估
             if (!bIsAttacking)
             {
-                // 通过设置黑板值触发行为树重新评估
                 BlackboardComp->SetValueAsBool(FName("IsInAttackRange"), false);
             }
         }

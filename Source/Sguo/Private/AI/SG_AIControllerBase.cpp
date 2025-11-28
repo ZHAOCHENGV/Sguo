@@ -337,86 +337,86 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
  * 功能说明：
  * - 在行军或攻击主城时，检测周边是否有新目标
  * - 如果发现新目标，转移仇恨
- * 详细流程：
- * 1. 获取检测范围内的所有敌方单位
- * 2. 排除当前目标
- * 3. 如果有新目标，更新黑板
- * 注意事项：
- * - 只在攻击主城或移动时检测
- * - 检测半径可配置
+ * - 🔧 修改 - 增加 CanBeTargeted 检查
  */
 bool ASG_AIControllerBase::DetectNearbyThreats(float DetectionRadius)
 {
 	// 获取控制的单位
-	ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
-	if (!ControlledUnit)
-	{
-		return false;
-	}
-	
-	// 获取当前目标
-	AActor* CurrentTarget = GetCurrentTarget();
-	
-	// 🔧 修改 - 只有当前目标是主城时才检测周边威胁
-	UBlackboardComponent* BlackboardComp = GetBlackboardComponent();
-	if (BlackboardComp && !BlackboardComp->GetValueAsBool(BB_IsTargetMainCity))
-	{
-		// 当前目标不是主城，不需要检测
-		return false;
-	}
-	
-	// 获取单位的阵营标签
-	FGameplayTag MyFaction = ControlledUnit->FactionTag;
-	
-	// 获取所有单位
-	TArray<AActor*> AllUnits;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_UnitsBase::StaticClass(), AllUnits);
-	
-	// 查找检测范围内的敌方单位
-	for (AActor* Actor : AllUnits)
-	{
-		// 排除自己和当前目标
-		if (Actor == ControlledUnit || Actor == CurrentTarget)
-		{
-			continue;
-		}
-		
-		// 转换为单位类型
-		ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(Actor);
-		if (!Unit)
-		{
-			continue;
-		}
-		
-		// 检查阵营（不同阵营才是敌人）
-		if (Unit->FactionTag != MyFaction)
-		{
-			// 检查是否已死亡
-			if (Unit->bIsDead)
-			{
-				continue;
-			}
-			
-			// 计算距离
-			float Distance = FVector::Dist(ControlledUnit->GetActorLocation(), Unit->GetActorLocation());
-			
-			// 如果在检测范围内，转移仇恨
-			if (Distance <= DetectionRadius)
-			{
-				SetCurrentTarget(Unit);
-				
-				// ✨ 新增 - 立即停止当前移动，强迫行为树重新评估
-				// 这会导致 MoveToTarget 任务检测到移动停止而结束，从而进入下一次决策循环
-				StopMovement();
+    ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
+    if (!ControlledUnit)
+    {
+        return false;
+    }
+    
+    // 获取当前目标
+    AActor* CurrentTarget = GetCurrentTarget();
+    
+    // 🔧 修改 - 只有当前目标是主城时才检测周边威胁
+    UBlackboardComponent* BlackboardComp = GetBlackboardComponent();
+    if (BlackboardComp && !BlackboardComp->GetValueAsBool(BB_IsTargetMainCity))
+    {
+        // 当前目标不是主城，不需要检测
+        return false;
+    }
+    
+    // 获取单位的阵营标签
+    FGameplayTag MyFaction = ControlledUnit->FactionTag;
+    
+    // 获取所有单位
+    TArray<AActor*> AllUnits;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_UnitsBase::StaticClass(), AllUnits);
+    
+    // 查找检测范围内的敌方单位
+    for (AActor* Actor : AllUnits)
+    {
+        // 排除自己和当前目标
+        if (Actor == ControlledUnit || Actor == CurrentTarget)
+        {
+            continue;
+        }
+        
+        // 转换为单位类型
+        ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(Actor);
+        if (!Unit)
+        {
+            continue;
+        }
+        
+        // 检查阵营（不同阵营才是敌人）
+        if (Unit->FactionTag != MyFaction)
+        {
+            // 检查是否已死亡
+            if (Unit->bIsDead)
+            {
+                continue;
+            }
+            
+            // ✨ 新增 - 检查是否可被选为目标
+            if (!Unit->CanBeTargeted())
+            {
+                UE_LOG(LogSGGameplay, Verbose, TEXT("  DetectNearbyThreats: 跳过不可选中单位：%s"), *Unit->GetName());
+                continue;
+            }
+            
+            // 计算距离
+            float Distance = FVector::Dist(ControlledUnit->GetActorLocation(), Unit->GetActorLocation());
+            
+            // 如果在检测范围内，转移仇恨
+            if (Distance <= DetectionRadius)
+            {
+                SetCurrentTarget(Unit);
+                
+                // 立即停止当前移动，强迫行为树重新评估
+                StopMovement();
 
-				UE_LOG(LogSGGameplay, Log, TEXT("🔄 %s 检测到周边威胁，从主城转移目标到单位：%s"), 
-					*ControlledUnit->GetName(), *Unit->GetName());
-				return true;
-			}
-		}
-	}
-	
-	return false;
+                UE_LOG(LogSGGameplay, Log, TEXT("🔄 %s 检测到周边威胁，从主城转移目标到单位：%s"), 
+                    *ControlledUnit->GetName(), *Unit->GetName());
+                return true;
+            }
+        }
+    }
+    
+    return false;
 }
 
 /**
@@ -516,11 +516,11 @@ bool ASG_AIControllerBase::IsTargetValid() const
 		return false;
 	}
     
-	// 检查单位是否已死亡
+	// 检查单位是否已死亡或不可被选中
 	ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(CurrentTarget);
 	if (TargetUnit)
 	{
-		// 🔧 修改 - 优先检查死亡标记
+		// 检查死亡标记
 		if (TargetUnit->bIsDead)
 		{
 			UE_LOG(LogSGGameplay, Verbose, TEXT("  目标单位已死亡（bIsDead）：%s"), *TargetUnit->GetName());
@@ -531,6 +531,13 @@ bool ASG_AIControllerBase::IsTargetValid() const
 		if (TargetUnit->AttributeSet && TargetUnit->AttributeSet->GetHealth() <= 0.0f)
 		{
 			UE_LOG(LogSGGameplay, Verbose, TEXT("  目标单位生命值为 0：%s"), *TargetUnit->GetName());
+			return false;
+		}
+        
+		// ✨ 新增 - 检查是否可被选为目标
+		if (!TargetUnit->CanBeTargeted())
+		{
+			UE_LOG(LogSGGameplay, Verbose, TEXT("  目标单位不可被选中：%s"), *TargetUnit->GetName());
 			return false;
 		}
 	}

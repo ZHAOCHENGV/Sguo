@@ -337,126 +337,162 @@ void USG_GameplayAbility_Attack::SpawnProjectileToTarget(AActor* Target, const F
  */
 void USG_GameplayAbility_Attack::OnSpawnProjectileEvent(FGameplayEventData Payload)
 {
-UE_LOG(LogSGGameplay, Log, TEXT("========== 处理投射物生成事件 =========="));
-	
-	AActor* AvatarActor = GetAvatarActorFromActorInfo();
-	if (!AvatarActor)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 施放者为空"));
-		return;
-	}
+UE_LOG(LogSGGameplay, Warning, TEXT("========== 🎯 处理投射物生成事件 =========="));
+    
+    AActor* AvatarActor = GetAvatarActorFromActorInfo();
+    if (!AvatarActor)
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 施放者为空"));
+        return;
+    }
+    
+    UE_LOG(LogSGGameplay, Warning, TEXT("  施放者：%s"), *AvatarActor->GetName());
+    UE_LOG(LogSGGameplay, Warning, TEXT("  施放者位置：%s"), *AvatarActor->GetActorLocation().ToString());
 
-	ASG_UnitsBase* SourceUnit = Cast<ASG_UnitsBase>(AvatarActor);
-	if (!SourceUnit)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 施放者不是 SG_UnitsBase"));
-		return;
-	}
-	
-	// 获取目标
-	AActor* CurrentTarget = SourceUnit->CurrentTarget;
-	if (!CurrentTarget)
-	{
-		TArray<AActor*> PotentialTargets;
-		if (FindTargetsInRange(PotentialTargets) > 0)
-		{
-			CurrentTarget = PotentialTargets[0];
-		}
-		else
-		{
-			UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 无法找到目标"));
-			return;
-		}
-	}
+    ASG_UnitsBase* SourceUnit = Cast<ASG_UnitsBase>(AvatarActor);
+    if (!SourceUnit)
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 施放者不是 SG_UnitsBase"));
+        return;
+    }
+    
+    // ✨ 新增 - 检查单位状态
+    UE_LOG(LogSGGameplay, Warning, TEXT("  单位是否死亡：%s"), SourceUnit->bIsDead ? TEXT("是") : TEXT("否"));
+    UE_LOG(LogSGGameplay, Warning, TEXT("  单位是否正在攻击：%s"), SourceUnit->bIsAttacking ? TEXT("是") : TEXT("否"));
+    
+    // 获取目标
+    AActor* CurrentTarget = SourceUnit->CurrentTarget;
+    
+    // ✨ 新增 - 详细的目标检查
+    if (!CurrentTarget)
+    {
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ CurrentTarget 为空，尝试查找目标..."));
+        
+        TArray<AActor*> PotentialTargets;
+        if (FindTargetsInRange(PotentialTargets) > 0)
+        {
+            CurrentTarget = PotentialTargets[0];
+            UE_LOG(LogSGGameplay, Warning, TEXT("  ✓ 找到替代目标：%s"), *CurrentTarget->GetName());
+        }
+        else
+        {
+            UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 无法找到任何目标，取消生成投射物"));
+            return;
+        }
+    }
+    else
+    {
+        UE_LOG(LogSGGameplay, Warning, TEXT("  目标：%s"), *CurrentTarget->GetName());
+        UE_LOG(LogSGGameplay, Warning, TEXT("  目标位置：%s"), *CurrentTarget->GetActorLocation().ToString());
+    }
 
-	// 从 Payload 中提取参数
-	FVector SpawnLocation = AvatarActor->GetActorLocation();
-	float OverrideSpeed = 0.0f;
-	float OverrideArcHeight = -1.0f;
+    // 从 Payload 中提取参数
+    FVector SpawnLocation = AvatarActor->GetActorLocation();
+    float OverrideSpeed = 0.0f;
+    float OverrideArcHeight = -1.0f;
 
-	if (Payload.TargetData.IsValid(0))
-	{
-		const FGameplayAbilityTargetData* Data = Payload.TargetData.Get(0);
-		if (Data)
-		{
-			const FGameplayAbilityTargetData_LocationInfo* LocationData = 
-				static_cast<const FGameplayAbilityTargetData_LocationInfo*>(Data);
-			
-			if (LocationData)
-			{
-				FTransform FullTransform = LocationData->TargetLocation.LiteralTransform;
-				SpawnLocation = FullTransform.GetLocation();
-				
-				FVector ParamsPayload = FullTransform.GetScale3D();
-				OverrideSpeed = ParamsPayload.X;
-				OverrideArcHeight = ParamsPayload.Y;
-			}
-		}
-	}
+    if (Payload.TargetData.IsValid(0))
+    {
+        const FGameplayAbilityTargetData* Data = Payload.TargetData.Get(0);
+        if (Data)
+        {
+            const FGameplayAbilityTargetData_LocationInfo* LocationData = 
+                static_cast<const FGameplayAbilityTargetData_LocationInfo*>(Data);
+            
+            if (LocationData)
+            {
+                FTransform FullTransform = LocationData->TargetLocation.LiteralTransform;
+                SpawnLocation = FullTransform.GetLocation();
+                
+                FVector ParamsPayload = FullTransform.GetScale3D();
+                OverrideSpeed = ParamsPayload.X;
+                OverrideArcHeight = ParamsPayload.Y;
+                
+                UE_LOG(LogSGGameplay, Warning, TEXT("  ✓ 从 Payload 获取生成位置：%s"), *SpawnLocation.ToString());
+            }
+        }
+    }
+    else
+    {
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ Payload.TargetData 无效，使用施放者位置"));
+    }
 
-	// 检查投射物类
-	if (!ProjectileClass)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ ProjectileClass 未设置"));
-		return;
-	}
+    // 检查投射物类
+    if (!ProjectileClass)
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ ProjectileClass 未设置！"));
+        UE_LOG(LogSGGameplay, Error, TEXT("    请检查 DataTable 中该单位的 Abilities 配置"));
+        return;
+    }
+    
+    UE_LOG(LogSGGameplay, Warning, TEXT("  投射物类：%s"), *ProjectileClass->GetName());
 
-	UWorld* World = GetWorld();
-	if (!World)
-	{
-		return;
-	}
+    UWorld* World = GetWorld();
+    if (!World)
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ World 为空"));
+        return;
+    }
 
-	// 生成投射物
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.Owner = GetOwningActorFromActorInfo();
-	SpawnParams.Instigator = Cast<APawn>(AvatarActor);
-	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    // 生成投射物
+    FActorSpawnParameters SpawnParams;
+    SpawnParams.Owner = GetOwningActorFromActorInfo();
+    SpawnParams.Instigator = Cast<APawn>(AvatarActor);
+    SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-	// 计算初始朝向
-	FVector ToTarget = CurrentTarget->GetActorLocation() - SpawnLocation;
-	FRotator SpawnRotation = ToTarget.Rotation();
+    // 计算初始朝向
+    FVector ToTarget = CurrentTarget->GetActorLocation() - SpawnLocation;
+    FRotator SpawnRotation = ToTarget.Rotation();
+    
+    UE_LOG(LogSGGameplay, Warning, TEXT("  生成位置：%s"), *SpawnLocation.ToString());
+    UE_LOG(LogSGGameplay, Warning, TEXT("  生成旋转：%s"), *SpawnRotation.ToString());
 
-	ASG_Projectile* NewProjectile = World->SpawnActor<ASG_Projectile>(
-		ProjectileClass,
-		SpawnLocation,
-		SpawnRotation,
-		SpawnParams
-	);
+    ASG_Projectile* NewProjectile = World->SpawnActor<ASG_Projectile>(
+        ProjectileClass,
+        SpawnLocation,
+        SpawnRotation,
+        SpawnParams
+    );
 
-	if (!NewProjectile)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 投射物生成失败"));
-		return;
-	}
+    if (!NewProjectile)
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 投射物生成失败！"));
+        UE_LOG(LogSGGameplay, Error, TEXT("    可能原因："));
+        UE_LOG(LogSGGameplay, Error, TEXT("    1. 生成位置在碰撞体内"));
+        UE_LOG(LogSGGameplay, Error, TEXT("    2. SpawnActor 返回 nullptr"));
+        return;
+    }
+    
+    UE_LOG(LogSGGameplay, Warning, TEXT("  ✓ 投射物生成成功：%s"), *NewProjectile->GetName());
 
-	// 应用覆盖参数
-	if (OverrideSpeed > 0.0f)
-	{
-		NewProjectile->SetFlightSpeed(OverrideSpeed);
-	}
+    // 应用覆盖参数
+    if (OverrideSpeed > 0.0f)
+    {
+        NewProjectile->SetFlightSpeed(OverrideSpeed);
+        UE_LOG(LogSGGameplay, Warning, TEXT("  应用覆盖速度：%.1f"), OverrideSpeed);
+    }
 
-	// 获取施放者信息
-	UAbilitySystemComponent* SourceASC = GetAbilitySystemComponentFromActorInfo();
-	FGameplayTag SourceFaction;
-	if (SourceUnit)
-	{
-		SourceFaction = SourceUnit->FactionTag;
-	}
+    // 获取施放者信息
+    UAbilitySystemComponent* SourceASC = GetAbilitySystemComponentFromActorInfo();
+    FGameplayTag SourceFaction;
+    if (SourceUnit)
+    {
+        SourceFaction = SourceUnit->FactionTag;
+    }
 
-	// 初始化投射物
-	NewProjectile->InitializeProjectile(
-		SourceASC,
-		SourceFaction,
-		CurrentTarget,
-		OverrideArcHeight
-	);
+    // 初始化投射物
+    NewProjectile->InitializeProjectile(
+        SourceASC,
+        SourceFaction,
+        CurrentTarget,
+        OverrideArcHeight
+    );
 
-	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 投射物生成成功"));
-	UE_LOG(LogSGGameplay, Log, TEXT("    目标：%s"), *CurrentTarget->GetName());
-	UE_LOG(LogSGGameplay, Log, TEXT("    速度：%.1f"), NewProjectile->FlightSpeed);
-	UE_LOG(LogSGGameplay, Log, TEXT("    弧度：%.1f"), NewProjectile->ArcHeight);
-	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+    UE_LOG(LogSGGameplay, Warning, TEXT("  ✓ 投射物初始化完成"));
+    UE_LOG(LogSGGameplay, Warning, TEXT("    目标：%s"), *CurrentTarget->GetName());
+    UE_LOG(LogSGGameplay, Warning, TEXT("    速度：%.1f"), NewProjectile->FlightSpeed);
+    UE_LOG(LogSGGameplay, Warning, TEXT("    弧度：%.1f"), NewProjectile->ArcHeight);
+    UE_LOG(LogSGGameplay, Warning, TEXT("========================================"));
 }
 
 void USG_GameplayAbility_Attack::SpawnProjectileToTargetWithParams(AActor* Target, const FVector& SpawnLocation,

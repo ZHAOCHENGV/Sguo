@@ -18,8 +18,8 @@ ASG_StationaryUnit::ASG_StationaryUnit()
 	// 默认不浮空，站立在地面
 	bEnableHover = false;
 	
-	// 默认浮空高度 100 厘米（1米）
-	HoverHeight = 100.0f;
+	// 默认浮空高度 0 厘米
+	HoverHeight = 0;
 	
 	// 默认禁用重力（浮空单位需要）
 	bDisableGravity = true;
@@ -111,26 +111,38 @@ void ASG_StationaryUnit::DisableMovementCapability()
 {
 	// 获取角色移动组件
 	UCharacterMovementComponent* MovementComp = GetCharacterMovement();
-	
+    
 	// 检查组件是否有效
 	if (!MovementComp)
 	{
-		// 组件无效，打印警告日志
 		UE_LOG(LogSGUnit, Warning, TEXT("[站桩单位] %s 的 CharacterMovement 组件无效，无法禁用移动"), *GetName());
 		return;
 	}
 
 	// 设置最大移动速度为 0（完全禁止移动）
 	MovementComp->MaxWalkSpeed = 0.0f;
+	MovementComp->MaxAcceleration = 0.0f;
 	
-	// 禁用移动组件的更新（节省性能）
-	MovementComp->SetComponentTickEnabled(false);
-	
-	// 设置移动模式为无移动
-	MovementComp->SetMovementMode(MOVE_None);
+    
+	// ✨ 新增 - 如果启用浮空，设置为 Flying 模式
+	if (bEnableHover || bDisableGravity)
+	{
+		MovementComp->SetMovementMode(MOVE_Flying);
+		MovementComp->GravityScale = 0.0f;
+	}
+	else
+	{
+		// 保持 Walking 模式，但速度为 0
+		MovementComp->SetMovementMode(MOVE_Walking);
+	}
+    
+	// 禁用导航代理（AI 不会尝试移动此单位）
+	MovementComp->bUseRVOAvoidance = false;
 
 	// 打印调试日志
-	UE_LOG(LogSGUnit, Verbose, TEXT("[站桩单位] %s 移动能力已禁用"), *GetName());
+	UE_LOG(LogSGUnit, Verbose, TEXT("[站桩单位] %s 移动能力已禁用（速度=0，模式=%s）"), 
+		*GetName(),
+		(bEnableHover || bDisableGravity) ? TEXT("Flying") : TEXT("Walking"));
 }
 
 /**

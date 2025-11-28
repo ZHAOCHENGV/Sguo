@@ -48,11 +48,25 @@ void USG_AN_SpawnActor::Notify(USkeletalMeshComponent* MeshComp, UAnimSequenceBa
 {
 	Super::Notify(MeshComp, Animation, EventReference);
 
-	if (!MeshComp) return;
 	
+	// ✨ 新增 - 更详细的日志
+	UE_LOG(LogSGGameplay, Log, TEXT("========== 动画通知触发：SG_AN_SpawnActor =========="));
+    
+	if (!MeshComp)
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ MeshComp 为空"));
+		return;
+	}
+    
 	AActor* OwnerActor = MeshComp->GetOwner();
-	if (!OwnerActor) return;
-
+	if (!OwnerActor)
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ OwnerActor 为空"));
+		return;
+	}
+	UE_LOG(LogSGGameplay, Log, TEXT("  拥有者：%s"), *OwnerActor->GetName());
+	UE_LOG(LogSGGameplay, Log, TEXT("  动画：%s"), Animation ? *Animation->GetName() : TEXT("None"));
+	UE_LOG(LogSGGameplay, Log, TEXT("  Socket：%s"), SocketName.IsNone() ? TEXT("Root") : *SocketName.ToString());
 	// 计算发射变换
 	FTransform SocketTransform = FTransform::Identity;
 	
@@ -105,8 +119,15 @@ void USG_AN_SpawnActor::Notify(USkeletalMeshComponent* MeshComp, UAnimSequenceBa
 	FGameplayAbilityTargetDataHandle TargetDataHandle;
 	TargetDataHandle.Add(LocationData);
 	Payload.TargetData = TargetDataHandle;
-
-	UE_LOG(LogSGGameplay, Log, TEXT("发送投射物生成事件：%s"), *OwnerActor->GetName());
+	// ✨ 新增 - 发送事件前的日志
+	UE_LOG(LogSGGameplay, Log, TEXT("  📤 发送 GameplayEvent：%s"), *EventTag.ToString());
+	UE_LOG(LogSGGameplay, Log, TEXT("    位置：%s"), *SpawnLocation.ToString());
+	UE_LOG(LogSGGameplay, Log, TEXT("    旋转：%s"), *SpawnRotation.ToString());
+    
+	UAbilitySystemBlueprintLibrary::SendGameplayEventToActor(OwnerActor, EventTag, Payload);
+    
+	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 事件已发送"));
+	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 	
 	UAbilitySystemBlueprintLibrary::SendGameplayEventToActor(OwnerActor, EventTag, Payload);
 }

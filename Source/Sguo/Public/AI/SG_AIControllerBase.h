@@ -10,6 +10,7 @@
 class UBehaviorTree;
 class UBlackboardComponent;
 class ASG_UnitsBase;
+class UBehaviorTreeComponent;  // ✨ 新增
 
 /**
  * @brief AI 控制器基类
@@ -31,7 +32,6 @@ public:
 
     // ========== 行为树配置 ==========
     
-    // 🔧 修改 - 保留控制器默认行为树（作为后备）
     /**
      * @brief 控制器默认行为树
      * @details
@@ -42,7 +42,6 @@ public:
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "AI", meta = (DisplayName = "默认行为树"))
     TObjectPtr<UBehaviorTree> DefaultBehaviorTree;
 
-    // ✨ 新增 - 当前使用的行为树（运行时）
     /**
      * @brief 当前正在使用的行为树
      * @details 运行时确定，可能来自单位配置或控制器默认配置
@@ -50,7 +49,6 @@ public:
     UPROPERTY(BlueprintReadOnly, Category = "AI", meta = (DisplayName = "当前行为树"))
     TObjectPtr<UBehaviorTree> CurrentBehaviorTree;
 
-    // ✨ 新增 - 启动行为树
     /**
      * @brief 启动指定的行为树
      * @param BehaviorTreeToRun 要运行的行为树
@@ -104,16 +102,14 @@ protected:
     void BindTargetDeathEvent(ASG_UnitsBase* Target);
     void UnbindTargetDeathEvent(ASG_UnitsBase* Target);
 
-    // ✨ 新增 - 初始化黑板
+    // ✨ 新增 - 初始化黑板并启动行为树
     /**
-     * @brief 初始化黑板组件
-     * @param BehaviorTreeToUse 要使用的行为树（用于获取黑板资产）
-     * @return 是否成功初始化
+     * @brief 初始化并启动行为树
+     * @param BehaviorTreeToUse 要使用的行为树
+     * @return 是否成功
      */
-    bool InitializeBlackboard(UBehaviorTree* BehaviorTreeToUse);
+    bool SetupBehaviorTree(UBehaviorTree* BehaviorTreeToUse);
 
 private:
     TWeakObjectPtr<ASG_UnitsBase> CurrentListenedTarget;
-    
-
 };

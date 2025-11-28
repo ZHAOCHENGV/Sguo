@@ -95,6 +95,38 @@ void ASG_Projectile::BeginPlay()
 		CollisionCapsule->SetCapsuleRadius(CapsuleRadius);
 		CollisionCapsule->SetCapsuleHalfHeight(CapsuleHalfHeight);
 		CollisionCapsule->SetRelativeRotation(CollisionRotationOffset);
+        
+		// ✨ 新增 - 忽略施放者和施放者的友方主城
+		AActor* OwnerActor = GetOwner();
+		APawn* InstigatorPawn = GetInstigator();
+        
+		if (OwnerActor)
+		{
+			CollisionCapsule->IgnoreActorWhenMoving(OwnerActor, true);
+		}
+        
+		if (InstigatorPawn)
+		{
+			CollisionCapsule->IgnoreActorWhenMoving(InstigatorPawn, true);
+            
+			// 🔧 关键修复 - 忽略施放者同阵营的主城
+			ASG_UnitsBase* InstigatorUnit = Cast<ASG_UnitsBase>(InstigatorPawn);
+			if (InstigatorUnit)
+			{
+				TArray<AActor*> AllMainCities;
+				UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_MainCityBase::StaticClass(), AllMainCities);
+                
+				for (AActor* CityActor : AllMainCities)
+				{
+					ASG_MainCityBase* City = Cast<ASG_MainCityBase>(CityActor);
+					if (City && City->FactionTag == InstigatorUnit->FactionTag)
+					{
+						CollisionCapsule->IgnoreActorWhenMoving(City, true);
+						UE_LOG(LogSGGameplay, Verbose, TEXT("投射物忽略友方主城：%s"), *City->GetName());
+					}
+				}
+			}
+		}
 	}
 
 	// 激活飞行 GC

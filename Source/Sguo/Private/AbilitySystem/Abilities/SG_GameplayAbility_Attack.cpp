@@ -337,7 +337,7 @@ void USG_GameplayAbility_Attack::SpawnProjectileToTarget(AActor* Target, const F
  */
 void USG_GameplayAbility_Attack::OnSpawnProjectileEvent(FGameplayEventData Payload)
 {
-UE_LOG(LogSGGameplay, Warning, TEXT("========== 🎯 处理投射物生成事件 =========="));
+	UE_LOG(LogSGGameplay, Warning, TEXT("========== 🎯 处理投射物生成事件 =========="));
     
     AActor* AvatarActor = GetAvatarActorFromActorInfo();
     if (!AvatarActor)

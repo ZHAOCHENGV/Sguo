@@ -57,6 +57,7 @@ ASG_AIControllerBase::ASG_AIControllerBase()
 void ASG_AIControllerBase::BeginPlay()
 {
 	Super::BeginPlay();
+	// 🔧 修改 - 不在这里启动行为树，等待 OnPossess
 	UE_LOG(LogSGGameplay, Log, TEXT("✓ AI 控制器 BeginPlay 完成"));
 	
 }
@@ -73,54 +74,212 @@ void ASG_AIControllerBase::BeginPlay()
  */
 void ASG_AIControllerBase::OnPossess(APawn* InPawn)
 {
+	// 调用父类（这会创建默认的黑板和行为树组件）
 	Super::OnPossess(InPawn);
-	
-	// 获取黑板组件
-	UBlackboardComponent* BlackboardComp = GetBlackboardComponent();
-	if (!BlackboardComp)
+    
+	UE_LOG(LogSGGameplay, Log, TEXT("========== AI 控制器 OnPossess =========="));
+	UE_LOG(LogSGGameplay, Log, TEXT("  控制的 Pawn：%s"), *InPawn->GetName());
+    
+	// ========== 步骤1：确定要使用的行为树 ==========
+	UBehaviorTree* BehaviorTreeToUse = nullptr;
+    
+	// 优先检查单位是否有自定义行为树
+	ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(InPawn);
+	if (ControlledUnit)
 	{
-		UE_LOG(LogSGGameplay, Error, TEXT("❌ AI 控制器没有黑板组件"));
+		BehaviorTreeToUse = ControlledUnit->GetUnitBehaviorTree();
+        
+		if (BehaviorTreeToUse)
+		{
+			UE_LOG(LogSGGameplay, Log, TEXT("  📋 使用单位自定义行为树：%s"), *BehaviorTreeToUse->GetName());
+		}
+	}
+    
+	// 如果单位没有自定义行为树，使用控制器默认的
+	if (!BehaviorTreeToUse && DefaultBehaviorTree)
+	{
+		BehaviorTreeToUse = DefaultBehaviorTree;
+		UE_LOG(LogSGGameplay, Log, TEXT("  📋 使用控制器默认行为树：%s"), *BehaviorTreeToUse->GetName());
+	}
+    
+	// 如果都没有，输出警告
+	if (!BehaviorTreeToUse)
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 没有可用的行为树！"));
+		UE_LOG(LogSGGameplay, Warning, TEXT("    请在单位蓝图中设置 UnitBehaviorTree"));
+		UE_LOG(LogSGGameplay, Warning, TEXT("    或在 AI 控制器中设置 DefaultBehaviorTree"));
 		return;
 	}
     
-	// 初始化黑板数据
-	BlackboardComp->SetValueAsBool(BB_IsTargetLocked, false);
-	BlackboardComp->SetValueAsBool(BB_IsInAttackRange, false);
-	BlackboardComp->SetValueAsBool(BB_IsTargetMainCity, false);
+	// ========== 步骤2：启动行为树 ==========
+	bool bSuccess = StartBehaviorTree(BehaviorTreeToUse);
     
-	UE_LOG(LogSGGameplay, Log, TEXT("✓ AI 控制器接管 Pawn：%s"), *InPawn->GetName());
-    
-	// ✨ 新增 - 检测单位是否有自定义行为树
-	ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(InPawn);
-	if (ControlledUnit && ControlledUnit->HasCustomBehaviorTree())
+	if (bSuccess)
 	{
-		// 单位有自定义行为树，使用单位的行为树
-		UBehaviorTree* UnitBT = ControlledUnit->GetUnitBehaviorTree();
-		if (UnitBT)
-		{
-			UE_LOG(LogSGGameplay, Log, TEXT("  📋 检测到单位自定义行为树：%s"), *UnitBT->GetName());
-			RunBehaviorTreeAsset(UnitBT);
-		}
-	}
-	else if (BehaviorTreeAsset)
-	{
-		// 单位没有自定义行为树，使用控制器默认的行为树
-		UE_LOG(LogSGGameplay, Log, TEXT("  📋 使用控制器默认行为树：%s"), *BehaviorTreeAsset->GetName());
-		RunBehaviorTree(BehaviorTreeAsset);
+		UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 行为树启动成功"));
 	}
 	else
 	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 没有配置行为树"));
+		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 行为树启动失败"));
 	}
+    
+	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 }
-	// ✨ 新增 - 解除控制时调用
+
+
+
+// ✨ 新增 - 初始化黑板
+/**
+ * @brief 初始化黑板组件
+ * @param BehaviorTreeToUse 要使用的行为树
+ * @return 是否成功初始化
+ */
+bool ASG_AIControllerBase::InitializeBlackboard(UBehaviorTree* BehaviorTreeToUse)
+{
+    if (!BehaviorTreeToUse)
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ InitializeBlackboard：行为树为空"));
+        return false;
+    }
+    
+    // 获取行为树的黑板资产
+    UBlackboardData* BlackboardAsset = BehaviorTreeToUse->BlackboardAsset;
+    if (!BlackboardAsset)
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 行为树没有关联的黑板资产"));
+        return false;
+    }
+    
+    // 使用黑板资产初始化黑板组件
+    bool bSuccess = UseBlackboard(BlackboardAsset, Blackboard);
+    
+    if (bSuccess && Blackboard)
+    {
+        // 初始化黑板数据
+        Blackboard->SetValueAsBool(BB_IsTargetLocked, false);
+        Blackboard->SetValueAsBool(BB_IsInAttackRange, false);
+        Blackboard->SetValueAsBool(BB_IsTargetMainCity, false);
+        
+        UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 黑板初始化成功"));
+        return true;
+    }
+    else
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 黑板初始化失败"));
+        return false;
+    }
+}
+
+// ✨ 新增 - 启动行为树
+/**
+ * @brief 启动指定的行为树
+ * @param BehaviorTreeToRun 要运行的行为树
+ * @return 是否成功启动
+ */
+bool ASG_AIControllerBase::StartBehaviorTree(UBehaviorTree* BehaviorTreeToRun)
+{
+    if (!BehaviorTreeToRun)
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ StartBehaviorTree：行为树为空"));
+        return false;
+    }
+    
+    // 停止当前行为树（如果有）
+    if (UBehaviorTreeComponent* BTComp = Cast<UBehaviorTreeComponent>(BrainComponent))
+    {
+        if (BTComp->IsRunning())
+        {
+            BTComp->StopTree(EBTStopMode::Safe);
+            UE_LOG(LogSGGameplay, Verbose, TEXT("  🛑 停止当前行为树"));
+        }
+    }
+    
+    // 初始化黑板
+    if (!InitializeBlackboard(BehaviorTreeToRun))
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 黑板初始化失败，无法启动行为树"));
+        return false;
+    }
+    
+    // 运行行为树
+    bool bSuccess = RunBehaviorTree(BehaviorTreeToRun);
+    
+    if (bSuccess)
+    {
+        CurrentBehaviorTree = BehaviorTreeToRun;
+        UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 行为树启动成功：%s"), *BehaviorTreeToRun->GetName());
+    }
+    else
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ RunBehaviorTree 失败：%s"), *BehaviorTreeToRun->GetName());
+    }
+    
+    return bSuccess;
+}
+
+// ========== OnUnPossess ==========
+void ASG_AIControllerBase::OnUnPossess()
+{
+    // 解绑目标死亡事件
+    if (CurrentListenedTarget.IsValid())
+    {
+        UnbindTargetDeathEvent(CurrentListenedTarget.Get());
+        CurrentListenedTarget = nullptr;
+    }
+    
+    // 停止行为树
+    if (UBehaviorTreeComponent* BTComp = Cast<UBehaviorTreeComponent>(BrainComponent))
+    {
+        if (BTComp->IsRunning())
+        {
+            BTComp->StopTree(EBTStopMode::Safe);
+        }
+    }
+    
+    // 清空当前行为树引用
+    CurrentBehaviorTree = nullptr;
+    
+    Super::OnUnPossess();
+}
+
+// ========== FreezeAI ==========
+void ASG_AIControllerBase::FreezeAI()
+{
+    // 1. 停止行为树
+    if (UBehaviorTreeComponent* BTComp = Cast<UBehaviorTreeComponent>(BrainComponent))
+    {
+        BTComp->StopTree(EBTStopMode::Safe);
+    }
+    
+    // 2. 停止移动
+    StopMovement();
+    
+    // 3. 解绑目标死亡事件
+    if (CurrentListenedTarget.IsValid())
+    {
+        UnbindTargetDeathEvent(CurrentListenedTarget.Get());
+        CurrentListenedTarget = nullptr;
+    }
+    
+    // 4. 清除目标
+    SetCurrentTarget(nullptr);
+    
+    // 5. 停止所有逻辑更新
+    SetActorTickEnabled(false);
+    
+    UE_LOG(LogSGGameplay, Log, TEXT("🥶 AI 已冻结：%s"), 
+        GetPawn() ? *GetPawn()->GetName() : TEXT("None"));
+}
+
+
+// ✨ 新增 - 解除控制时调用
 	/**
-	 * @brief 解除控制时调用
-	 * @details
-	 * 功能说明：
-	 * - 清理目标死亡监听
-	 * - 停止行为树
-	 */
+	* @brief 解除控制时调用
+	* @details
+	* 功能说明：
+	* - 清理目标死亡监听
+	* - 停止行为树
+*/
 void ASG_AIControllerBase::OnUnPossess()
 	{
 	// 解绑目标死亡事件

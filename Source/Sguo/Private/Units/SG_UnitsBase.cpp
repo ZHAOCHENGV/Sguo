@@ -496,6 +496,15 @@ AActor* ASG_UnitsBase::FindNearestTarget()
 			continue;
 		}
 
+		// 🔧 修改 - 添加可被选为目标的检查
+		// 检查单位是否可被选为目标
+		// 站桩单位如果设置 bCanBeTargeted = false，会被过滤掉
+		if (!OtherCharacter->CanBeTargeted())
+		{
+			// 跳过不可被选为目标的单位
+			continue;
+		}
+
 		// 检查阵营（不同阵营才是敌人）
 		if (OtherCharacter->FactionTag != this->FactionTag)
 		{
@@ -1427,4 +1436,24 @@ float ASG_UnitsBase::GetAttackRangeForAI() const
 	
 	// 否则使用基础攻击范围
 	return BaseAttackRange;
+}
+
+// ✨ 新增 - 检查单位是否可被选为目标
+/**
+ * @brief 检查单位是否可被选为目标
+ * @return 是否可被选为目标
+ * @details
+ * 功能说明：
+ * - 默认实现返回 true（普通单位总是可被选中）
+ * - 子类（如站桩单位）可以重写此函数
+ * - 死亡单位会在其他地方过滤，此函数不需要检查
+ * 使用场景：
+ * - AI 寻找攻击目标时过滤
+ * - 技能选择目标时判断
+ */
+bool ASG_UnitsBase::CanBeTargeted() const
+{
+	// 默认返回 true
+	// 普通单位总是可以被选为目标
+	return true;
 }

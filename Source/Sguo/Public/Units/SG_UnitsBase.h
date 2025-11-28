@@ -303,4 +303,24 @@ public:
      */
     UFUNCTION(BlueprintCallable, Category = "Combat")
     void ForceStopAllActions();
+
+    // ✨ 新增 - 检查单位是否可被选为目标（AI寻敌接口）
+    /**
+     * @brief 检查单位是否可被选为目标
+     * @return 是否可被选为目标
+     * @details
+     * 功能说明：
+     * - 虚函数，子类可以重写以自定义逻辑
+     * - 默认返回 true（普通单位可被选中）
+     * - 站桩单位可以重写此函数返回 false
+     * 使用场景：
+     * - AI 寻找攻击目标时过滤单位
+     * - 技能选择目标时判断有效性
+     * 注意事项：
+     * - 此函数不影响 AOE 伤害判定
+     * - 只影响主动目标选择
+     * - 死亡单位会在其他地方过滤，此函数不需要检查
+     */
+    UFUNCTION(BlueprintPure, Category = "Combat", meta = (DisplayName = "是否可被选为目标"))
+    virtual bool CanBeTargeted() const;
 };

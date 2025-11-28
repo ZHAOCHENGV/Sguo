@@ -17,3 +17,6 @@ DEFINE_LOG_CATEGORY(LogSGUI);
 
 // ✨ NEW - 定义游戏玩法日志类别
 DEFINE_LOG_CATEGORY(LogSGGameplay);
+
+// ✨ 新增 - 定义单位系统日志类别
+DEFINE_LOG_CATEGORY(LogSGUnit);

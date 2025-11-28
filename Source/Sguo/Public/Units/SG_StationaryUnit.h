@@ -185,7 +185,6 @@ public:
 	 * - 此函数为虚函数，可以在子类中重写
 	 * - 可以添加额外的逻辑（如：受到伤害后变为可选中）
 	 */
-	UFUNCTION(BlueprintPure, Category = "Stationary Unit", meta = (DisplayName = "是否可被选为目标"))
 	virtual bool CanBeTargeted() const;
 
 	/**

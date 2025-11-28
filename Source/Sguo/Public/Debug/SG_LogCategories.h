@@ -33,3 +33,8 @@ DECLARE_LOG_CATEGORY_EXTERN(LogSGUI, Log, All);
 // ✨ NEW - 游戏玩法日志类别
 // 用于单位生成、战斗、技能等相关日志
 DECLARE_LOG_CATEGORY_EXTERN(LogSGGameplay, Log, All);
+
+
+// ✨ 新增 - 单位系统日志类别
+// 用于单位初始化、移动、攻击等相关日志
+DECLARE_LOG_CATEGORY_EXTERN(LogSGUnit, Log, All);

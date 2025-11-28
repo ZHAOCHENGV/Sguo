@@ -211,6 +211,14 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
         // 排除同阵营
         if (Unit->FactionTag == MyFaction) continue;
 
+        // 🔧 修改 - 添加可被选为目标的检查
+        // 排除不可被选为目标的单位（如某些站桩单位）
+        if (!Unit->CanBeTargeted())
+        {
+            UE_LOG(LogSGGameplay, Verbose, TEXT("    跳过不可选中单位：%s"), *Unit->GetName());
+            continue;
+        }
+
         // 范围检查
         FVector TargetLoc = Unit->GetActorLocation();
         bool bInRange = false;

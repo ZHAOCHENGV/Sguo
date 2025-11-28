@@ -137,6 +137,17 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Projectile Events", meta = (DisplayName = "落地事件"))
 	FSGProjectileHitSignature OnProjectileGroundImpact;
 
+
+	/**
+ * @brief 胶囊体碰撞组件
+ * @details 
+ * 功能说明：
+ * - 不作为根组件，可自由调整方向
+ * - 适合箭矢等细长投射物
+ */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (DisplayName = "碰撞胶囊体"))
+	TObjectPtr<UCapsuleComponent> CollisionCapsule;
+
 protected:
 	// ========== 组件 ==========
 	
@@ -147,15 +158,7 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (DisplayName = "场景根"))
 	TObjectPtr<USceneComponent> SceneRoot;
 
-	/**
-	 * @brief 胶囊体碰撞组件
-	 * @details 
-	 * 功能说明：
-	 * - 不作为根组件，可自由调整方向
-	 * - 适合箭矢等细长投射物
-	 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (DisplayName = "碰撞胶囊体"))
-	TObjectPtr<UCapsuleComponent> CollisionCapsule;
+
 
 	/**
 	 * @brief 网格体组件
@@ -686,6 +689,28 @@ public:
 	UFUNCTION(BlueprintImplementableEvent, Category = "Projectile", meta = (DisplayName = "On Ground Impact (BP)"))
 	void K2_OnGroundImpact(FVector ImpactLocation);
 
+public:
+	// ✨ 新增 - 碰撞启用延迟时间
+	/**
+	 * @brief 碰撞启用延迟时间（秒）
+	 * @details
+	 * 功能说明：
+	 * - 投射物生成后，延迟多久启用碰撞检测
+	 * - 用于防止投射物在友方建筑内部生成时立即碰撞
+	 * - 默认 0.1 秒，足够投射物飞出建筑
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Projectile|Collision", meta = (DisplayName = "碰撞启用延迟", ClampMin = "0.0", UIMin = "0.0", UIMax = "1.0"))
+	float CollisionEnableDelay = 0.1f;
+
+protected:
+	// ✨ 新增 - 碰撞启用定时器句柄
+	FTimerHandle CollisionEnableTimerHandle;
+
+	// ✨ 新增 - 启用碰撞的回调函数
+	UFUNCTION()
+	void EnableCollision();
+
+	
 	// ========== 调试 ==========
 
 #if WITH_EDITORONLY_DATA

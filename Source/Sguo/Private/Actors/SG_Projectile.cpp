@@ -12,6 +12,7 @@
 #include "GameplayEffect.h"
 #include "GameplayCueManager.h"
 #include "DrawDebugHelpers.h"
+#include "Kismet/GameplayStatics.h"
 
 /**
  * @brief 构造函数
@@ -96,37 +97,26 @@ void ASG_Projectile::BeginPlay()
 		CollisionCapsule->SetCapsuleHalfHeight(CapsuleHalfHeight);
 		CollisionCapsule->SetRelativeRotation(CollisionRotationOffset);
         
-		// ✨ 新增 - 忽略施放者和施放者的友方主城
-		AActor* OwnerActor = GetOwner();
-		APawn* InstigatorPawn = GetInstigator();
-        
-		if (OwnerActor)
-		{
-			CollisionCapsule->IgnoreActorWhenMoving(OwnerActor, true);
-		}
-        
-		if (InstigatorPawn)
-		{
-			CollisionCapsule->IgnoreActorWhenMoving(InstigatorPawn, true);
-            
-			// 🔧 关键修复 - 忽略施放者同阵营的主城
-			ASG_UnitsBase* InstigatorUnit = Cast<ASG_UnitsBase>(InstigatorPawn);
-			if (InstigatorUnit)
-			{
-				TArray<AActor*> AllMainCities;
-				UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_MainCityBase::StaticClass(), AllMainCities);
-                
-				for (AActor* CityActor : AllMainCities)
-				{
-					ASG_MainCityBase* City = Cast<ASG_MainCityBase>(CityActor);
-					if (City && City->FactionTag == InstigatorUnit->FactionTag)
-					{
-						CollisionCapsule->IgnoreActorWhenMoving(City, true);
-						UE_LOG(LogSGGameplay, Verbose, TEXT("投射物忽略友方主城：%s"), *City->GetName());
-					}
-				}
-			}
-		}
+		// ✨ 新增 - 初始时禁用碰撞
+		CollisionCapsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		UE_LOG(LogSGGameplay, Verbose, TEXT("投射物 %s：初始禁用碰撞，%.2f 秒后启用"), *GetName(), CollisionEnableDelay);
+	}
+
+	// ✨ 新增 - 设置延迟启用碰撞的定时器
+	if (CollisionEnableDelay > 0.0f)
+	{
+		GetWorldTimerManager().SetTimer(
+			CollisionEnableTimerHandle,
+			this,
+			&ASG_Projectile::EnableCollision,
+			CollisionEnableDelay,
+			false  // 不循环
+		);
+	}
+	else
+	{
+		// 如果延迟为 0，立即启用
+		EnableCollision();
 	}
 
 	// 激活飞行 GC
@@ -156,10 +146,18 @@ void ASG_Projectile::BeginPlay()
  */
 void ASG_Projectile::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	// ✨ 新增 - 清理碰撞启用定时器
+	if (GetWorldTimerManager().IsTimerActive(CollisionEnableTimerHandle))
+	{
+		GetWorldTimerManager().ClearTimer(CollisionEnableTimerHandle);
+	}
+
 	// 移除飞行 GC
 	RemoveTrailGameplayCue();
 	// 执行销毁 GC
 	ExecuteDestroyGameplayCue();
+	
+
 	
 	// 调用蓝图事件
 	K2_OnProjectileDestroyed(GetActorLocation());
@@ -361,6 +359,55 @@ void ASG_Projectile::InitializeProjectile(
 	InstigatorFactionTag = InFactionTag;
 	// 保存目标 Actor
 	CurrentTarget = InTarget;
+
+
+	// 保存攻击者 ASC
+	InstigatorASC = InInstigatorASC;
+	// 保存攻击者阵营
+	InstigatorFactionTag = InFactionTag;
+	// 保存目标 Actor
+	CurrentTarget = InTarget;
+
+	// ✨ 新增 - 设置忽略友方碰撞
+	if (CollisionCapsule)
+	{
+		// 忽略所有者
+		if (AActor* OwnerActor = GetOwner())
+		{
+			CollisionCapsule->IgnoreActorWhenMoving(OwnerActor, true);
+		}
+        
+		// 忽略施放者
+		if (APawn* InstigatorPawn = GetInstigator())
+		{
+			CollisionCapsule->IgnoreActorWhenMoving(InstigatorPawn, true);
+		}
+        
+		// ✨ 新增 - 忽略所有友方主城
+		TArray<AActor*> AllMainCities;
+		UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_MainCityBase::StaticClass(), AllMainCities);
+		for (AActor* CityActor : AllMainCities)
+		{
+			ASG_MainCityBase* City = Cast<ASG_MainCityBase>(CityActor);
+			if (City && City->FactionTag == InstigatorFactionTag)
+			{
+				CollisionCapsule->IgnoreActorWhenMoving(City, true);
+				UE_LOG(LogSGGameplay, Verbose, TEXT("  投射物忽略友方主城碰撞：%s"), *City->GetName());
+			}
+		}
+        
+		// ✨ 新增 - 忽略所有友方单位
+		TArray<AActor*> AllUnits;
+		UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_UnitsBase::StaticClass(), AllUnits);
+		for (AActor* UnitActor : AllUnits)
+		{
+			ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(UnitActor);
+			if (Unit && Unit->FactionTag == InstigatorFactionTag)
+			{
+				CollisionCapsule->IgnoreActorWhenMoving(Unit, true);
+			}
+		}
+	}
 
 	// 重置状态标记
 	bTargetLost = false;
@@ -1278,117 +1325,166 @@ void ASG_Projectile::OnCapsuleHit(
  */
 void ASG_Projectile::HandleProjectileImpact(AActor* OtherActor, const FHitResult& Hit)
 {
-	UE_LOG(LogSGGameplay, Verbose, TEXT("投射物碰撞：%s"), OtherActor ? *OtherActor->GetName() : TEXT("None"));
-
-	// 忽略无效碰撞
-	if (!OtherActor || OtherActor == GetOwner() || OtherActor == GetInstigator())
+	// 如果未初始化，忽略所有碰撞
+	if (!bIsInitialized)
 	{
+		UE_LOG(LogSGGameplay, Verbose, TEXT("投射物未初始化，忽略碰撞：%s"), 
+			OtherActor ? *OtherActor->GetName() : TEXT("None"));
 		return;
 	}
+	
+	 UE_LOG(LogSGGameplay, Verbose, TEXT("投射物碰撞检测：%s"), OtherActor ? *OtherActor->GetName() : TEXT("None"));
 
-	// ========== 检查是否是主城 ==========
-	ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(OtherActor);
-	if (TargetMainCity)
-	{
-		if (TargetMainCity->FactionTag == InstigatorFactionTag)
-		{
-			UE_LOG(LogSGGameplay, Verbose, TEXT("  碰撞友方主城，忽略"));
-			return;
-		}
+    // ========== 基础检查 ==========
+    if (!OtherActor)
+    {
+        return;
+    }
+    
+    // 忽略自己
+    if (OtherActor == this)
+    {
+        return;
+    }
+    
+    // 忽略所有者和施放者
+    if (OtherActor == GetOwner() || OtherActor == GetInstigator())
+    {
+        UE_LOG(LogSGGameplay, Verbose, TEXT("  忽略所有者/施放者"));
+        return;
+    }
 
-		if (HitActors.Contains(OtherActor))
-		{
-			return;
-		}
+    // ✨ 新增 - 忽略友方单位
+    ASG_UnitsBase* OtherUnit = Cast<ASG_UnitsBase>(OtherActor);
+    if (OtherUnit)
+    {
+        // 检查是否同阵营
+        if (OtherUnit->FactionTag == InstigatorFactionTag)
+        {
+            UE_LOG(LogSGGameplay, Verbose, TEXT("  忽略友方单位：%s"), *OtherActor->GetName());
+            return;
+        }
+    }
 
-		if (!TargetMainCity->IsAlive())
-		{
-			Destroy();
-			return;
-		}
+    // ✨ 新增 - 忽略友方主城
+    ASG_MainCityBase* OtherMainCity = Cast<ASG_MainCityBase>(OtherActor);
+    if (OtherMainCity)
+    {
+        // 检查是否同阵营
+        if (OtherMainCity->FactionTag == InstigatorFactionTag)
+        {
+            UE_LOG(LogSGGameplay, Verbose, TEXT("  忽略友方主城：%s"), *OtherActor->GetName());
+            return;
+        }
+    }
+    
+    // ✨ 新增 - 检查碰撞组件是否属于友方主城
+    // （处理碰撞到主城检测盒的情况）
+    UPrimitiveComponent* HitComponent = Hit.GetComponent();
+    if (HitComponent)
+    {
+        AActor* ComponentOwner = HitComponent->GetOwner();
+        if (ComponentOwner)
+        {
+            ASG_MainCityBase* OwnerCity = Cast<ASG_MainCityBase>(ComponentOwner);
+            if (OwnerCity && OwnerCity->FactionTag == InstigatorFactionTag)
+            {
+                UE_LOG(LogSGGameplay, Verbose, TEXT("  忽略友方主城组件：%s"), *ComponentOwner->GetName());
+                return;
+            }
+        }
+    }
 
-		UE_LOG(LogSGGameplay, Log, TEXT("  🏰 击中敌方主城：%s"), *TargetMainCity->GetName());
+    // ========== 后续处理敌方目标 ==========
+    
+    // 检查是否是敌方主城
+    if (OtherMainCity)
+    {
+        // 已经确认不是友方主城，所以是敌方主城
+        if (HitActors.Contains(OtherActor))
+        {
+            return;
+        }
 
-		FSGProjectileHitInfo HitInfo;
-		HitInfo.HitActor = OtherActor;
-		HitInfo.HitLocation = Hit.ImpactPoint.IsNearlyZero() ? OtherActor->GetActorLocation() : FVector(Hit.ImpactPoint);
-		HitInfo.HitNormal = Hit.ImpactNormal.IsNearlyZero() ? -GetActorForwardVector() : FVector(Hit.ImpactNormal);
-		HitInfo.ProjectileDirection = CurrentVelocity.GetSafeNormal();
-		HitInfo.ProjectileSpeed = CurrentVelocity.Size();
+        if (!OtherMainCity->IsAlive())
+        {
+            Destroy();
+            return;
+        }
 
-		ApplyDamageToTarget(OtherActor);
-		HitActors.Add(OtherActor);
+        UE_LOG(LogSGGameplay, Log, TEXT("  🏰 击中敌方主城：%s"), *OtherMainCity->GetName());
 
-		ExecuteHitGameplayCue(HitInfo);
-		K2_OnHitTarget(HitInfo);
-		OnProjectileHitTarget.Broadcast(HitInfo);
+        FSGProjectileHitInfo HitInfo;
+        HitInfo.HitActor = OtherActor;
+        HitInfo.HitLocation = Hit.ImpactPoint.IsNearlyZero() ? OtherActor->GetActorLocation() : FVector(Hit.ImpactPoint);
+        HitInfo.HitNormal = Hit.ImpactNormal.IsNearlyZero() ? -GetActorForwardVector() : FVector(Hit.ImpactNormal);
+        HitInfo.ProjectileDirection = CurrentVelocity.GetSafeNormal();
+        HitInfo.ProjectileSpeed = CurrentVelocity.Size();
 
-		if (!bPenetrate || (MaxPenetrateCount > 0 && HitActors.Num() >= MaxPenetrateCount))
-		{
-			Destroy();
-		}
-		return;
-	}
+        ApplyDamageToTarget(OtherActor);
+        HitActors.Add(OtherActor);
 
-	// ========== 检查是否是单位 ==========
-	ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(OtherActor);
-	if (!TargetUnit)
-	{
-		// 撞墙或地面
-		FSGProjectileHitInfo HitInfo;
-		HitInfo.HitActor = OtherActor;
-		HitInfo.HitLocation = Hit.ImpactPoint.IsNearlyZero() ? GetActorLocation() : FVector(Hit.ImpactPoint);
-		HitInfo.HitNormal = Hit.ImpactNormal.IsNearlyZero() ? -GetActorForwardVector() : FVector(Hit.ImpactNormal);
-		HitInfo.ProjectileDirection = CurrentVelocity.GetSafeNormal();
-		HitInfo.ProjectileSpeed = CurrentVelocity.Size();
-		
-		ExecuteHitGameplayCue(HitInfo);
-		K2_OnHitTarget(HitInfo);
-		OnProjectileHitTarget.Broadcast(HitInfo);
-		
-		Destroy();
-		return;
-	}
+        ExecuteHitGameplayCue(HitInfo);
+        K2_OnHitTarget(HitInfo);
+        OnProjectileHitTarget.Broadcast(HitInfo);
 
-	// 检查阵营
-	if (TargetUnit->FactionTag == InstigatorFactionTag)
-	{
-		return;
-	}
+        if (!bPenetrate || (MaxPenetrateCount > 0 && HitActors.Num() >= MaxPenetrateCount))
+        {
+            Destroy();
+        }
+        return;
+    }
 
-	// 检查是否已击中
-	if (HitActors.Contains(OtherActor))
-	{
-		return;
-	}
+    // 检查是否是敌方单位
+    if (OtherUnit)
+    {
+        // 已经确认不是友方单位，所以是敌方单位
+        if (HitActors.Contains(OtherActor))
+        {
+            return;
+        }
 
-	// 检查是否已死亡
-	if (TargetUnit->bIsDead)
-	{
-		return;
-	}
+        if (OtherUnit->bIsDead)
+        {
+            return;
+        }
 
-	UE_LOG(LogSGGameplay, Log, TEXT("  🎯 击中敌方单位：%s"), *TargetUnit->GetName());
+        UE_LOG(LogSGGameplay, Log, TEXT("  🎯 击中敌方单位：%s"), *OtherUnit->GetName());
 
-	FSGProjectileHitInfo HitInfo;
-	HitInfo.HitActor = OtherActor;
-	HitInfo.HitLocation = Hit.ImpactPoint.IsNearlyZero() ? OtherActor->GetActorLocation() : FVector(Hit.ImpactPoint);
-	HitInfo.HitNormal = Hit.ImpactNormal.IsNearlyZero() ? -GetActorForwardVector() : FVector(Hit.ImpactNormal);
-	HitInfo.HitBoneName = Hit.BoneName;
-	HitInfo.ProjectileDirection = CurrentVelocity.GetSafeNormal();
-	HitInfo.ProjectileSpeed = CurrentVelocity.Size();
+        FSGProjectileHitInfo HitInfo;
+        HitInfo.HitActor = OtherActor;
+        HitInfo.HitLocation = Hit.ImpactPoint.IsNearlyZero() ? OtherActor->GetActorLocation() : FVector(Hit.ImpactPoint);
+        HitInfo.HitNormal = Hit.ImpactNormal.IsNearlyZero() ? -GetActorForwardVector() : FVector(Hit.ImpactNormal);
+        HitInfo.HitBoneName = Hit.BoneName;
+        HitInfo.ProjectileDirection = CurrentVelocity.GetSafeNormal();
+        HitInfo.ProjectileSpeed = CurrentVelocity.Size();
 
-	ApplyDamageToTarget(OtherActor);
-	HitActors.Add(OtherActor);
+        ApplyDamageToTarget(OtherActor);
+        HitActors.Add(OtherActor);
 
-	ExecuteHitGameplayCue(HitInfo);
-	K2_OnHitTarget(HitInfo);
-	OnProjectileHitTarget.Broadcast(HitInfo);
+        ExecuteHitGameplayCue(HitInfo);
+        K2_OnHitTarget(HitInfo);
+        OnProjectileHitTarget.Broadcast(HitInfo);
 
-	if (!bPenetrate || (MaxPenetrateCount > 0 && HitActors.Num() >= MaxPenetrateCount))
-	{
-		Destroy();
-	}
+        if (!bPenetrate || (MaxPenetrateCount > 0 && HitActors.Num() >= MaxPenetrateCount))
+        {
+            Destroy();
+        }
+        return;
+    }
+
+    // ========== 其他类型的碰撞（地面、墙壁等） ==========
+    // 检查是否是地面
+    if (Hit.ImpactNormal.Z > 0.7f)
+    {
+        UE_LOG(LogSGGameplay, Log, TEXT("  投射物撞击地面"));
+        HandleGroundImpact();
+        return;
+    }
+    
+    // 其他静态物体，可以选择忽略或销毁
+    // 这里选择忽略，让投射物继续飞行
+    UE_LOG(LogSGGameplay, Verbose, TEXT("  忽略静态物体：%s"), *OtherActor->GetName());
 }
 
 /**
@@ -1571,5 +1667,14 @@ void ASG_Projectile::ExecuteGroundImpactGameplayCue(const FVector& ImpactLocatio
 		{
 			CueManager->HandleGameplayCue(nullptr, GroundImpactGameplayCueTag, EGameplayCueEvent::Executed, CueParams);
 		}
+	}
+}
+
+void ASG_Projectile::EnableCollision()
+{
+	if (CollisionCapsule)
+	{
+		CollisionCapsule->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		UE_LOG(LogSGGameplay, Verbose, TEXT("投射物 %s：碰撞已启用"), *GetName());
 	}
 }

@@ -22,6 +22,9 @@
 #include "BehaviorTree/BlackboardComponent.h"
 #include "Data/SG_CharacterCardData.h"
 #include "Data/Type/SG_UnitDataTable.h" // ✨ 新增 - 包含完整定义
+// ✨ 新增 - 在文件头部添加
+#include "BehaviorTree/BehaviorTree.h"
+
 // 构造函数
 ASG_UnitsBase::ASG_UnitsBase()
 {

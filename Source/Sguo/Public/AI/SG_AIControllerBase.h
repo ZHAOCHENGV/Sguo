@@ -34,7 +34,21 @@ public:
      * - 停止行为树
      */
     virtual void OnUnPossess() override;
-
+    
+    // ✨ 新增 - 运行指定的行为树
+    /**
+     * @brief 运行指定的行为树
+     * @param NewBehaviorTree 要运行的行为树
+     * @return 是否成功启动
+     * @details
+     * 功能说明：
+     * - 停止当前行为树（如果有）
+     * - 启动新的行为树
+     * - 用于动态切换行为树
+     */
+    UFUNCTION(BlueprintCallable, Category = "AI", meta = (DisplayName = "运行行为树"))
+    bool RunBehaviorTreeAsset(UBehaviorTree* NewBehaviorTree);
+    
     UFUNCTION(BlueprintCallable, Category = "AI")
     void FreezeAI();
 

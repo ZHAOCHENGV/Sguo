@@ -356,14 +356,8 @@ void USG_GameplayAbility_Attack::OnSpawnProjectileEvent(FGameplayEventData Paylo
         return;
     }
     
-    // ✨ 新增 - 检查单位状态
-    UE_LOG(LogSGGameplay, Warning, TEXT("  单位是否死亡：%s"), SourceUnit->bIsDead ? TEXT("是") : TEXT("否"));
-    UE_LOG(LogSGGameplay, Warning, TEXT("  单位是否正在攻击：%s"), SourceUnit->bIsAttacking ? TEXT("是") : TEXT("否"));
-    
     // 获取目标
     AActor* CurrentTarget = SourceUnit->CurrentTarget;
-    
-    // ✨ 新增 - 详细的目标检查
     if (!CurrentTarget)
     {
         UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ CurrentTarget 为空，尝试查找目标..."));
@@ -383,7 +377,6 @@ void USG_GameplayAbility_Attack::OnSpawnProjectileEvent(FGameplayEventData Paylo
     else
     {
         UE_LOG(LogSGGameplay, Warning, TEXT("  目标：%s"), *CurrentTarget->GetName());
-        UE_LOG(LogSGGameplay, Warning, TEXT("  目标位置：%s"), *CurrentTarget->GetActorLocation().ToString());
     }
 
     // 从 Payload 中提取参数
@@ -407,25 +400,16 @@ void USG_GameplayAbility_Attack::OnSpawnProjectileEvent(FGameplayEventData Paylo
                 FVector ParamsPayload = FullTransform.GetScale3D();
                 OverrideSpeed = ParamsPayload.X;
                 OverrideArcHeight = ParamsPayload.Y;
-                
-                UE_LOG(LogSGGameplay, Warning, TEXT("  ✓ 从 Payload 获取生成位置：%s"), *SpawnLocation.ToString());
             }
         }
-    }
-    else
-    {
-        UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ Payload.TargetData 无效，使用施放者位置"));
     }
 
     // 检查投射物类
     if (!ProjectileClass)
     {
         UE_LOG(LogSGGameplay, Error, TEXT("  ❌ ProjectileClass 未设置！"));
-        UE_LOG(LogSGGameplay, Error, TEXT("    请检查 DataTable 中该单位的 Abilities 配置"));
         return;
     }
-    
-    UE_LOG(LogSGGameplay, Warning, TEXT("  投射物类：%s"), *ProjectileClass->GetName());
 
     UWorld* World = GetWorld();
     if (!World)
@@ -434,10 +418,28 @@ void USG_GameplayAbility_Attack::OnSpawnProjectileEvent(FGameplayEventData Paylo
         return;
     }
 
+    // ✨ 新增 - 构建忽略列表，包含施放者所在的主城
+    TArray<AActor*> ActorsToIgnore;
+    ActorsToIgnore.Add(AvatarActor);  // 忽略施放者自己
+    
+    // 🔧 关键修复 - 查找并忽略友方主城
+    TArray<AActor*> AllMainCities;
+    UGameplayStatics::GetAllActorsOfClass(World, ASG_MainCityBase::StaticClass(), AllMainCities);
+    for (AActor* CityActor : AllMainCities)
+    {
+        ASG_MainCityBase* City = Cast<ASG_MainCityBase>(CityActor);
+        if (City && City->FactionTag == SourceUnit->FactionTag)
+        {
+            ActorsToIgnore.Add(City);
+            UE_LOG(LogSGGameplay, Verbose, TEXT("  忽略友方主城：%s"), *City->GetName());
+        }
+    }
+
     // 生成投射物
     FActorSpawnParameters SpawnParams;
     SpawnParams.Owner = GetOwningActorFromActorInfo();
     SpawnParams.Instigator = Cast<APawn>(AvatarActor);
+    // 🔧 关键修复 - 使用 AlwaysSpawn 确保即使在碰撞体内也能生成
     SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
     // 计算初始朝向
@@ -457,33 +459,72 @@ void USG_GameplayAbility_Attack::OnSpawnProjectileEvent(FGameplayEventData Paylo
     if (!NewProjectile)
     {
         UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 投射物生成失败！"));
-        UE_LOG(LogSGGameplay, Error, TEXT("    可能原因："));
-        UE_LOG(LogSGGameplay, Error, TEXT("    1. 生成位置在碰撞体内"));
-        UE_LOG(LogSGGameplay, Error, TEXT("    2. SpawnActor 返回 nullptr"));
-        return;
+        UE_LOG(LogSGGameplay, Error, TEXT("    生成位置：%s"), *SpawnLocation.ToString());
+        
+        // ✨ 新增 - 尝试在施放者位置上方生成
+        FVector FallbackLocation = AvatarActor->GetActorLocation() + FVector(0, 0, 100.0f);
+        UE_LOG(LogSGGameplay, Warning, TEXT("  尝试在备用位置生成：%s"), *FallbackLocation.ToString());
+        
+        NewProjectile = World->SpawnActor<ASG_Projectile>(
+            ProjectileClass,
+            FallbackLocation,
+            SpawnRotation,
+            SpawnParams
+        );
+        
+        if (!NewProjectile)
+        {
+            UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 备用位置生成也失败！"));
+            return;
+        }
+        else
+        {
+            UE_LOG(LogSGGameplay, Warning, TEXT("  ✓ 在备用位置生成成功"));
+        }
     }
-    
-    UE_LOG(LogSGGameplay, Warning, TEXT("  ✓ 投射物生成成功：%s"), *NewProjectile->GetName());
+    else
+    {
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ✓ 投射物生成成功：%s"), *NewProjectile->GetName());
+    }
+
+    // ✨ 新增 - 设置投射物忽略友方主城的碰撞
+    if (UCapsuleComponent* ProjectileCapsule = NewProjectile->CollisionCapsule)
+    {
+        for (AActor* IgnoredActor : ActorsToIgnore)
+        {
+            ProjectileCapsule->IgnoreActorWhenMoving(IgnoredActor, true);
+        }
+    }
 
     // 应用覆盖参数
     if (OverrideSpeed > 0.0f)
     {
         NewProjectile->SetFlightSpeed(OverrideSpeed);
-        UE_LOG(LogSGGameplay, Warning, TEXT("  应用覆盖速度：%.1f"), OverrideSpeed);
     }
 
     // 获取施放者信息
     UAbilitySystemComponent* SourceASC = GetAbilitySystemComponentFromActorInfo();
-    FGameplayTag SourceFaction;
-    if (SourceUnit)
+    
+    // ✨ 新增 - 检查 ASC 是否有效
+    if (!SourceASC)
     {
-        SourceFaction = SourceUnit->FactionTag;
+        UE_LOG(LogSGGameplay, Error, TEXT("  ⚠️ 施放者 ASC 为空，尝试从单位获取..."));
+        SourceASC = SourceUnit->GetAbilitySystemComponent();
+        
+        if (!SourceASC)
+        {
+            UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 仍然无法获取 ASC！"));
+        }
+        else
+        {
+            UE_LOG(LogSGGameplay, Warning, TEXT("  ✓ 从单位获取 ASC 成功"));
+        }
     }
 
     // 初始化投射物
     NewProjectile->InitializeProjectile(
         SourceASC,
-        SourceFaction,
+        SourceUnit->FactionTag,
         CurrentTarget,
         OverrideArcHeight
     );

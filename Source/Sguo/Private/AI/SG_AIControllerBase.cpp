@@ -57,17 +57,8 @@ ASG_AIControllerBase::ASG_AIControllerBase()
 void ASG_AIControllerBase::BeginPlay()
 {
 	Super::BeginPlay();
+	UE_LOG(LogSGGameplay, Log, TEXT("✓ AI 控制器 BeginPlay 完成"));
 	
-	// 如果配置了行为树，启动它
-	if (BehaviorTreeAsset)
-	{
-		RunBehaviorTree(BehaviorTreeAsset);
-		UE_LOG(LogSGGameplay, Log, TEXT("✓ AI 控制器启动行为树：%s"), *BehaviorTreeAsset->GetName());
-	}
-	else
-	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ AI 控制器未配置行为树"));
-	}
 }
 
 /**
@@ -76,7 +67,9 @@ void ASG_AIControllerBase::BeginPlay()
  * @details
  * 功能说明：
  * - 初始化 AI 逻辑
- * - 启动行为树
+ * - 🔧 修改：检测单位是否有自定义行为树
+ * - 如果单位有自定义行为树，使用单位的行为树
+ * - 否则使用控制器默认的行为树
  */
 void ASG_AIControllerBase::OnPossess(APawn* InPawn)
 {
@@ -89,13 +82,36 @@ void ASG_AIControllerBase::OnPossess(APawn* InPawn)
 		UE_LOG(LogSGGameplay, Error, TEXT("❌ AI 控制器没有黑板组件"));
 		return;
 	}
-	
+    
 	// 初始化黑板数据
 	BlackboardComp->SetValueAsBool(BB_IsTargetLocked, false);
 	BlackboardComp->SetValueAsBool(BB_IsInAttackRange, false);
 	BlackboardComp->SetValueAsBool(BB_IsTargetMainCity, false);
-	
+    
 	UE_LOG(LogSGGameplay, Log, TEXT("✓ AI 控制器接管 Pawn：%s"), *InPawn->GetName());
+    
+	// ✨ 新增 - 检测单位是否有自定义行为树
+	ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(InPawn);
+	if (ControlledUnit && ControlledUnit->HasCustomBehaviorTree())
+	{
+		// 单位有自定义行为树，使用单位的行为树
+		UBehaviorTree* UnitBT = ControlledUnit->GetUnitBehaviorTree();
+		if (UnitBT)
+		{
+			UE_LOG(LogSGGameplay, Log, TEXT("  📋 检测到单位自定义行为树：%s"), *UnitBT->GetName());
+			RunBehaviorTreeAsset(UnitBT);
+		}
+	}
+	else if (BehaviorTreeAsset)
+	{
+		// 单位没有自定义行为树，使用控制器默认的行为树
+		UE_LOG(LogSGGameplay, Log, TEXT("  📋 使用控制器默认行为树：%s"), *BehaviorTreeAsset->GetName());
+		RunBehaviorTree(BehaviorTreeAsset);
+	}
+	else
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 没有配置行为树"));
+	}
 }
 	// ✨ 新增 - 解除控制时调用
 	/**
@@ -118,6 +134,44 @@ void ASG_AIControllerBase::OnUnPossess()
 		Super::OnUnPossess();
 }
 /**
+ * @brief 运行指定的行为树
+ * @param NewBehaviorTree 要运行的行为树
+ * @return 是否成功启动
+ */
+bool ASG_AIControllerBase::RunBehaviorTreeAsset(UBehaviorTree* NewBehaviorTree)
+{
+	if (!NewBehaviorTree)
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ RunBehaviorTreeAsset：行为树为空"));
+		return false;
+	}
+    
+	// 停止当前行为树（如果有）
+	if (UBehaviorTreeComponent* BTComp = Cast<UBehaviorTreeComponent>(BrainComponent))
+	{
+		if (BTComp->IsRunning())
+		{
+			BTComp->StopTree(EBTStopMode::Safe);
+			UE_LOG(LogSGGameplay, Log, TEXT("  🛑 停止当前行为树"));
+		}
+	}
+    
+	// 运行新的行为树
+	bool bSuccess = RunBehaviorTree(NewBehaviorTree);
+    
+	if (bSuccess)
+	{
+		UE_LOG(LogSGGameplay, Log, TEXT("✓ 成功启动行为树：%s"), *NewBehaviorTree->GetName());
+	}
+	else
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("❌ 启动行为树失败：%s"), *NewBehaviorTree->GetName());
+	}
+    
+	return bSuccess;
+}
+
+	/**
  * @brief 冻结 AI
  * @details
  * 功能说明：

@@ -18,6 +18,7 @@ struct FOnAttributeChangeData;
 struct FSGUnitDataRow;
 struct FSGUnitAttackDefinition;
 class USG_CharacterCardData;
+class UBehaviorTree;
 
 // 寻敌范围形状枚举
 UENUM(BlueprintType)
@@ -323,4 +324,45 @@ public:
      */
     UFUNCTION(BlueprintPure, Category = "Combat", meta = (DisplayName = "是否可被选为目标"))
     virtual bool CanBeTargeted() const;
+
+public:
+    // ========== AI 行为树配置 ==========
+
+    // ✨ 新增 - 单位专属行为树
+    /**
+     * @brief 单位专属行为树
+     * @details
+     * 功能说明：
+     * - 如果设置了此行为树，单位将使用此行为树而不是控制器默认的行为树
+     * - 如果未设置（nullptr），则使用 AI 控制器的默认行为树
+     * 使用场景：
+     * - 站桩单位：使用固定站立的行为树（只攻击不移动）
+     * - 特殊单位：使用自定义 AI 逻辑
+     * - 普通单位：留空，使用控制器默认行为树
+     * 配置方式：
+     * - 在单位蓝图中设置此变量
+     * - 或在 DataTable 中配置（需要扩展 DataTable）
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Config", meta = (DisplayName = "单位行为树"))
+    TObjectPtr<UBehaviorTree> UnitBehaviorTree;
+
+    // ✨ 新增 - 获取单位应使用的行为树
+    /**
+     * @brief 获取单位应使用的行为树
+     * @return 行为树资产，如果未设置则返回 nullptr
+     * @details
+     * 功能说明：
+     * - 返回单位配置的行为树
+     * - AI 控制器会在 OnPossess 时调用此函数
+     */
+    UFUNCTION(BlueprintPure, Category = "AI Config", meta = (DisplayName = "获取单位行为树"))
+    UBehaviorTree* GetUnitBehaviorTree() const { return UnitBehaviorTree; }
+
+    // ✨ 新增 - 检查是否有自定义行为树
+    /**
+     * @brief 检查单位是否有自定义行为树
+     * @return 是否有自定义行为树
+     */
+    UFUNCTION(BlueprintPure, Category = "AI Config", meta = (DisplayName = "是否有自定义行为树"))
+    bool HasCustomBehaviorTree() const { return UnitBehaviorTree != nullptr; }
 };

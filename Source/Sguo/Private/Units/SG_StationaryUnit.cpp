@@ -9,6 +9,7 @@
 #include "Actors/SG_Projectile.h"
 #include "AbilitySystemComponent.h"
 #include "AbilitySystemGlobals.h"
+#include "AbilitySystem/SG_AttributeSet.h"
 #include "Data/Type/SG_UnitDataTable.h"
 
 ASG_StationaryUnit::ASG_StationaryUnit()
@@ -136,9 +137,9 @@ void ASG_StationaryUnit::StartFireArrowSkill()
 
 	// 缓存原始投射物类（如果有的话）
 	// 从当前攻击配置中获取
-	if (Abilities.Num() > 0)
+	if (CachedAttackAbilities.Num() > 0)
 	{
-		CachedOriginalProjectileClass = Abilities[CurrentAttackIndex].ProjectileClass;
+		CachedOriginalProjectileClass = CachedAttackAbilities[CurrentAttackIndex].ProjectileClass;
 		UE_LOG(LogSGUnit, Verbose, TEXT("  缓存原始投射物类：%s"), 
 			CachedOriginalProjectileClass ? *CachedOriginalProjectileClass->GetName() : TEXT("无"));
 	}
@@ -152,9 +153,9 @@ void ASG_StationaryUnit::EndFireArrowSkill()
 	bIsExecutingFireArrow = false;
 
 	// 恢复原始投射物类
-	if (CachedOriginalProjectileClass && Abilities.Num() > 0)
+	if (CachedOriginalProjectileClass && CachedAttackAbilities.Num() > 0)
 	{
-		Abilities[CurrentAttackIndex].ProjectileClass = CachedOriginalProjectileClass;
+		CachedAttackAbilities[CurrentAttackIndex].ProjectileClass = CachedOriginalProjectileClass;
 		UE_LOG(LogSGUnit, Verbose, TEXT("  恢复原始投射物类：%s"), 
 			*CachedOriginalProjectileClass->GetName());
 	}
@@ -249,9 +250,9 @@ TSubclassOf<AActor> ASG_StationaryUnit::GetFireArrowProjectileClass() const
 	}
 
 	// 其次使用当前攻击配置的投射物类
-	if (Abilities.Num() > 0 && Abilities[CurrentAttackIndex].ProjectileClass)
+	if (CachedAttackAbilities.Num() > 0 && CachedAttackAbilities[CurrentAttackIndex].ProjectileClass)
 	{
-		return Abilities[CurrentAttackIndex].ProjectileClass;
+		return CachedAttackAbilities[CurrentAttackIndex].ProjectileClass;
 	}
 
 	// 最后使用默认投射物类

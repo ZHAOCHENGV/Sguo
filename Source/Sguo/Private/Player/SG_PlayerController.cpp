@@ -773,7 +773,7 @@ void ASG_PlayerController::OnCardSelectionChanged(const FGuid& SelectedId)
 
 void ASG_PlayerController::SpawnUnitFromCard(USG_CardDataBase* CardData, const FVector& UnitSpawnLocation, const FRotator& UnitSpawnRotation)
 {
-	// ... 保持原有实现不变 ...
+	
 	if (!CardData)
 	{
 		UE_LOG(LogTemp, Error, TEXT("SpawnUnitFromCard 失败：CardData 为空"));

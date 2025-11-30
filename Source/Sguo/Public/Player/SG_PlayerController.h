@@ -1,9 +1,5 @@
-// 🔧 MODIFIED FILE - 玩家控制器头文件
-// Copyright notice placeholder
-/**
- * @file SG_PlayerController.h
- * @brief 玩家控制器
- */
+// 📄 文件：Source/Sguo/Public/Player/SG_PlayerController.h
+// 🔧 修改 - 低耦合计谋卡处理
 
 #pragma once
 
@@ -18,8 +14,26 @@ class USG_CardHandWidget;
 class ASG_PlacementPreview;
 class USG_CardDataBase;
 class USG_StrategyCardData;
-// ✨ 新增 - 前向声明
-class USG_StrategyCardData;
+// ✨ 新增 - 计谋效果基类前向声明
+class ASG_StrategyEffectBase;
+
+// ✨ 新增 - 放置模式枚举
+/**
+ * @brief 放置模式枚举
+ * @details 定义当前的卡牌放置/选择模式
+ */
+UENUM(BlueprintType)
+enum class ESGPlacementMode : uint8
+{
+	// 无放置模式
+	None                UMETA(DisplayName = "无"),
+	
+	// 普通卡牌放置（单位/英雄）
+	CardPlacement       UMETA(DisplayName = "卡牌放置"),
+	
+	// 计谋卡目标选择（通用，不区分具体类型）
+	StrategyTarget      UMETA(DisplayName = "计谋目标选择")
+};
 
 UCLASS()
 class SGUO_API ASG_PlayerController : public APlayerController
@@ -31,29 +45,8 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
-	
-	// ✨ NEW - 设置输入模式
-	/**
-	 * @brief 设置输入模式
-	 * @details
-	 * 功能说明：
-	 * - 绑定 Pawn 的输入事件
-	 * - 监听确认和取消输入
-	 */
+	virtual void Tick(float DeltaTime) override;
 	virtual void SetupInputComponent() override;
-
-	// ✨ NEW - 重写 OnPossess 以在 Pawn 就绪后绑定事件
-	/**
-	 * @brief 当控制器占有 Pawn 时调用
-	 * @param InPawn 被占有的 Pawn
-	 * @details
-	 * 功能说明：
-	 * - 在 Pawn 被占有后立即绑定输入事件
-	 * - 确保 GetPawn() 返回有效指针
-	 * 注意事项：
-	 * - 此函数在 SetupInputComponent 之后调用
-	 * - 是绑定 Pawn 特定事件的最佳时机
-	 */
 	virtual void OnPossess(APawn* InPawn) override;
 
 protected:
@@ -74,41 +67,38 @@ protected:
 
 	// ========== 放置系统 ==========
 	
-	// ✨ NEW - 预览 Actor 类
-	/**
-	 * @brief 放置预览 Actor 类
-	 * @details 在蓝图中设置，用于显示卡牌放置预览
-	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Placement", meta = (AllowPrivateAccess = "true"))
 	TSubclassOf<ASG_PlacementPreview> PlacementPreviewClass;
 
-	// ✨ NEW - 当前预览 Actor 实例
-	/**
-	 * @brief 当前生成的预览 Actor
-	 */
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Placement", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<ASG_PlacementPreview> CurrentPreviewActor;
 
-	// ✨ NEW - 当前选中的卡牌数据
-	/**
-	 * @brief 当前选中的卡牌数据
-	 */
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Placement", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USG_CardDataBase> CurrentSelectedCardData;
 
-	// ✨ NEW - 当前选中的卡牌实例 ID
-	/**
-	 * @brief 当前选中的卡牌实例 ID
-	 */
 	FGuid CurrentSelectedCardInstanceId;
-
 	
-	// ✨ NEW - 标记是否已绑定 Pawn 事件
-	/**
-	 * @brief 是否已绑定 Pawn 输入事件
-	 * @details 防止重复绑定
-	 */
 	bool bPawnInputBound = false;
+
+	// ✨ 新增 - 当前放置模式
+	UPROPERTY(BlueprintReadOnly, Category = "Placement", meta = (AllowPrivateAccess = "true", DisplayName = "当前放置模式"))
+	ESGPlacementMode CurrentPlacementMode = ESGPlacementMode::None;
+
+	// ========== ✨ 新增 - 计谋卡相关（通用，低耦合）==========
+	
+	/**
+	 * @brief 当前活跃的计谋效果
+	 * @details 用于跟踪正在选择目标的计谋效果（任何类型）
+	 */
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Strategy", 
+		meta = (AllowPrivateAccess = "true", DisplayName = "当前计谋效果"))
+	TObjectPtr<ASG_StrategyEffectBase> ActiveStrategyEffect;
+
+	/**
+	 * @brief 计谋卡实例 ID
+	 * @details 用于在确认时使用卡牌
+	 */
+	FGuid StrategyCardInstanceId;
 
 public:
 	UFUNCTION(BlueprintCallable, Category = "Card")
@@ -116,177 +106,104 @@ public:
 
 	// ========== 放置系统函数 ==========
 	
-	// ✨ NEW - 开始放置卡牌
-	/**
-	 * @brief 开始放置卡牌
-	 * @param CardData 卡牌数据
-	 * @param CardInstanceId 卡牌实例 ID
-	 * @details
-	 * 功能说明：
-	 * - 生成预览 Actor
-	 * - 开始跟随鼠标
-	 * 详细流程：
-	 * 1. 检查是否已有预览 Actor
-	 * 2. 生成新的预览 Actor
-	 * 3. 初始化预览 Actor
-	 * 4. 保存卡牌数据和实例 ID
-	 */
 	UFUNCTION(BlueprintCallable, Category = "Placement")
 	void StartCardPlacement(USG_CardDataBase* CardData, const FGuid& CardInstanceId);
 
-	// ✨ NEW - 确认放置
-	/**
-	 * @brief 确认放置卡牌
-	 * @details
-	 * 功能说明：
-	 * - 在预览位置生成单位
-	 * - 使用卡牌
-	 * - 销毁预览 Actor
-	 * 详细流程：
-	 * 1. 检查是否可以放置
-	 * 2. 获取预览位置
-	 * 3. 生成单位
-	 * 4. 使用卡牌（进入冷却）
-	 * 5. 销毁预览 Actor
-	 */
 	UFUNCTION(BlueprintCallable, Category = "Placement")
 	void ConfirmPlacement();
 
-	// ✨ NEW - 取消放置
-	/**
-	 * @brief 取消放置卡牌
-	 * @details
-	 * 功能说明：
-	 * - 销毁预览 Actor
-	 * - 取消选中卡牌
-	 */
 	UFUNCTION(BlueprintCallable, Category = "Placement")
 	void CancelPlacement();
 
-	// ✨ 新增 - 使用计谋卡
+	// ========== ✨ 新增 - 通用计谋卡接口（低耦合）==========
+	
 	/**
-	 * @brief 使用计谋卡
+	 * @brief 开始计谋卡目标选择
 	 * @param StrategyCardData 计谋卡数据
-	 * @param TargetLocation 目标位置（区域效果使用）
+	 * @param CardInstanceId 卡牌实例 ID
+	 * @return 是否成功开始
 	 * @details
 	 * 功能说明：
-	 * - 根据计谋卡类型生成对应的效果 Actor
-	 * - 全局效果直接生效
-	 * - 区域效果在目标位置生效
+	 * - 根据卡牌数据中配置的效果类生成效果 Actor
+	 * - 调用效果 Actor 的 StartTargetSelection
+	 * - 效果类自己负责预览显示
+	 * 注意事项：
+	 * - PlayerController 不关心具体是什么类型的计谋
+	 * - 所有特定逻辑由效果类自己实现
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Strategy", meta = (DisplayName = "开始计谋目标选择"))
+	bool StartStrategyTargetSelection(USG_StrategyCardData* StrategyCardData, const FGuid& CardInstanceId);
+
+	/**
+	 * @brief 确认计谋目标
+	 * @return 是否成功确认
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Strategy", meta = (DisplayName = "确认计谋目标"))
+	bool ConfirmStrategyTarget();
+
+	/**
+	 * @brief 取消计谋目标选择
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Strategy", meta = (DisplayName = "取消计谋选择"))
+	void CancelStrategyTargetSelection();
+
+	/**
+	 * @brief 直接使用计谋卡（不需要选择目标）
+	 * @param StrategyCardData 计谋卡数据
+	 * @param CardInstanceId 卡牌实例 ID
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Strategy")
-	void UseStrategyCard(USG_StrategyCardData* StrategyCardData, const FVector& TargetLocation);
+	void UseStrategyCardDirectly(USG_StrategyCardData* StrategyCardData, const FGuid& CardInstanceId);
 
-private:
-	// ✨ NEW - 绑定 Pawn 输入事件
 	/**
-	 * @brief 绑定 Pawn 的输入事件
-	 * @details
-	 * 功能说明：
-	 * - 监听 Pawn 的确认和取消输入
-	 * - 防止重复绑定
+	 * @brief 检查是否正在选择计谋目标
 	 */
-	void BindPawnInputEvents();
-	
-	// ✨ NEW - 监听 Pawn 的确认输入
-	/**
-	 * @brief 处理确认输入（右键）
-	 */
-	UFUNCTION()
-	void OnConfirmInput();
+	UFUNCTION(BlueprintPure, Category = "Strategy", meta = (DisplayName = "是否正在选择计谋目标"))
+	bool IsSelectingStrategyTarget() const { return CurrentPlacementMode == ESGPlacementMode::StrategyTarget; }
 
-	// ✨ NEW - 监听 Pawn 的取消输入
 	/**
-	 * @brief 处理取消输入（左键）
+	 * @brief 获取当前放置模式
 	 */
-	UFUNCTION()
-	void OnCancelInput();
+	UFUNCTION(BlueprintPure, Category = "Placement", meta = (DisplayName = "获取放置模式"))
+	ESGPlacementMode GetCurrentPlacementMode() const { return CurrentPlacementMode; }
 
-	// 🔧 MODIFIED - 修改参数名避免与基类成员变量冲突
-	/**
-	 * @brief 根据卡牌数据生成单位
-	 * @param CardData 卡牌数据
-	 * @param UnitSpawnLocation 单位生成位置（修改名称避免冲突）
-	 * @param UnitSpawnRotation 单位生成旋转（修改名称避免冲突）
-	 */
-	void SpawnUnitFromCard(USG_CardDataBase* CardData, const FVector& UnitSpawnLocation, const FRotator& UnitSpawnRotation);
-	// ✨ NEW - 监听卡组选中变化
-	/**
-	 * @brief 监听卡组选中变化
-	 * @param SelectedId 选中的卡牌实例 ID
-	 * @details
-	 * 功能说明：
-	 * - 当卡牌被选中时，开始放置流程
-	 * - 当卡牌被取消选中时，取消放置
-	 */
-	UFUNCTION()
-	void OnCardSelectionChanged(const FGuid& SelectedId);
-
-
-
-	// ✨ NEW - 查找敌方主城
-	/**
-	 * @brief 查找敌方主城
-	 * @return 敌方主城 Actor，如果未找到返回 nullptr
-	 * @details
-	 * 功能说明：
-	 * - 在场景中查找敌方主城
-	 * - 用于计算单位朝向
-	 * 详细流程：
-	 * 1. 获取场景中所有主城
-	 * 2. 筛选敌方阵营的主城
-	 * 3. 返回第一个找到的敌方主城
-	 * 注意事项：
-	 * - 结果会被缓存，避免重复查找
-	 */
-	ASG_MainCityBase* FindEnemyMainCity();
-    
-	// ✨ NEW - 计算单位生成朝向
-	/**
-	 * @brief 计算单位生成朝向
-	 * @param SpawnLocation 生成位置
-	 * @return 朝向旋转
-	 * @details
-	 * 功能说明：
-	 * - 根据敌方主城位置计算朝向
-	 * - 如果未找到敌方主城，朝向 +X 方向
-	 */
-	FRotator CalculateUnitSpawnRotation(const FVector& UnitLocation);
-    
-	// ✨ NEW - 缓存的敌方主城引用
-	/**
-	 * @brief 缓存的敌方主城引用
-	 * @details 避免每次都查找
-	 */
-	UPROPERTY(Transient)
-	TObjectPtr<ASG_MainCityBase> CachedEnemyMainCity = nullptr;
-
-public:
-	// ✨ 新增 - 检查卡牌是否需要预览
 	/**
 	 * @brief 检查卡牌是否需要放置预览
-	 * @param CardData 卡牌数据
-	 * @return 是否需要预览
-	 * @details
-	 * 功能说明：
-	 * - 角色卡：需要预览（选择放置位置）
-	 * - 区域计谋卡：需要预览（选择目标区域）
-	 * - 全局计谋卡：不需要预览（直接生效）
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Placement")
 	bool DoesCardRequirePreview(USG_CardDataBase* CardData) const;
 
-	// ✨ 新增 - 直接使用计谋卡（全局效果）
+private:
+	void BindPawnInputEvents();
+	
+	UFUNCTION()
+	void OnConfirmInput();
+
+	UFUNCTION()
+	void OnCancelInput();
+
+	void SpawnUnitFromCard(USG_CardDataBase* CardData, const FVector& UnitSpawnLocation, const FRotator& UnitSpawnRotation);
+
+	UFUNCTION()
+	void OnCardSelectionChanged(const FGuid& SelectedId);
+
+	// ✨ 新增 - 计谋效果完成回调
 	/**
-	 * @brief 直接使用计谋卡（不需要选择位置）
-	 * @param StrategyCardData 计谋卡数据
-	 * @param CardInstanceId 卡牌实例 ID
-	 * @details
-	 * 功能说明：
-	 * - 用于全局效果的计谋卡
-	 * - 直接生成效果 Actor 并执行
-	 * - 不需要预览和位置选择
+	 * @brief 计谋效果完成回调
+	 * @param Effect 效果 Actor
+	 * @param bSuccess 是否成功
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Strategy")
-	void UseStrategyCardDirectly(USG_StrategyCardData* StrategyCardData, const FGuid& CardInstanceId);
+	UFUNCTION()
+	void OnStrategyEffectFinished(ASG_StrategyEffectBase* Effect, bool bSuccess);
+
+	ASG_MainCityBase* FindEnemyMainCity();
+	FRotator CalculateUnitSpawnRotation(const FVector& UnitLocation);
+
+	/**
+	 * @brief 获取鼠标在地面的世界位置
+	 */
+	bool GetMouseGroundLocation(FVector& OutLocation) const;
+    
+	UPROPERTY(Transient)
+	TObjectPtr<ASG_MainCityBase> CachedEnemyMainCity = nullptr;
 };

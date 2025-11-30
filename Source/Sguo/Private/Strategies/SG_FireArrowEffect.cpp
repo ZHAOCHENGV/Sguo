@@ -24,6 +24,9 @@ ASG_FireArrowEffect::ASG_FireArrowEffect()
 	RootComponent = PreviewDecal;
 	PreviewDecal->SetRelativeRotation(FRotator(-90.0f, 0.0f, 0.0f));
 	PreviewDecal->SetVisibility(false);
+	// ✨ 默认开启强制贴地，只检测静态物体
+	bForceGroundTrace = true;
+	GroundTraceChannel = ECC_WorldStatic;
 }
 
 void ASG_FireArrowEffect::BeginPlay()
@@ -150,8 +153,49 @@ void ASG_FireArrowEffect::UpdateTargetLocation_Implementation(const FVector& New
 		return;
 	}
 
-	TargetLocation = NewLocation;
-	SetActorLocation(NewLocation);
+	FVector FinalLocation = NewLocation;
+
+	// ✨ 如果开启了强制贴地检测，我们需要忽略 PlayerController 传来的 NewLocation（因为它可能包含了 Pawn 碰撞）
+	// 而是自己重新从鼠标位置发射一条只检测 Static 的射线
+	if (bForceGroundTrace)
+	{
+		APlayerController* PC = Cast<APlayerController>(GetOwner());
+		if (PC)
+		{
+			FVector WorldLoc, WorldDir;
+			if (PC->DeprojectMousePositionToWorld(WorldLoc, WorldDir))
+			{
+				FVector Start = WorldLoc;
+				FVector End = Start + WorldDir * TraceDistance;
+
+				FHitResult Hit;
+				FCollisionQueryParams QueryParams;
+				QueryParams.AddIgnoredActor(this);
+				QueryParams.AddIgnoredActor(PC->GetPawn()); // 忽略玩家自己
+
+				// 🚀 性能优化：使用 LineTraceSingleByObjectType 只检测 WorldStatic
+				// 这样可以物理上完全忽略 Character/Pawn/PhysicsBody 等动态物体
+				FCollisionObjectQueryParams ObjectParams;
+				ObjectParams.AddObjectTypesToQuery(GroundTraceChannel); 
+
+				bool bHit = GetWorld()->LineTraceSingleByObjectType(
+					Hit, 
+					Start, 
+					End, 
+					ObjectParams, 
+					QueryParams
+				);
+
+				if (bHit)
+				{
+					FinalLocation = Hit.ImpactPoint;
+				}
+			}
+		}
+	}
+
+	TargetLocation = FinalLocation;
+	SetActorLocation(FinalLocation);
 	UpdatePreviewDecal();
 }
 

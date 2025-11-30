@@ -1241,7 +1241,11 @@ void ASG_Projectile::HandleGroundImpact()
 
     // 标记已落地
     bHasLanded = true;
-
+    // 防止单位走上去被卡住，或投射物被二次检测
+    if (CollisionCapsule)
+    {
+        CollisionCapsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    }
     UE_LOG(LogSGGameplay, Log, TEXT("投射物落地：%s"), *GroundImpactLocation.ToString());
 
     // 执行落地 GameplayCue
@@ -1259,8 +1263,8 @@ void ASG_Projectile::HandleGroundImpact()
     // 广播落地事件
     OnProjectileGroundImpact.Broadcast(GroundHitInfo);
 
-    // 销毁投射物
-    Destroy();
+    // 延迟3秒销毁投射物
+    SetLifeSpan(3.0f);
 }
 
 // ==================== 区域随机点计算函数 ====================

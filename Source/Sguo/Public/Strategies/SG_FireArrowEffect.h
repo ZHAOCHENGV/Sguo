@@ -100,7 +100,27 @@ protected:
 	FTimerHandle FireTimerHandle;
 	FTimerHandle DurationTimerHandle;
 	bool bPreviewVisible = false;
+	// ========== ✨ 新增 - 地面检测配置 ==========
+    
+	/**
+	 * @brief 是否强制贴地（忽略单位）
+	 * @details 如果为 true，将重新进行射线检测，只检测 WorldStatic（地面/建筑），忽略 Pawn。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Targeting", meta = (DisplayName = "强制贴地检测"))
+	bool bForceGroundTrace = true;
 
+	/**
+	 * @brief 地面检测通道
+	 * @details 仅在 bForceGroundTrace 为 true 时生效。建议使用 WorldStatic 以获得最佳性能。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Targeting", meta = (DisplayName = "地面检测通道", EditCondition = "bForceGroundTrace"))
+	TEnumAsByte<ECollisionChannel> GroundTraceChannel = ECC_WorldStatic;
+
+	/**
+	 * @brief 射线检测距离
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Targeting", meta = (DisplayName = "射线距离"))
+	float TraceDistance = 10000.0f;
 public:
 	// ========== 蓝图事件 ==========
 	

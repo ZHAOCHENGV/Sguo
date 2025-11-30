@@ -626,7 +626,7 @@ public:
      * @return 目标位置
      */
     UFUNCTION(BlueprintPure, Category = "Projectile", meta = (DisplayName = "获取目标位置"))
-    FVector GetTargetLocation() const { return TargetLocation; }
+    FVector GetProjectileTargetLocation() const { return TargetLocation; }
 
     /**
      * @brief 获取地面落点位置

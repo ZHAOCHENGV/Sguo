@@ -304,22 +304,29 @@ void ASG_PlayerController::CancelPlacement()
 {
 	UE_LOG(LogTemp, Log, TEXT("========== 取消放置 =========="));
 
-	switch (CurrentPlacementMode)
+	// 1. 如果是计谋模式，转交给专用函数（该函数内部已正确处理）
+	if (CurrentPlacementMode == ESGPlacementMode::StrategyTarget)
 	{
-	case ESGPlacementMode::StrategyTarget:
-		// 计谋卡目标选择模式
 		CancelStrategyTargetSelection();
-		return;
-
-	case ESGPlacementMode::CardPlacement:
-		// 普通卡牌放置模式，继续原有逻辑
-		break;
-
-	default:
 		return;
 	}
 
-	// 普通卡牌放置取消逻辑
+	// 2. 如果当前本来就没在放置，直接返回
+	if (CurrentPlacementMode == ESGPlacementMode::None)
+	{
+		return;
+	}
+
+	// 3. 【关键修复】先重置状态，再执行可能会触发回调的操作
+	// 保存需要清理的变量
+	FGuid InstanceIdToDeselect = CurrentSelectedCardInstanceId;
+	
+	// 立即重置状态，打断 SelectCard -> OnSelectionChanged -> CancelPlacement 的闭环
+	CurrentSelectedCardData = nullptr;
+	CurrentSelectedCardInstanceId.Invalidate();
+	CurrentPlacementMode = ESGPlacementMode::None;
+
+	// 4. 销毁预览 Actor
 	if (CurrentPreviewActor)
 	{
 		CurrentPreviewActor->Destroy();
@@ -327,15 +334,12 @@ void ASG_PlayerController::CancelPlacement()
 		UE_LOG(LogTemp, Log, TEXT("✓ 预览 Actor 已销毁"));
 	}
 
-	if (CardDeckComponent && CurrentSelectedCardInstanceId.IsValid())
+	// 5. 调用外部组件方法（这会触发 OnSelectionChanged，但此时 Mode 已经是 None，不会导致递归）
+	if (CardDeckComponent && InstanceIdToDeselect.IsValid())
 	{
 		CardDeckComponent->SelectCard(FGuid());
 		UE_LOG(LogTemp, Log, TEXT("✓ 已取消选中卡牌"));
 	}
-
-	CurrentSelectedCardData = nullptr;
-	CurrentSelectedCardInstanceId.Invalidate();
-	CurrentPlacementMode = ESGPlacementMode::None;
 
 	UE_LOG(LogTemp, Log, TEXT("========================================"));
 }

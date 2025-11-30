@@ -1,5 +1,5 @@
-// SG_PlacementPreview.cpp
-// Fill out your copyright notice in the Description page of Project Settings.
+// 📄 文件：Source/Sguo/Private/Actors/SG_PlacementPreview.cpp
+// 🔧 修改 - 完整修复编译错误，删除废弃函数，包含性能优化
 
 #include "Actors/SG_PlacementPreview.h"
 #include "Components/StaticMeshComponent.h"
@@ -13,6 +13,7 @@
 #include "Actors/SG_FrontLineManager.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/Pawn.h"
 
 ASG_PlacementPreview::ASG_PlacementPreview()
 {
@@ -28,12 +29,12 @@ ASG_PlacementPreview::ASG_PlacementPreview()
     PreviewMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     PreviewMesh->SetVisibility(false);
 
-    // 创建区域指示器（计谋卡Area常用）
+    // 创建区域指示器
     AreaIndicator = CreateDefaultSubobject<UDecalComponent>(TEXT("AreaIndicator"));
     AreaIndicator->SetupAttachment(RootComp);
     AreaIndicator->SetVisibility(false);
     AreaIndicator->DecalSize = FVector(100.0f, 100.0f, 100.0f);
-    // 🔧 修改 - 确保 Decal 朝下投射
+    // 🔧 修改 - 默认让 Decal 向下投射 (Pitch -90)，防止侧面拉伸
     AreaIndicator->SetRelativeRotation(FRotator(-90.0f, 0.0f, 0.0f));
 
     // 初始化
@@ -41,10 +42,13 @@ ASG_PlacementPreview::ASG_PlacementPreview()
     PreviewRotation = FRotator::ZeroRotator;
     bCanPlace = false;
 
-    // 默认设置：碰撞检测使用 Pawn 对象类型
+    // 🔧 优化 - 默认配置
+    // 移除旧的 GroundTraceIgnoredClasses.Add(...)
+    
+    // 默认使用 Pawn 作为碰撞检测类型
     CollisionObjectTypes.Add(UEngineTypes::ConvertToObjectType(ECC_Pawn));
     
-    // 🔧 优化 - 默认仅检测 WorldStatic，这是忽略 Pawn 最快的方法
+    // 默认开启高性能地面检测 (只检测 WorldStatic)
     bOnlyTraceWorldStatic = true;
 }
 
@@ -52,6 +56,7 @@ void ASG_PlacementPreview::BeginPlay()
 {
     Super::BeginPlay();
     
+    // 查找前线管理器
     CachedFrontLineManager = ASG_FrontLineManager::GetFrontLineManager(this);
     
     if (CachedFrontLineManager)
@@ -81,8 +86,11 @@ void ASG_PlacementPreview::InitializePreview(USG_CardDataBase* InCardData, APlay
 
     if (!CardData || !PlayerController)
     {
+        UE_LOG(LogTemp, Error, TEXT("InitializePreview 失败：参数无效"));
         return;
     }
+
+    UE_LOG(LogTemp, Log, TEXT("初始化放置预览 - 卡牌: %s"), *CardData->CardName.ToString());
 
     switch (CardData->PlacementType)
     {
@@ -91,14 +99,16 @@ void ASG_PlacementPreview::InitializePreview(USG_CardDataBase* InCardData, APlay
         break;
 
     case ESGPlacementType::Area:
-        CreateAreaPreview(); // 计谋卡通常走这里
+        CreateAreaPreview();
         break;
 
     case ESGPlacementType::Global:
-        Destroy(); // 不需要预览
+        UE_LOG(LogTemp, Warning, TEXT("全局效果卡牌不需要预览"));
+        Destroy();
         break;
 
     default:
+        UE_LOG(LogTemp, Error, TEXT("未知的放置类型"));
         Destroy();
         break;
     }
@@ -135,38 +145,49 @@ bool ASG_PlacementPreview::CanPlaceAtCurrentLocation() const
 
 void ASG_PlacementPreview::UpdatePreviewLocation()
 {
-    if (!PlayerController) return;
+    if (!PlayerController)
+    {
+        return;
+    }
 
     // 获取鼠标位置
     float MouseX, MouseY;
-    if (!PlayerController->GetMousePosition(MouseX, MouseY)) return;
+    if (!PlayerController->GetMousePosition(MouseX, MouseY))
+    {
+        return;
+    }
 
     // 转换为世界射线
     FVector WorldLocation, WorldDirection;
-    if (!PlayerController->DeprojectScreenPositionToWorld(MouseX, MouseY, WorldLocation, WorldDirection)) return;
+    if (!PlayerController->DeprojectScreenPositionToWorld(MouseX, MouseY, WorldLocation, WorldDirection))
+    {
+        return;
+    }
 
+    // 射线参数
     FVector Start = WorldLocation;
     FVector End = Start + WorldDirection * RaycastDistance;
 
-    // ✨ 优化 - 基础查询参数（不包含每帧遍历！）
+    // ✨ 优化 - 基础查询参数（移除 build ignore list）
     FCollisionQueryParams QueryParams;
-    QueryParams.AddIgnoredActor(this); // 忽略自己
-    if (APawn* PlayerPawn = PlayerController->GetPawn())
+    QueryParams.AddIgnoredActor(this);
+    if (PlayerController->GetPawn())
     {
-        QueryParams.AddIgnoredActor(PlayerPawn); // 忽略玩家控制的角色
+        QueryParams.AddIgnoredActor(PlayerController->GetPawn());
     }
-    
+
     // 执行射线检测
     FHitResult HitResult;
     bool bHit = false;
 
-    // ✨ 核心逻辑：区分“强制静态检测”和“自定义检测”
+    // ✨ 核心优化逻辑：区分“强制静态检测”和“自定义检测”
     if (bOnlyTraceWorldStatic)
     {
-        // 🚀 高性能模式：只检测 Static，完美忽略所有单位（Dynamic/Pawn）
+        // 🚀 高性能模式：只检测 Static，自动忽略所有 Character/Pawn (通常是 Dynamic)
         FCollisionObjectQueryParams ObjectParams;
-        ObjectParams.AddObjectTypesToQuery(ECC_WorldStatic); 
-        // 也可以加上 Landscape 如果它是单独的类型
+        ObjectParams.AddObjectTypesToQuery(ECC_WorldStatic);
+        // 如果你的地貌是单独的类型，在这里添加，例如:
+        // ObjectParams.AddObjectTypesToQuery(ECC_WorldStatic); 
         
         bHit = GetWorld()->LineTraceSingleByObjectType(
             HitResult,
@@ -178,7 +199,7 @@ void ASG_PlacementPreview::UpdatePreviewLocation()
     }
     else
     {
-        // 传统的通道/类型混合模式
+        // 传统模式：混合检测
         if (GroundObjectTypes.Num() > 0)
         {
             FCollisionObjectQueryParams ObjectParams;
@@ -186,26 +207,36 @@ void ASG_PlacementPreview::UpdatePreviewLocation()
             {
                 ObjectParams.AddObjectTypesToQuery(UEngineTypes::ConvertToCollisionChannel(ObjectType));
             }
-            bHit = GetWorld()->LineTraceSingleByObjectType(HitResult, Start, End, ObjectParams, QueryParams);
+            
+            bHit = GetWorld()->LineTraceSingleByObjectType(
+                HitResult,
+                Start,
+                End,
+                ObjectParams,
+                QueryParams
+            );
         }
         else
         {
-            bHit = GetWorld()->LineTraceSingleByChannel(HitResult, Start, End, GroundTraceChannel, QueryParams);
+            // 使用通道查询
+            bHit = GetWorld()->LineTraceSingleByChannel(
+                HitResult,
+                Start,
+                End,
+                GroundTraceChannel,
+                QueryParams
+            );
         }
     }
 
     // 更新位置
     if (bHit)
     {
-        // ✨ 新增 - 更加贴合地面的法线旋转（可选，如果是Decal会自动贴合，但Mesh需要旋转）
+        // ✨ 根据法线偏移，确保贴合
         PreviewLocation = HitResult.Location + HitResult.ImpactNormal * GroundOffset;
-        
-        // 如果是 Mesh，可以根据法线调整旋转
-        // FRotator NewRot = FRotationMatrix::MakeFromZ(HitResult.ImpactNormal).Rotator();
-        // SetActorRotation(NewRot); // 根据需求开启
-
         SetActorLocation(PreviewLocation);
 
+        // 调试绘制
         if (bDebugGroundTrace)
         {
             DrawDebugLine(GetWorld(), Start, HitResult.Location, FColor::Green, false, 0.0f, 0, 1.0f);
@@ -214,7 +245,6 @@ void ASG_PlacementPreview::UpdatePreviewLocation()
     }
     else
     {
-        // 未检测到地面，投影到远端或保持原位
         if (bDebugGroundTrace)
         {
             DrawDebugLine(GetWorld(), Start, End, FColor::Red, false, 0.0f, 0, 1.0f);
@@ -224,16 +254,21 @@ void ASG_PlacementPreview::UpdatePreviewLocation()
 
 bool ASG_PlacementPreview::CheckCollision() const
 {
-   // 如果是计谋卡（Area模式），且不需要检测碰撞（例如火矢计可以随便放），则直接返回 false（无碰撞）
-    // 通常计谋卡是可以重叠释放的，除非你的设计不允许
+    // ✨ 针对计谋卡(Area类型)的特殊逻辑
+    // 如果是计谋卡，通常允许重叠释放（或者不需要检测单位碰撞）
+    // 这里保留碰撞检测逻辑，如果不需要，可以在 CardData 里加标志位控制
     if (CardData && CardData->PlacementType == ESGPlacementType::Area)
     {
-        // 🔧 这里假设计谋卡不需要避开单位。如果需要，请保留下方逻辑。
+        // 如果想让计谋卡无视单位碰撞（比如火矢计可以随便放），这里直接 return false
         // return false; 
     }
-    
-    if (PreviewLocation.IsNearlyZero()) return true;
 
+    if (PreviewLocation.IsNearlyZero())
+    {
+        return true;
+    }
+
+    // 构建查询参数
     FCollisionQueryParams QueryParams;
     QueryParams.AddIgnoredActor(this);
     if (PlayerController && PlayerController->GetPawn())
@@ -241,12 +276,10 @@ bool ASG_PlacementPreview::CheckCollision() const
         QueryParams.AddIgnoredActor(PlayerController->GetPawn());
     }
 
-    // 仅忽略当前已经缓存的，不每帧遍历
-    // 如果有特殊需求要忽略特定单位，建议在 Start 时获取一次
-    
     TArray<FOverlapResult> OverlapResults;
     bool bHasOverlap = false;
 
+    // 优先使用对象类型查询
     if (CollisionObjectTypes.Num() > 0)
     {
         FCollisionObjectQueryParams ObjectParams;
@@ -266,6 +299,7 @@ bool ASG_PlacementPreview::CheckCollision() const
     }
     else
     {
+        // 使用通道查询
         bHasOverlap = GetWorld()->OverlapMultiByChannel(
             OverlapResults,
             PreviewLocation,
@@ -276,62 +310,50 @@ bool ASG_PlacementPreview::CheckCollision() const
         );
     }
 
+    // 统计有效碰撞
     int32 ValidOverlapCount = 0;
+    
     for (const FOverlapResult& Result : OverlapResults)
     {
         AActor* OverlappedActor = Result.GetActor();
-        if (!OverlappedActor || OverlappedActor == this) continue;
-
-        if (bIgnoreDeadUnits)
-        {
-            if (ACharacter* Character = Cast<ACharacter>(OverlappedActor))
-            {
-                // 如果是死亡单位，忽略
-                // 注意：这里需要你的 UnitBase 有 IsDead 接口或者 LifeSpan
-                // 假设 LifeSpan > 0 意味着正在死亡过程中
-                if (Character->GetLifeSpan() > 0.0f) continue;
-            }
-        }
-        ValidOverlapCount++;
-    }
-
-    return (ValidOverlapCount > 0);
-}
-
-void ASG_PlacementPreview::BuildGroundTraceIgnoreList(FCollisionQueryParams& OutParams) const
-{
-    // 忽略配置的类
-    for (TSubclassOf<AActor> ActorClass : GroundTraceIgnoredClasses)
-    {
-        if (!ActorClass)
+        
+        if (!OverlappedActor || OverlappedActor == this)
         {
             continue;
         }
 
-        TArray<AActor*> FoundActors;
-        UGameplayStatics::GetAllActorsOfClass(GetWorld(), ActorClass, FoundActors);
-        
-        for (AActor* Actor : FoundActors)
+        // 检查是否是死亡单位
+        if (bIgnoreDeadUnits)
         {
-            if (Actor)
+            if (ACharacter* Character = Cast<ACharacter>(OverlappedActor))
             {
-                OutParams.AddIgnoredActor(Actor);
+                // 如果 LifeSpan > 0，通常意味着正在倒计时销毁（已死亡）
+                if (!IsValid(Character) || Character->GetLifeSpan() > 0.0f)
+                {
+                    continue;
+                }
             }
         }
-    }
 
-    // 始终忽略其他预览 Actor
-    TArray<AActor*> AllPreviews;
-    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_PlacementPreview::StaticClass(), AllPreviews);
-    for (AActor* Preview : AllPreviews)
-    {
-        if (Preview)
+        ValidOverlapCount++;
+        
+        if (bDebugCollision)
         {
-            OutParams.AddIgnoredActor(Preview);
+            UE_LOG(LogTemp, Log, TEXT("  碰撞检测到：%s"), *OverlappedActor->GetName());
         }
     }
-}
 
+    bool bResult = (ValidOverlapCount > 0);
+
+    // 调试绘制
+    if (bDebugCollision)
+    {
+        DrawDebugSphere(GetWorld(), PreviewLocation, CollisionCheckRadius, 16, 
+            bResult ? FColor::Red : FColor::Green, false, 0.0f, 0, 2.0f);
+    }
+
+    return bResult;
+}
 
 bool ASG_PlacementPreview::CheckFrontLineViolation() const
 {
@@ -340,6 +362,7 @@ bool ASG_PlacementPreview::CheckFrontLineViolation() const
         return false;
     }
     
+    // 全局和无限制卡牌
     if (CardData->PlacementType == ESGPlacementType::Global)
     {
         return false;
@@ -416,16 +439,18 @@ void ASG_PlacementPreview::CreateAreaPreview()
 {
     UE_LOG(LogTemp, Log, TEXT("创建区域预览"));
 
-    // 区域预览（如火矢计）
     PreviewMesh->SetVisibility(false);
     AreaIndicator->SetVisibility(true);
 
     if (CardData)
     {
-        // Decal 的 Size X/Y/Z 对应：厚度 / 宽 / 高
-        // CardData->PlacementAreaSize 是半径还是直径？假设是半径
-        float Radius = CardData->PlacementAreaSize.X; // 假设 X 是半径
-        AreaIndicator->DecalSize = FVector(200.0f, Radius, Radius); // 200厚度，确保覆盖斜坡
+        // 假设 X 是半径
+        float Radius = CardData->PlacementAreaSize.X;
+        
+        // Decal Size: X=厚度(深度), Y=宽, Z=高
+        // 由于我们设置了 Pitch -90，X轴垂直地面
+        // 我们给 400 的厚度确保能覆盖斜坡
+        AreaIndicator->DecalSize = FVector(400.0f, Radius, Radius);
     }
- 
 }
+

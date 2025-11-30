@@ -24,7 +24,7 @@ enum class ESGProjectileFlightMode : uint8
     /** 直线飞行 - 直接飞向目标 */
     Linear          UMETA(DisplayName = "直线飞行"),
     
-    /** 抛物线飞行 - 带弧度的飞行 */
+    /** 抛物线飞行 - 带弧度的飞行（物理正确的重力弹道） */
     Parabolic       UMETA(DisplayName = "抛物线飞行"),
     
     /** 归航飞行 - 持续追踪目标 */
@@ -109,24 +109,32 @@ struct FSGProjectileHitInfo
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSGProjectileHitSignature, const FSGProjectileHitInfo&, HitInfo);
 
 /**
- * @brief 自定义弹道投射物
+ * @brief 自定义弹道投射物（物理正确版）
+ * 
  * @details
- * 功能说明：
+ * **功能说明：**
  * - 不使用 ProjectileMovementComponent，采用自定义 Tick 驱动的飞行系统
  * - 支持直线、抛物线、归航三种飞行模式
+ * - 抛物线模式使用物理正确的二次曲线公式：h(t) = 4 * ArcHeight * t * (1-t)
  * - 支持多种目标模式：Actor、位置、区域中心、区域随机点
- * - 抛物线模式下目标丢失时自动飞向地面落点
+ * - 采用"弹道延展"策略：目标丢失后箭矢自然惯性落地，无突变
  * - 使用胶囊体碰撞，碰撞尺寸直接在组件上配置
  * 
- * 使用方式：
+ * **物理模型：**
+ * - 抛物线轨迹遵循标准重力公式的归一化形式
+ * - 当飞行进度 t > 1.0 时，t(1-t) 变为负数，产生自然下落效果
+ * - 水平速度分量在忽略空气阻力时保持恒定
+ * 
+ * **使用方式：**
  * 1. 创建投射物蓝图继承此类
  * 2. 在 CollisionCapsule 组件上配置碰撞尺寸
  * 3. 配置飞行参数和目标参数
  * 4. 调用 InitializeProjectile 系列函数初始化
  * 
- * 注意事项：
+ * **注意事项：**
  * - 碰撞半径和半高不再作为单独属性暴露，直接在组件详情面板配置
  * - 投射物生成后会延迟启用碰撞，防止在友方建筑内部立即碰撞
+ * - FlightProgress 不再钳位，允许超过 1.0 以实现弹道延展
  */
 UCLASS()
 class SGUO_API ASG_Projectile : public AActor, public IGameplayCueInterface
@@ -170,8 +178,6 @@ public:
      * - 不作为根组件，可自由调整方向
      * - 碰撞尺寸（半径和半高）直接在此组件的详情面板中配置
      * - 适合箭矢等细长投射物
-     * 
-     * 🔧 修改 - 碰撞尺寸现在直接在组件上配置，不再使用单独的属性
      */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (DisplayName = "碰撞胶囊体"))
     TObjectPtr<UCapsuleComponent> CollisionCapsule;
@@ -195,7 +201,10 @@ public:
 
     /**
      * @brief 飞行速度（厘米/秒）
-     * @details 投射物将始终以此速度飞行，不受弧度影响
+     * @details 
+     * 功能说明：
+     * - 投射物沿弹道曲线的移动速度
+     * - 在抛物线模式下，这是沿曲线的弧长速度，而非水平速度
      */
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Flight Config", meta = (DisplayName = "飞行速度", ClampMin = "100.0", UIMin = "100.0", UIMax = "10000.0"))
     float FlightSpeed = 3000.0f;
@@ -205,10 +214,15 @@ public:
      * @details 
      * 功能说明：
      * - 抛物线最高点相对于起点-终点连线的高度
+     * - 使用物理公式：h(t) = 4 * ArcHeight * t * (1-t)
      * - 0 = 直线飞行
      * - 100 = 轻微弧度
      * - 300 = 中等弧度
      * - 500+ = 高抛
+     * 
+     * 物理说明：
+     * - 当 t = 0.5 时达到最高点，高度为 ArcHeight
+     * - 当 t > 1.0 时，高度偏移变为负数，实现自然下落
      */
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Flight Config", meta = (DisplayName = "弧度高度", ClampMin = "0.0", UIMin = "0.0", UIMax = "1000.0", EditCondition = "FlightMode == ESGProjectileFlightMode::Parabolic", EditConditionHides))
     float ArcHeight = 200.0f;
@@ -332,13 +346,6 @@ public:
     float SectorDirectionOffset = 0.0f;
 
     // ==================== 碰撞配置 ====================
-    
-    // ❌ 删除 - 以下两个属性已移除，碰撞尺寸直接在 CollisionCapsule 组件上配置
-    // UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Collision Config", meta = (DisplayName = "碰撞半径"))
-    // float CapsuleRadius = 10.0f;
-    // 
-    // UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Collision Config", meta = (DisplayName = "碰撞半高"))
-    // float CapsuleHalfHeight = 30.0f;
 
     /**
      * @brief 碰撞体相对旋转
@@ -425,11 +432,19 @@ public:
     FGameplayTag InstigatorFactionTag;
 
     /**
-     * @brief 已击中的 Actor 列表
-     * @details 用于穿透模式下避免重复击中同一目标
-     */
-    UPROPERTY(Transient)
-    TArray<AActor*> HitActors;
+   * @brief 已击中的 Actor 列表
+   * @details 
+   * 功能说明：
+   * - 用于确保每个目标只受到一次伤害
+   * - 穿透模式下记录所有已击中的目标
+   * - 非穿透模式下通常只有一个元素
+   * 
+   * 注意事项：
+   * - 初始化时会自动清空
+   * - 不要手动修改此数组
+   */
+    UPROPERTY(Transient, BlueprintReadOnly, Category = "Runtime", meta = (DisplayName = "已击中目标列表"))
+    TArray<TObjectPtr<AActor>> HitActors;
 
     /**
      * @brief 当前目标
@@ -441,14 +456,23 @@ public:
 protected:
     // ==================== 飞行状态（内部使用） ====================
 
-    /** 起始位置 */
+    /** 起始位置 - 投射物发射时的世界坐标 */
     FVector StartLocation;
 
-    /** 目标位置（目标中心或指定位置） */
+    /** 
+     * @brief 目标位置（初始目标点）
+     * @details 
+     * - 对于 TargetActor 模式：目标 Actor 的中心（可能带偏移）
+     * - 对于其他模式：指定的世界坐标位置
+     * - 此位置在目标丢失后会被锁定，不再更新
+     */
     FVector TargetLocation;
 
-    /** 地面落点位置（抛物线延伸到地面的点） */
-    FVector GroundImpactLocation;
+    /** 
+     * @brief 地面高度（Z 坐标）
+     * @details 用于计算弹道延展时的最终落点高度
+     */
+    float GroundZ;
 
     /** 区域中心位置 */
     FVector AreaCenterLocation;
@@ -456,17 +480,26 @@ protected:
     /** 区域朝向（用于扇形和矩形） */
     FRotator AreaRotation;
 
-    /** 目标是否已丢失（死亡或消失） */
+    /** 
+     * @brief 目标是否已丢失（死亡或消失）
+     * @details 
+     * - 当目标丢失时，锁定最后的目标位置
+     * - 停止归航微调，让投射物遵循惯性落地
+     */
     bool bTargetLost = false;
 
-    /** 飞行进度（0-1） */
+    /** 
+     * @brief 飞行进度
+     * @details 
+     * - 范围：0.0 到无穷大（不再钳位到 [0,1]）
+     * - 0.0 = 起点
+     * - 1.0 = 原目标点
+     * - >1.0 = 弹道延展阶段（自然下落）
+     */
     float FlightProgress = 0.0f;
 
-    /** 总飞行距离 */
+    /** 总飞行距离（起点到目标点的直线距离） */
     float TotalFlightDistance = 0.0f;
-
-    /** 到地面落点的总飞行距离 */
-    float TotalFlightDistanceToGround = 0.0f;
 
     /** 当前速度向量 */
     FVector CurrentVelocity;
@@ -479,9 +512,6 @@ protected:
 
     /** 是否已落地 */
     bool bHasLanded = false;
-
-    /** 是否飞向地面（区域模式或目标丢失） */
-    bool bFlyToGround = false;
 
     /** 碰撞启用定时器句柄 */
     FTimerHandle CollisionEnableTimerHandle;
@@ -516,16 +546,17 @@ public:
      * @param InFactionTag 攻击者阵营
      * @param InTarget 目标 Actor
      * @param InArcHeight 弧度高度（覆盖默认值，-1 表示使用默认）
+     * 
      * @details 
-     * 功能说明：
+     * **功能说明：**
      * - TargetMode 为 TargetActor 时：飞向目标中心
      * - TargetMode 为 TargetAreaRandom 时：飞向目标周围随机点
      * 
-     * 详细流程：
+     * **详细流程：**
      * 1. 保存攻击者信息
      * 2. 记录起始位置
      * 3. 根据目标模式计算目标位置
-     * 4. 计算地面落点
+     * 4. 计算地面高度（用于弹道延展）
      * 5. 初始化飞行参数
      */
     UFUNCTION(BlueprintCallable, Category = "Projectile", meta = (DisplayName = "初始化投射物（目标Actor）"))
@@ -542,8 +573,9 @@ public:
      * @param InFactionTag 攻击者阵营
      * @param InTargetLocation 目标位置
      * @param InArcHeight 弧度高度（覆盖默认值，-1 表示使用默认）
+     * 
      * @details 
-     * 功能说明：
+     * **功能说明：**
      * - TargetMode 为 TargetLocation 时：飞向指定位置
      * - TargetMode 为 AreaCenter 时：飞向区域中心地面
      * - TargetMode 为 AreaRandom 时：飞向区域内随机地面点
@@ -563,8 +595,9 @@ public:
      * @param InAreaCenter 区域中心位置
      * @param InAreaRotation 区域朝向
      * @param InArcHeight 弧度高度（覆盖默认值，-1 表示使用默认）
+     * 
      * @details 
-     * 功能说明：
+     * **功能说明：**
      * - 用于区域攻击
      * - 根据 TargetMode 决定飞向区域中心还是随机点
      * - 区域朝向用于扇形和矩形区域
@@ -629,11 +662,11 @@ public:
     FVector GetProjectileTargetLocation() const { return TargetLocation; }
 
     /**
-     * @brief 获取地面落点位置
-     * @return 地面落点位置
+     * @brief 获取地面高度
+     * @return 地面 Z 坐标
      */
-    UFUNCTION(BlueprintPure, Category = "Projectile", meta = (DisplayName = "获取地面落点位置"))
-    FVector GetGroundImpactLocation() const { return GroundImpactLocation; }
+    UFUNCTION(BlueprintPure, Category = "Projectile", meta = (DisplayName = "获取地面高度"))
+    float GetGroundZ() const { return GroundZ; }
 
     /**
      * @brief 获取区域中心位置
@@ -642,10 +675,10 @@ public:
     UFUNCTION(BlueprintPure, Category = "Projectile", meta = (DisplayName = "获取区域中心位置"))
     FVector GetAreaCenterLocation() const { return AreaCenterLocation; }
 
-    // ✨ 新增 - 获取碰撞胶囊体尺寸的接口
     /**
      * @brief 获取碰撞胶囊体的半径
      * @return 胶囊体半径，如果组件无效返回 0
+     * 
      * @details 
      * 功能说明：
      * - 直接从 CollisionCapsule 组件读取缩放后的实际半径
@@ -654,10 +687,10 @@ public:
     UFUNCTION(BlueprintPure, Category = "Projectile", meta = (DisplayName = "获取碰撞半径"))
     float GetCapsuleRadius() const;
 
-    // ✨ 新增 - 获取碰撞胶囊体半高的接口
     /**
      * @brief 获取碰撞胶囊体的半高
      * @return 胶囊体半高，如果组件无效返回 0
+     * 
      * @details 
      * 功能说明：
      * - 直接从 CollisionCapsule 组件读取缩放后的实际半高
@@ -665,6 +698,13 @@ public:
      */
     UFUNCTION(BlueprintPure, Category = "Projectile", meta = (DisplayName = "获取碰撞半高"))
     float GetCapsuleHalfHeight() const;
+
+    /**
+     * @brief 获取当前飞行进度
+     * @return 飞行进度（0.0 = 起点，1.0 = 目标点，>1.0 = 延展阶段）
+     */
+    UFUNCTION(BlueprintPure, Category = "Projectile", meta = (DisplayName = "获取飞行进度"))
+    float GetFlightProgress() const { return FlightProgress; }
 
 protected:
     // ==================== 飞行逻辑（内部使用） ====================
@@ -676,8 +716,18 @@ protected:
     void UpdateLinearFlight(float DeltaTime);
 
     /**
-     * @brief 更新抛物线飞行
+     * @brief 更新抛物线飞行（物理正确版）
      * @param DeltaTime 帧间隔时间
+     * 
+     * @details 
+     * **物理模型：**
+     * - 使用二次曲线公式：h(t) = 4 * ArcHeight * t * (1-t)
+     * - 当 t > 1.0 时自然延展，高度偏移变为负数
+     * - 投射物会继续沿弹道飞行直到撞击地面
+     * 
+     * **目标跟踪：**
+     * - 目标存活时：动态更新目标位置
+     * - 目标丢失后：锁定最后位置，进入惯性落地模式
      */
     void UpdateParabolicFlight(float DeltaTime);
 
@@ -688,18 +738,21 @@ protected:
     void UpdateHomingFlight(float DeltaTime);
 
     /**
-     * @brief 计算抛物线位置（飞向目标中心）
-     * @param Progress 飞行进度（0-1）
-     * @return 当前应处于的位置
+     * @brief 计算抛物线位置（物理正确的二次曲线）
+     * @param Progress 飞行进度（可以超过 1.0）
+     * @return 当前应处于的世界位置
+     * 
+     * @details 
+     * **物理公式：**
+     * $$Position = Lerp(Start, Target, t) + (0, 0, 4 \cdot ArcHeight \cdot t \cdot (1-t))$$
+     * 
+     * **特性：**
+     * - t = 0: 起点
+     * - t = 0.5: 最高点，高度 = ArcHeight
+     * - t = 1.0: 目标点（高度偏移 = 0）
+     * - t > 1.0: 延展阶段，高度偏移为负数，自然下落
      */
     FVector CalculateParabolicPosition(float Progress) const;
-
-    /**
-     * @brief 计算到地面落点的抛物线位置
-     * @param Progress 飞行进度（0-1）
-     * @return 当前应处于的位置
-     */
-    FVector CalculateParabolicPositionToGround(float Progress) const;
 
     /**
      * @brief 更新旋转（朝向速度方向）
@@ -716,11 +769,14 @@ protected:
     FVector CalculateTargetLocation(AActor* InTarget) const;
 
     /**
-     * @brief 计算地面落点位置
-     * @param InTargetLocation 目标位置
-     * @return 地面落点位置
+     * @brief 计算地面高度
+     * @param InLocation 参考位置
+     * @return 地面 Z 坐标
+     * 
+     * @details 
+     * 从参考位置向下进行射线检测，找到地面高度
      */
-    FVector CalculateGroundImpactLocation(const FVector& InTargetLocation) const;
+    float CalculateGroundZ(const FVector& InLocation) const;
 
     /**
      * @brief 检查目标是否仍然有效
@@ -729,7 +785,13 @@ protected:
     bool IsTargetValid() const;
 
     /**
-     * @brief 处理目标丢失（切换到地面落点模式）
+     * @brief 处理目标丢失
+     * 
+     * @details 
+     * **弹道延展策略：**
+     * - 不重新计算路径，保持当前弹道
+     * - 锁定最后的目标位置
+     * - 让投射物自然惯性落地
      */
     void HandleTargetLost();
 
@@ -866,12 +928,148 @@ public:
     UPROPERTY(EditDefaultsOnly, Category = "Debug", meta = (DisplayName = "显示飞行轨迹"))
     bool bDrawDebugTrajectory = false;
 
-    /** 是否绘制地面落点调试球 */
-    UPROPERTY(EditDefaultsOnly, Category = "Debug", meta = (DisplayName = "显示地面落点"))
-    bool bDrawDebugGroundImpact = false;
+    /** 是否绘制目标点调试球 */
+    UPROPERTY(EditDefaultsOnly, Category = "Debug", meta = (DisplayName = "显示目标点"))
+    bool bDrawDebugTargetPoint = false;
 
     /** 是否绘制区域范围调试图形 */
     UPROPERTY(EditDefaultsOnly, Category = "Debug", meta = (DisplayName = "显示区域范围"))
     bool bDrawDebugArea = false;
 #endif
+
+
+    public:
+    // ==================== 命中后配置 ====================
+
+    /**
+     * @brief 命中后延迟销毁时间（秒）
+     * @details 
+     * 功能说明：
+     * - 投射物命中目标后，延迟多久销毁
+     * - 用于播放命中特效、音效等
+     * - 0 表示立即销毁
+     */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Hit Config", meta = (DisplayName = "命中后销毁延迟", ClampMin = "0.0", UIMin = "0.0", UIMax = "5.0"))
+    float HitDestroyDelay = 0.5f;
+
+    /**
+     * @brief 命中后是否附着到目标
+     * @details 
+     * 功能说明：
+     * - 启用后，投射物命中目标会附着在目标身上
+     * - 适用于箭矢插入敌人身体的效果
+     * - 禁用时，投射物会在原地停止
+     */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Hit Config", meta = (DisplayName = "命中后附着目标"))
+    bool bAttachToTargetOnHit = false;
+
+    /**
+     * @brief 附着时的骨骼名称
+     * @details 
+     * 功能说明：
+     * - 当 bAttachToTargetOnHit 为 true 时使用
+     * - 如果为空，则附着到击中的骨骼（如果有）或根组件
+     */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Hit Config", meta = (DisplayName = "附着骨骼名称", EditCondition = "bAttachToTargetOnHit", EditConditionHides))
+    FName AttachBoneName = NAME_None;
+
+    /**
+     * @brief 落地后延迟销毁时间（秒）
+     * @details 投射物落地后（未命中目标），延迟多久销毁
+     */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Hit Config", meta = (DisplayName = "落地后销毁延迟", ClampMin = "0.0", UIMin = "0.0", UIMax = "10.0"))
+    float GroundImpactDestroyDelay = 3.0f;
+
+protected:
+    // ==================== 命中状态（内部使用） ====================
+
+    /** 
+     * @brief 是否已命中目标
+     * @details 命中后停止移动，等待销毁
+     */
+    bool bHasHitTarget = false;
+
+    /** 
+     * @brief 命中销毁定时器句柄
+     */
+    FTimerHandle HitDestroyTimerHandle;
+
+protected:
+    // ==================== 命中处理函数（内部使用） ====================
+
+    /**
+     * @brief 处理命中目标后的逻辑
+     * @param HitActor 被击中的 Actor
+     * @param HitInfo 击中信息
+     * 
+     * @details 
+     * **功能说明：**
+     * - 停止投射物移动
+     * - 隐藏网格体（可选）
+     * - 处理附着逻辑
+     * - 设置延迟销毁
+     * - 触发蓝图事件
+     */
+    void HandleHitTarget(AActor* HitActor, const FSGProjectileHitInfo& HitInfo);
+
+    /**
+     * @brief 命中后延迟销毁回调
+     */
+    UFUNCTION()
+    void OnHitDestroyTimerExpired();
+
+public:
+    // ==================== 蓝图事件（命中相关） ====================
+
+    /**
+     * @brief 命中目标后蓝图事件（在停止移动后调用）
+     * @param HitInfo 击中信息
+     * 
+     * @details 
+     * **调用时机：**
+     * - 在投射物停止移动、隐藏网格体之后调用
+     * - 可用于播放额外的命中特效、生成贴花等
+     * 
+     * **注意事项：**
+     * - 此时投射物仍然存在，但已停止移动
+     * - 可以访问 HitInfo 获取命中位置、目标等信息
+     */
+    UFUNCTION(BlueprintImplementableEvent, Category = "Projectile Events", meta = (DisplayName = "On After Hit Target (BP)"))
+    void K2_OnAfterHitTarget(const FSGProjectileHitInfo& HitInfo);
+
+    /**
+     * @brief 命中后即将销毁蓝图事件
+     * 
+     * @details 
+     * **调用时机：**
+     * - 在命中延迟销毁定时器到期后、实际销毁前调用
+     * - 可用于清理资源、播放淡出效果等
+     */
+    UFUNCTION(BlueprintImplementableEvent, Category = "Projectile Events", meta = (DisplayName = "On Before Destroy After Hit (BP)"))
+    void K2_OnBeforeDestroyAfterHit();
+
+    // ==================== 查询接口（命中相关） ====================
+
+    /**
+     * @brief 检查投射物是否已命中目标
+     * @return 是否已命中
+     */
+    UFUNCTION(BlueprintPure, Category = "Projectile", meta = (DisplayName = "是否已命中目标"))
+    bool HasHitTarget() const { return bHasHitTarget; }
+
+    /**
+     * @brief 手动隐藏投射物网格体
+     * @details 蓝图可调用，用于自定义隐藏时机
+     */
+    UFUNCTION(BlueprintCallable, Category = "Projectile", meta = (DisplayName = "隐藏网格体"))
+    void HideProjectileMesh();
+
+    /**
+     * @brief 手动显示投射物网格体
+     * @details 蓝图可调用，用于自定义显示时机
+     */
+    UFUNCTION(BlueprintCallable, Category = "Projectile", meta = (DisplayName = "显示网格体"))
+    void ShowProjectileMesh();
+
+
 };

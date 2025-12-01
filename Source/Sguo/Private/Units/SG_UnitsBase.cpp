@@ -9,21 +9,18 @@
 #include "GameFramework/CharacterMovementComponent.h"  // 必须包含
 #include "Components/CapsuleComponent.h"                // 必须包含
 #include "Kismet/GameplayStatics.h"
-// ✨ 新增 - DataTable 相关头文件
+
 #include "Data/Type/SG_UnitDataTable.h"
 #include "Engine/DataTable.h"
-// ✨ 新增 - Gameplay Ability 相关头文件
+
 #include "AbilitySystemGlobals.h"
 #include "Abilities/GameplayAbility.h"
-// ✨ 新增 - 调试可视化相关头文件
-#include "AIController.h"
+
 #include "DrawDebugHelpers.h"
 #include "AI/SG_AIControllerBase.h"
-#include "BehaviorTree/BlackboardComponent.h"
+
 #include "Data/SG_CharacterCardData.h"
-#include "Data/Type/SG_UnitDataTable.h" // ✨ 新增 - 包含完整定义
-// ✨ 新增 - 在文件头部添加
-#include "BehaviorTree/BehaviorTree.h"
+
 
 // 构造函数
 ASG_UnitsBase::ASG_UnitsBase()
@@ -201,11 +198,67 @@ void ASG_UnitsBase::BeginPlay()
     {
         LoadAttackAbilitiesFromDataTable();
     }
-    
+	// ✨ 新增 - 初始化技能冷却池
+	InitializeAbilityCooldowns();
+	
     // ========== 步骤4：授予通用攻击能力 ==========
     GrantCommonAttackAbility();
     
     UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+}
+
+
+/**
+ * @brief 初始化技能冷却池
+ * @details
+ * 功能说明：
+ * - 根据 CachedAttackAbilities 的数量创建冷却数组
+ * - 所有冷却时间初始化为 0（可用）
+ * 调用时机：
+ * - BeginPlay 中，加载完技能配置后调用
+ */
+void ASG_UnitsBase::InitializeAbilityCooldowns()
+{
+	// 清空并重新初始化冷却数组
+	AbilityCooldowns.Empty();
+    
+	// 根据技能数量初始化，所有冷却时间为 0
+	int32 AbilityCount = CachedAttackAbilities.Num();
+	AbilityCooldowns.SetNumZeroed(AbilityCount);
+    
+	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 初始化技能冷却池，技能数量：%d"), AbilityCount);
+    
+	// 输出每个技能的配置信息
+	for (int32 i = 0; i < AbilityCount; ++i)
+	{
+		const FSGUnitAttackDefinition& Ability = CachedAttackAbilities[i];
+		UE_LOG(LogSGGameplay, Verbose, TEXT("    [%d] 优先级：%d, 冷却：%.1f秒"), 
+			i, Ability.Priority, Ability.Cooldown);
+	}
+}
+
+int32 ASG_UnitsBase::GetBestAvailableAbilityIndex() const
+{
+	int32 BestIndex = -1;
+	int32 HighestPriority = INT_MIN;
+    
+	for (int32 i = 0; i < CachedAttackAbilities.Num(); ++i)
+	{
+		if (IsAbilityOnCooldown(i))
+		{
+			continue;
+		}
+        
+		int32 Priority = CachedAttackAbilities[i].Priority;
+        
+		if (Priority > HighestPriority)
+		{
+			HighestPriority = Priority;
+			BestIndex = i;
+		}
+	}
+    
+	return BestIndex;
 }
 
 // 被控制时调用
@@ -577,22 +630,24 @@ void ASG_UnitsBase::LoadAttackAbilitiesFromDataTable()
     
     if (UnitDataRowName.IsNone())
     {
-        UE_LOG(LogSGGameplay, Error, TEXT("❌ %s: UnitDataRowName 为空！"), *GetName());
+        UE_LOG(LogSGGameplay, Error, TEXT("❌ %s: CachedAttackAbilitiesName 为空！"), *GetName());
         return;
     }
     
     // ========== 步骤2：查找 DataTable 行 ==========
-    FSGUnitDataRow* RowData = UnitDataTable->FindRow<FSGUnitDataRow>(
-        UnitDataRowName,
-        TEXT("LoadAttackAbilitiesFromDataTable")
+	static const FString ContextString(TEXT("LoadAttackAbilitiesFromDataTable"));
+	FSGUnitDataRow* RowData = UnitDataTable->FindRow<FSGUnitDataRow>(
+		UnitDataRowName, 
+		ContextString
     );
     
-    if (!RowData)
-    {
-        UE_LOG(LogSGGameplay, Error, TEXT("❌ %s: 在 DataTable 中找不到行 '%s'！"), 
-            *GetName(), *UnitDataRowName.ToString());
-        return;
-    }
+	if (!RowData)
+	{
+		UE_LOG(LogSGGameplay, Error, TEXT("❌ %s: 在 DataTable 中找不到行 '%s'！"), 
+			*GetName(), 
+			*UnitDataRowName.ToString());
+		return;
+	}
     
     // ========== 步骤3：缓存攻击技能列表 ==========
     CachedAttackAbilities = RowData->Abilities;
@@ -722,142 +777,112 @@ void ASG_UnitsBase::GrantCommonAttackAbility()
 	}
 }
 
-// ========== ✨ 新增 - 攻击系统函数实现 ==========
-
 /**
- * @brief 执行攻击（随机选择技能）
+ * @brief 执行攻击
  * @return 是否成功触发攻击
  * @details
- * 功能说明：
- * - 从攻击技能列表中随机选择一个
- * - 如果指定了 SpecificAbilityClass，激活特定 GA
- * - 否则激活通用 GA 并传递配置数据
+ * 🔧 核心修改：
+ * 1. 检查动画僵直状态（bIsAttacking），而不是全局冷却
+ * 2. 使用 GetBestAvailableAbilityIndex 选择优先级最高的可用技能
+ * 3. 技能释放后，启动该技能的独立冷却
  * 详细流程：
- * 1. 检查攻击技能列表是否为空
- * 2. 随机选择一个攻击技能
- * 3. 更新当前攻击索引
- * 4. 激活对应的 GA
+ * 1. 检查是否正在播放动画（bIsAttacking）
+ * 2. 获取最佳可用技能
+ * 3. 激活对应的 GA
+ * 4. 启动该技能的独立冷却
  */
 bool ASG_UnitsBase::PerformAttack()
 {
-	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-	UE_LOG(LogSGGameplay, Log, TEXT("🔫 %s 尝试执行攻击"), *GetName());
-	
-	// 1. 检查冷却
-	if (bIsAttackOnCooldown)
-	{
-		UE_LOG(LogSGGameplay, Verbose, TEXT("  ⏳ 攻击冷却中，剩余：%.2f 秒"), CooldownRemainingTime);
-		return false;
-	}
+	 UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+    UE_LOG(LogSGGameplay, Log, TEXT("🔫 %s 尝试执行攻击"), *GetName());
+    
+    // ========== 步骤1：检查动画僵直 ==========
+    // 🔧 修改 - 只检查动画僵直，不检查全局冷却
+    if (bIsAttacking)
+    {
+        UE_LOG(LogSGGameplay, Verbose, TEXT("  ⚠️ 正在播放攻击动画，剩余：%.2f秒"), AttackAnimationRemainingTime);
+        return false;
+    }
+    
+    // ========== 步骤2：检查配置 ==========
+    if (CachedAttackAbilities.Num() == 0)
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 攻击技能列表为空！"));
+        return false;
+    }
+    
+    // ========== 步骤3：获取最佳可用技能 ==========
+    // ✨ 新增 - 使用优先级系统选择技能
+    int32 BestAbilityIndex = GetBestAvailableAbilityIndex();
+    
+    if (BestAbilityIndex == -1)
+    {
+        UE_LOG(LogSGGameplay, Verbose, TEXT("  ⏳ 所有技能都在冷却中"));
+        return false;
+    }
+    
+    // 更新当前攻击索引
+    CurrentAttackIndex = BestAbilityIndex;
+    const FSGUnitAttackDefinition& SelectedAttack = CachedAttackAbilities[CurrentAttackIndex];
+    
+    UE_LOG(LogSGGameplay, Log, TEXT("  📋 选中技能[%d]，优先级：%d，冷却：%.1f秒"), 
+        CurrentAttackIndex, SelectedAttack.Priority, SelectedAttack.Cooldown);
+    
+    // ========== 步骤4：激活能力 ==========
+    if (!AbilitySystemComponent)
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ AbilitySystemComponent 为空！"));
+        return false;
+    }
 
-	// 2. 检查是否正在攻击（防止动画未结束时重复触发）
-	if (bIsAttacking)
-	{
-		UE_LOG(LogSGGameplay, Verbose, TEXT("  ⚠️ 上一次攻击动画尚未结束，跳过"));
-		return false;
-	}
-	
-	// 3. 检查配置
-	if (CachedAttackAbilities.Num() == 0)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 攻击技能列表为空！"));
-		return false;
-	}
-	
-	// 4. 选择技能
-	CurrentAttackIndex = FMath::RandRange(0, CachedAttackAbilities.Num() - 1);
-	const FSGUnitAttackDefinition& SelectedAttack = CachedAttackAbilities[CurrentAttackIndex];
-	
-	// 5. 激活能力
-	if (!AbilitySystemComponent) return false;
-
-	FGameplayAbilitySpecHandle AbilityHandleToActivate;
-	if (SelectedAttack.SpecificAbilityClass)
-	{
-		FGameplayAbilitySpecHandle* FoundHandle = GrantedSpecificAbilities.Find(SelectedAttack.SpecificAbilityClass);
-		if (FoundHandle && FoundHandle->IsValid())
-		{
-			AbilityHandleToActivate = *FoundHandle;
-		}
-		else
-		{
-			FGameplayAbilitySpec AbilitySpec(SelectedAttack.SpecificAbilityClass, 1, INDEX_NONE, this);
-			AbilityHandleToActivate = AbilitySystemComponent->GiveAbility(AbilitySpec);
-			GrantedSpecificAbilities.Add(SelectedAttack.SpecificAbilityClass, AbilityHandleToActivate);
-		}
-	}
-	else
-	{
-		if (!GrantedCommonAttackHandle.IsValid()) return false;
-		AbilityHandleToActivate = GrantedCommonAttackHandle;
-	}
-	
-	bool bSuccess = AbilitySystemComponent->TryActivateAbility(AbilityHandleToActivate);
-	
-	if (bSuccess)
-	{
-		// ✨ 关键修改：不再这里设置状态，而是等待 GA 调用 StartAttackCycle
-		// 这样能确保 GA 获取到准确的动画时长后再设置冷却
-		UE_LOG(LogSGGameplay, Log, TEXT("  ✅ 攻击能力激活成功，等待 GA 确认动画时长..."));
-	}
-	else
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 攻击能力激活失败"));
-	}
-	
-	return bSuccess;
+    FGameplayAbilitySpecHandle AbilityHandleToActivate;
+    
+    // 如果有指定的特定能力类，使用它
+    if (SelectedAttack.SpecificAbilityClass)
+    {
+        FGameplayAbilitySpecHandle* FoundHandle = GrantedSpecificAbilities.Find(SelectedAttack.SpecificAbilityClass);
+        if (FoundHandle && FoundHandle->IsValid())
+        {
+            AbilityHandleToActivate = *FoundHandle;
+        }
+        else
+        {
+            FGameplayAbilitySpec AbilitySpec(SelectedAttack.SpecificAbilityClass, 1, INDEX_NONE, this);
+            AbilityHandleToActivate = AbilitySystemComponent->GiveAbility(AbilitySpec);
+            GrantedSpecificAbilities.Add(SelectedAttack.SpecificAbilityClass, AbilityHandleToActivate);
+        }
+    }
+    else
+    {
+        // 使用通用攻击能力
+        if (!GrantedCommonAttackHandle.IsValid())
+        {
+            UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 通用攻击能力未授予！"));
+            return false;
+        }
+        AbilityHandleToActivate = GrantedCommonAttackHandle;
+    }
+    
+    // 尝试激活能力
+    bool bSuccess = AbilitySystemComponent->TryActivateAbility(AbilityHandleToActivate);
+    
+    if (bSuccess)
+    {
+        UE_LOG(LogSGGameplay, Log, TEXT("  ✅ 攻击能力激活成功"));
+        
+        // ✨ 新增 - 启动该技能的独立冷却
+        StartAbilityCooldown(CurrentAttackIndex, SelectedAttack.Cooldown);
+        
+        // 动画僵直会在 GA 中通过 StartAttackAnimation 设置
+    }
+    else
+    {
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 攻击能力激活失败"));
+    }
+    
+    return bSuccess;
 }
 
-// ========== ✨ 新增 - 冷却系统实现 ==========
-
-/**
- * @brief 开始攻击冷却
- * @param Duration 冷却时间（秒）
- * @details
- * 功能说明：
- * - 设置冷却标记
- * - 启动冷却定时器
- * - 更新冷却剩余时间
- */
-void ASG_UnitsBase::StartAttackCooldown(float Duration)
-{
-	// ========== 步骤1：设置冷却标记 ==========
-	bIsAttackOnCooldown = true;
-	CooldownRemainingTime = Duration;
-	
-	UE_LOG(LogSGGameplay, Verbose, TEXT("  ⏳ 开始攻击冷却：%.2f 秒"), Duration);
-	
-	// ========== 步骤2：清除旧的定时器（如果存在）==========
-	if (GetWorldTimerManager().IsTimerActive(AttackCooldownTimerHandle))
-	{
-		GetWorldTimerManager().ClearTimer(AttackCooldownTimerHandle);
-	}
-	
-	// ========== 步骤3：启动冷却定时器 ==========
-	GetWorldTimerManager().SetTimer(
-		AttackCooldownTimerHandle,
-		this,
-		&ASG_UnitsBase::OnAttackCooldownEnd,
-		Duration,
-		false // 不循环
-	);
-}
-
-/**
- * @brief 冷却结束回调
- * @details
- * 功能说明：
- * - 重置冷却标记
- * - 清空冷却剩余时间
- */
-void ASG_UnitsBase::OnAttackCooldownEnd()
-{
-	// ========== 步骤1：重置冷却标记 ==========
-	bIsAttackOnCooldown = false;
-	CooldownRemainingTime = 0.0f;
-	
-	UE_LOG(LogSGGameplay, Verbose, TEXT("  ✅ %s 攻击冷却结束"), *GetName());
-}
 
 
 /**
@@ -963,18 +988,13 @@ bool ASG_UnitsBase::IsTargetValid() const
  */
 void ASG_UnitsBase::Tick(float DeltaTime)
 {
-	 Super::Tick(DeltaTime);
-
-    // 更新冷却剩余时间
-    if (bIsAttackOnCooldown)
-    {
-        CooldownRemainingTime = GetWorldTimerManager().GetTimerRemaining(AttackCooldownTimerHandle);
-        
-        if (CooldownRemainingTime < 0.0f)
-        {
-            CooldownRemainingTime = 0.0f;
-        }
-    }
+	Super::Tick(DeltaTime);
+    
+    // ✨ 新增 - 更新技能冷却
+    UpdateAbilityCooldowns(DeltaTime);
+    
+    // ✨ 新增 - 更新动画僵直状态
+    UpdateAttackAnimationState(DeltaTime);
     
     // 获取角色位置
     FVector ActorLocation = GetActorLocation();
@@ -998,15 +1018,42 @@ void ASG_UnitsBase::Tick(float DeltaTime)
             FVector(1, 0, 0),
             false
         );
-        
-        // 显示冷却信息
-        if (bIsAttackOnCooldown)
+    }
+
+    // ✨ 新增 - 显示技能冷却调试信息
+    if (bShowAbilityCooldowns)
+    {
+        FString CooldownInfo = TEXT("技能冷却：");
+        for (int32 i = 0; i < AbilityCooldowns.Num(); ++i)
         {
-            FString CooldownText = FString::Printf(TEXT("冷却中：%.1f 秒"), CooldownRemainingTime);
+            if (AbilityCooldowns[i] > 0.0f)
+            {
+                CooldownInfo += FString::Printf(TEXT("[%d]:%.1f "), i, AbilityCooldowns[i]);
+            }
+            else
+            {
+                CooldownInfo += FString::Printf(TEXT("[%d]:OK "), i);
+            }
+        }
+        
+        DrawDebugString(
+            GetWorld(),
+            ActorLocation + FVector(0, 0, 180.0f),
+            CooldownInfo,
+            nullptr,
+            FColor::Cyan,
+            0.0f,
+            true
+        );
+        
+        // 显示动画状态
+        if (bIsAttacking)
+        {
+            FString AnimInfo = FString::Printf(TEXT("动画：%.1f秒"), AttackAnimationRemainingTime);
             DrawDebugString(
                 GetWorld(),
                 ActorLocation + FVector(0, 0, 150.0f),
-                CooldownText,
+                AnimInfo,
                 nullptr,
                 FColor::Yellow,
                 0.0f,
@@ -1015,15 +1062,13 @@ void ASG_UnitsBase::Tick(float DeltaTime)
         }
     }
 
-    // 🔧 修改 - 绘制寻敌范围（正方形使用 DetectionRange）
+    // 绘制寻敌范围
     if (bShowSearchRange)
     {
-        // 获取寻敌范围（统一使用 DetectionRange）
         float Range = GetDetectionRange();
         
         if (TargetSearchShape == ESGTargetSearchShape::Circle)
         {
-            // 圆形寻敌范围
             DrawDebugCircle(
                 GetWorld(),
                 ActorLocation,
@@ -1041,8 +1086,6 @@ void ASG_UnitsBase::Tick(float DeltaTime)
         }
         else if (TargetSearchShape == ESGTargetSearchShape::Square)
         {
-            // 🔧 修改 - 正方形寻敌范围使用 DetectionRange 作为半边长
-            // 这样圆形和正方形的配置统一使用同一个值
             FVector BoxExtent(Range, Range, 50.0f);
             DrawDebugBox(
                 GetWorld(),
@@ -1181,55 +1224,7 @@ void ASG_UnitsBase::InitializeWithDefaults()
 		BaseMoveSpeed * SpeedMult, BaseMoveSpeed, SpeedMult);
 	UE_LOG(LogSGGameplay, Log, TEXT("    视野范围：%.0f"), VisionRange);
 }
-/**
- * @brief 开始攻击循环（由 GA 调用）
- * @param AnimDuration 动画实际播放时长
- * @details 
- * 核心逻辑修改：
- * - 冷却总时间 = 动画时长 + 配置冷却
- * - 立即启动计时器
- */
-void ASG_UnitsBase::StartAttackCycle(float AnimDuration)
-{
-	// 1. 标记正在攻击
-	bIsAttacking = true;
 
-	// 2. 获取配置的额外冷却时间
-	FSGUnitAttackDefinition CurrentAttack = GetCurrentAttackDefinition();
-	float ConfigCooldown = CurrentAttack.Cooldown;
-
-	// 3. 计算总锁定时间
-	// 总时间 = 动画播放时间 + 额外冷却时间
-	// 例子：动画1秒，冷却1秒 -> 总冷却2秒（动画播完后还要等1秒）
-	// 例子：动画1秒，冷却0秒 -> 总冷却1秒（动画播完立即可以动）
-	float TotalCooldownTime = AnimDuration + ConfigCooldown;
-
-	// 4. 启动冷却计时器
-	if (TotalCooldownTime > 0.0f)
-	{
-		StartAttackCooldown(TotalCooldownTime);
-		UE_LOG(LogSGGameplay, Log, TEXT("  🏁 启动攻击循环：动画(%.2f) + 冷却(%.2f) = 总计 %.2f 秒"), 
-			AnimDuration, ConfigCooldown, TotalCooldownTime);
-	}
-}
-
-/**
- * @brief 攻击技能结束回调（由 GA 调用）
- * @details 
- * 功能说明：
- * - 重置攻击状态标记
- * - 正式开始计算冷却时间
- */
-void ASG_UnitsBase::OnAttackAbilityFinished()
-{
-	if (bIsAttacking)
-	{
-		bIsAttacking = false;
-		UE_LOG(LogSGGameplay, Verbose, TEXT("  🛑 攻击动画播放完毕 (bIsAttacking = false)"));
-		
-		// 注意：这里不处理 bIsAttackOnCooldown，因为它是基于时间的，会自动结束
-	}
-}
 
 
 // ✨ 新增 - 强制停止所有行为
@@ -1252,40 +1247,34 @@ void ASG_UnitsBase::ForceStopAllActions()
 {
 	UE_LOG(LogSGGameplay, Log, TEXT("  🛑 强制停止所有行为：%s"), *GetName());
     
-	// 步骤1：取消所有正在执行的能力
+	// 取消所有正在执行的能力
 	if (AbilitySystemComponent)
 	{
-		// 取消所有能力
 		AbilitySystemComponent->CancelAllAbilities();
-		UE_LOG(LogSGGameplay, Verbose, TEXT("    ✓ 取消所有能力"));
 	}
     
-	// 步骤2：重置攻击状态
+	// 🔧 修改 - 重置动画状态
 	bIsAttacking = false;
-	bIsAttackOnCooldown = false;
-	CooldownRemainingTime = 0.0f;
+	AttackAnimationRemainingTime = 0.0f;
     
-	// 步骤3：清除冷却计时器
-	if (GetWorldTimerManager().IsTimerActive(AttackCooldownTimerHandle))
-	{
-		GetWorldTimerManager().ClearTimer(AttackCooldownTimerHandle);
-		UE_LOG(LogSGGameplay, Verbose, TEXT("    ✓ 清除冷却计时器"));
-	}
+	// ✨ 新增 - 重置所有技能冷却（可选，根据需求决定是否需要）
+	// 如果希望死亡后技能冷却重置，取消下面的注释
+	// for (int32 i = 0; i < AbilityCooldowns.Num(); ++i)
+	// {
+	//     AbilityCooldowns[i] = 0.0f;
+	// }
     
-	// 步骤4：停止所有蒙太奇动画
+	// 停止所有蒙太奇动画
 	if (USkeletalMeshComponent* MeshComp = GetMesh())
 	{
 		if (UAnimInstance* AnimInstance = MeshComp->GetAnimInstance())
 		{
-			// 快速淡出所有蒙太奇（0.1秒）
 			AnimInstance->StopAllMontages(0.1f);
-			UE_LOG(LogSGGameplay, Verbose, TEXT("    ✓ 停止所有蒙太奇"));
 		}
 	}
     
-	// 步骤5：清除当前目标
+	// 清除当前目标
 	CurrentTarget = nullptr;
-	UE_LOG(LogSGGameplay, Verbose, TEXT("    ✓ 清除当前目标"));
 
 }
 
@@ -1318,14 +1307,14 @@ bool ASG_UnitsBase::IsLoadUnitDataFromTable()
     
     if (UnitDataRowName.IsNone())
     {
-        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ UnitDataRowName 为空！"));
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ CachedAttackAbilitiesName 为空！"));
         return false;
     }
     
     // ========== 步骤2：查找 DataTable 行 ==========
-    FSGUnitDataRow* RowData = UnitDataTable->FindRow<FSGUnitDataRow>(
-        UnitDataRowName,
-        TEXT("LoadUnitDataFromTable")
+	FSGUnitDataRow* RowData = UnitDataTable->FindRow<FSGUnitDataRow>(
+		  UnitDataRowName,
+		  TEXT("LoadUnitDataFromTable")
     );
     
     if (!RowData)
@@ -1459,4 +1448,135 @@ bool ASG_UnitsBase::CanBeTargeted() const
 	// 默认返回 true
 	// 普通单位总是可以被选为目标
 	return true;
+}
+
+/**
+ * @brief 检查指定索引的技能是否在冷却中
+ * @param AbilityIndex 技能索引
+ * @return true = 冷却中，false = 可用
+ */
+bool ASG_UnitsBase::IsAbilityOnCooldown(int32 AbilityIndex) const
+{
+	// 检查索引有效性
+	if (!AbilityCooldowns.IsValidIndex(AbilityIndex))
+	{
+		return false;
+	}
+    
+	// 冷却时间 > 0 表示正在冷却
+	return AbilityCooldowns[AbilityIndex] > 0.0f;
+}
+
+
+/**
+ * @brief 启动指定技能的独立冷却
+ * @param AbilityIndex 技能索引
+ * @param CooldownDuration 冷却时间（秒）
+ * @details
+ * 功能说明：
+ * - 设置指定技能的冷却时间
+ * - 冷却时间在 Tick 中每帧递减
+ * - 不影响其他技能的冷却
+ */
+void ASG_UnitsBase::StartAbilityCooldown(int32 AbilityIndex, float CooldownDuration)
+{
+	// 检查索引有效性
+	if (!AbilityCooldowns.IsValidIndex(AbilityIndex))
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ StartAbilityCooldown: 无效的技能索引 %d"), AbilityIndex);
+		return;
+	}
+    
+	// 设置冷却时间
+	AbilityCooldowns[AbilityIndex] = CooldownDuration;
+    
+	UE_LOG(LogSGGameplay, Verbose, TEXT("  ⏳ 技能[%d] 开始冷却：%.1f秒"), AbilityIndex, CooldownDuration);
+}
+/**
+ * @brief 更新所有技能的冷却时间
+ * @param DeltaTime 帧间隔
+ * @details
+ * 功能说明：
+ * - 遍历所有技能的冷却时间
+ * - 每帧递减 DeltaTime
+ * - 降到 0 以下时归零
+ */
+void ASG_UnitsBase::UpdateAbilityCooldowns(float DeltaTime)
+{
+	for (int32 i = 0; i < AbilityCooldowns.Num(); ++i)
+	{
+		if (AbilityCooldowns[i] > 0.0f)
+		{
+			AbilityCooldowns[i] -= DeltaTime;
+            
+			// 确保不会变成负数
+			if (AbilityCooldowns[i] < 0.0f)
+			{
+				AbilityCooldowns[i] = 0.0f;
+			}
+		}
+	}
+}
+
+/**
+ * @brief 检查是否有至少一个技能可用
+ * @return true = 有可用技能，false = 所有技能都在冷却
+ */
+bool ASG_UnitsBase::HasAvailableAbility() const
+{
+	for (int32 i = 0; i < AbilityCooldowns.Num(); ++i)
+	{
+		if (AbilityCooldowns[i] <= 0.0f)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * @brief 开始攻击动画僵直
+ * @param AnimDuration 动画时长
+ * @details
+ * 功能说明：
+ * - 设置 bIsAttacking = true，阻止新攻击
+ * - 设置 AttackAnimationRemainingTime，在 Tick 中倒计时
+ * - 动画僵直与技能冷却是独立的概念
+ */
+void ASG_UnitsBase::StartAttackAnimation(float AnimDuration)
+{
+	bIsAttacking = true;
+	AttackAnimationRemainingTime = AnimDuration;
+    
+	UE_LOG(LogSGGameplay, Verbose, TEXT("  🎬 开始攻击动画，时长：%.2f秒"), AnimDuration);
+}
+
+void ASG_UnitsBase::OnAttackAnimationFinished()
+{
+	if (bIsAttacking)
+	{
+		bIsAttacking = false;
+		AttackAnimationRemainingTime = 0.0f;
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  ✅ 攻击动画结束（手动调用）"));
+	}
+}
+
+/**
+ * @brief 更新攻击动画僵直状态
+ * @param DeltaTime 帧间隔
+ */
+void ASG_UnitsBase::UpdateAttackAnimationState(float DeltaTime)
+{
+	if (bIsAttacking && AttackAnimationRemainingTime > 0.0f)
+	{
+		AttackAnimationRemainingTime -= DeltaTime;
+        
+		if (AttackAnimationRemainingTime <= 0.0f)
+		{
+			AttackAnimationRemainingTime = 0.0f;
+			bIsAttacking = false;
+            
+			UE_LOG(LogSGGameplay, Verbose, TEXT("  ✅ 攻击动画结束"));
+		}
+	}
 }

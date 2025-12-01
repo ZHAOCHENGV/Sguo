@@ -1,4 +1,5 @@
 // 📄 文件：Source/Sguo/Public/Units/SG_UnitsBase.h
+// 🔧 修改 - 完整文件
 
 #pragma once
 
@@ -118,27 +119,34 @@ public:
     UPROPERTY()
     TMap<TSubclassOf<UGameplayAbility>, FGameplayAbilitySpecHandle> GrantedSpecificAbilities;
 
-    // ========== 攻击冷却系统 ==========
+    // ========== 攻击状态 ==========
     
-    UPROPERTY(BlueprintReadOnly, Category = "Attack Config", meta = (DisplayName = "攻击冷却中"))
-    bool bIsAttackOnCooldown = false;
+    /**
+     * @brief 是否正在播放攻击动画（动画僵直）
+     * @details
+     * - true：正在播放攻击动画，不能开始新的攻击
+     * - false：可以开始新的攻击
+     */
+    UPROPERTY(BlueprintReadOnly, Category = "Attack State", meta = (DisplayName = "正在攻击中"))
+    bool bIsAttacking = false;
 
-    UPROPERTY(BlueprintReadOnly, Category = "Attack Config", meta = (DisplayName = "冷却剩余时间"))
-    float CooldownRemainingTime = 0.0f;
+    /**
+     * @brief 动画僵直剩余时间
+     */
+    UPROPERTY(BlueprintReadOnly, Category = "Attack State", meta = (DisplayName = "动画僵直剩余时间"))
+    float AttackAnimationRemainingTime = 0.0f;
 
-    FTimerHandle AttackCooldownTimerHandle;
-
-    UFUNCTION(BlueprintPure, Category = "Attack")
-    bool IsAttackOnCooldown() const { return bIsAttackOnCooldown; }
-
-    UFUNCTION(BlueprintPure, Category = "Attack")
-    float GetCooldownRemainingTime() const { return CooldownRemainingTime; }
-
-    UFUNCTION(BlueprintCallable, Category = "Attack")
-    void StartAttackCooldown(float Duration);
-
-    UFUNCTION()
-    void OnAttackCooldownEnd();
+    // ========== 技能独立冷却系统 ==========
+    
+    /**
+     * @brief 运行时技能冷却池
+     * @details
+     * - 索引对应 CachedAttackAbilities 的索引
+     * - 值为该技能的剩余冷却时间（秒）
+     * - 0 表示技能可用
+     */
+    UPROPERTY(BlueprintReadOnly, Category = "Attack Cooldown", meta = (DisplayName = "技能冷却池"))
+    TArray<float> AbilityCooldowns;
 
     // ========== GAS 接口实现 ==========
     
@@ -168,6 +176,52 @@ public:
     UFUNCTION(BlueprintPure, Category = "Attack")
     FSGUnitAttackDefinition GetCurrentAttackDefinition() const;
 
+    // ========== 技能冷却系统函数 ==========
+    
+    /**
+     * @brief 初始化技能冷却池
+     */
+    UFUNCTION(BlueprintCallable, Category = "Attack")
+    void InitializeAbilityCooldowns();
+
+    /**
+     * @brief 获取当前优先级最高且未冷却的技能索引
+     * @return 技能索引，-1 表示没有可用技能
+     */
+    UFUNCTION(BlueprintCallable, Category = "Attack")
+    int32 GetBestAvailableAbilityIndex() const;
+
+    /**
+     * @brief 检查指定索引的技能是否在冷却中
+     */
+    UFUNCTION(BlueprintPure, Category = "Attack")
+    bool IsAbilityOnCooldown(int32 AbilityIndex) const;
+
+    /**
+     * @brief 启动指定技能的独立冷却
+     */
+    UFUNCTION(BlueprintCallable, Category = "Attack")
+    void StartAbilityCooldown(int32 AbilityIndex, float CooldownDuration);
+
+    /**
+     * @brief 检查是否有至少一个技能可用
+     */
+    UFUNCTION(BlueprintPure, Category = "Attack")
+    bool HasAvailableAbility() const;
+
+    /**
+     * @brief 开始攻击动画僵直（由 GA 调用）
+     * @param AnimDuration 动画时长
+     */
+    UFUNCTION(BlueprintCallable, Category = "Attack")
+    void StartAttackAnimation(float AnimDuration);
+
+    /**
+     * @brief 攻击动画结束回调（由 GA 调用）
+     */
+    UFUNCTION(BlueprintCallable, Category = "Attack")
+    void OnAttackAnimationFinished();
+
     // ========== 战斗相关函数 ==========
     
     UFUNCTION(BlueprintCallable, Category = "Combat")
@@ -192,6 +246,10 @@ protected:
     void OnDeath();
     virtual void OnDeath_Implementation();
 
+    // ✨ 新增 - 内部更新函数
+    void UpdateAbilityCooldowns(float DeltaTime);
+    void UpdateAttackAnimationState(float DeltaTime);
+
 public:
     UPROPERTY(BlueprintReadOnly, Category = "Character", meta = (DisplayName = "是否已死亡"))
     bool bIsDead = false;
@@ -212,6 +270,12 @@ public:
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Visualization", meta = (DisplayName = "视野范围颜色"))
     FLinearColor VisionRangeColor = FLinearColor::Yellow;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Visualization", meta = (DisplayName = "显示技能冷却信息"))
+    bool bShowAbilityCooldowns = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Visualization", meta = (DisplayName = "显示寻敌范围"))
+    bool bShowSearchRange = false;
 
     UFUNCTION(BlueprintCallable, Category = "Debug Visualization")
     void ToggleAttackRangeVisualization();
@@ -243,17 +307,6 @@ protected:
     void InitializeWithDefaults();
 
 public:
-    // ========== 攻击状态控制 ==========
-
-    UPROPERTY(BlueprintReadOnly, Category = "Attack State")
-    bool bIsAttacking = false;
-
-    UFUNCTION(BlueprintCallable, Category = "Attack")
-    void StartAttackCycle(float AnimDuration);
-    
-    UFUNCTION(BlueprintCallable, Category = "Attack")
-    void OnAttackAbilityFinished();
-
     // ========== 战斗表现配置 ==========
     
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Visuals", meta = (DisplayName = "死亡动画"))
@@ -261,108 +314,27 @@ public:
 
     // ========== 寻敌逻辑配置 ==========
 
-    /**
-     * @brief 寻敌范围形状
-     * @details 选择圆形（半径）或正方形（使用 DetectionRange 作为半边长）进行索敌
-     */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Search", meta = (DisplayName = "寻敌形状"))
     ESGTargetSearchShape TargetSearchShape = ESGTargetSearchShape::Circle;
 
-    // 🔧 修改 - 移除 SearchBoxExtent，改用 DetectionRange
-    // ❌ 删除 - 以下属性不再需要，正方形寻敌范围直接使用 DetectionRange
-    // UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Search", 
-    //     meta = (DisplayName = "正方形寻敌范围(半长宽)", EditCondition = "TargetSearchShape == ESGTargetSearchShape::Square", EditConditionHides))
-    // FVector2D SearchBoxExtent = FVector2D(800.0f, 800.0f);
-
-    /**
-     * @brief 是否优先攻击最前排的敌人
-     * @details 
-     * - True: 忽略Y轴距离，优先选择X轴最靠近己方的敌人（防守逻辑）
-     * - False: 选择直线距离最近的敌人（标准逻辑）
-     */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Search", meta = (DisplayName = "优先攻击最前排"))
     bool bPrioritizeFrontmost = true;
 
-    /**
-     * @brief 调试：显示寻敌范围
-     */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug Visualization", meta = (DisplayName = "显示寻敌范围"))
-    bool bShowSearchRange = false;
-
-    // ✨ 新增 - 强制停止所有行为（用于死亡时调用）
-    /**
-     * @brief 强制停止所有行为
-     * @details
-     * 功能说明：
-     * - 停止移动
-     * - 取消所有正在执行的能力
-     * - 停止攻击动画
-     * - 清除目标
-     * 使用场景：
-     * - 单位死亡时调用
-     * - 游戏暂停时调用
-     */
     UFUNCTION(BlueprintCallable, Category = "Combat")
     void ForceStopAllActions();
 
-    // ✨ 新增 - 检查单位是否可被选为目标（AI寻敌接口）
-    /**
-     * @brief 检查单位是否可被选为目标
-     * @return 是否可被选为目标
-     * @details
-     * 功能说明：
-     * - 虚函数，子类可以重写以自定义逻辑
-     * - 默认返回 true（普通单位可被选中）
-     * - 站桩单位可以重写此函数返回 false
-     * 使用场景：
-     * - AI 寻找攻击目标时过滤单位
-     * - 技能选择目标时判断有效性
-     * 注意事项：
-     * - 此函数不影响 AOE 伤害判定
-     * - 只影响主动目标选择
-     * - 死亡单位会在其他地方过滤，此函数不需要检查
-     */
     UFUNCTION(BlueprintPure, Category = "Combat", meta = (DisplayName = "是否可被选为目标"))
     virtual bool CanBeTargeted() const;
 
 public:
     // ========== AI 行为树配置 ==========
 
-    // ✨ 新增 - 单位专属行为树
-    /**
-     * @brief 单位专属行为树
-     * @details
-     * 功能说明：
-     * - 如果设置了此行为树，单位将使用此行为树而不是控制器默认的行为树
-     * - 如果未设置（nullptr），则使用 AI 控制器的默认行为树
-     * 使用场景：
-     * - 站桩单位：使用固定站立的行为树（只攻击不移动）
-     * - 特殊单位：使用自定义 AI 逻辑
-     * - 普通单位：留空，使用控制器默认行为树
-     * 配置方式：
-     * - 在单位蓝图中设置此变量
-     * - 或在 DataTable 中配置（需要扩展 DataTable）
-     */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Config", meta = (DisplayName = "单位行为树"))
     TObjectPtr<UBehaviorTree> UnitBehaviorTree;
 
-    // ✨ 新增 - 获取单位应使用的行为树
-    /**
-     * @brief 获取单位应使用的行为树
-     * @return 行为树资产，如果未设置则返回 nullptr
-     * @details
-     * 功能说明：
-     * - 返回单位配置的行为树
-     * - AI 控制器会在 OnPossess 时调用此函数
-     */
     UFUNCTION(BlueprintPure, Category = "AI Config", meta = (DisplayName = "获取单位行为树"))
     UBehaviorTree* GetUnitBehaviorTree() const { return UnitBehaviorTree; }
 
-    // ✨ 新增 - 检查是否有自定义行为树
-    /**
-     * @brief 检查单位是否有自定义行为树
-     * @return 是否有自定义行为树
-     */
     UFUNCTION(BlueprintPure, Category = "AI Config", meta = (DisplayName = "是否有自定义行为树"))
     bool HasCustomBehaviorTree() const { return UnitBehaviorTree != nullptr; }
 };

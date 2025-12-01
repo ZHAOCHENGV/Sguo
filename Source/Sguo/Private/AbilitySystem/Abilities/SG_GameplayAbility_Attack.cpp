@@ -237,7 +237,7 @@ void USG_GameplayAbility_Attack::ActivateAbility(
 	// 这样 Unit 就能知道："虽然动画要播 X 秒，但我现在就要开始计算 (X + Cooldown) 秒的计时了"
 	if (ASG_UnitsBase* SourceUnit = Cast<ASG_UnitsBase>(ActorInfo->AvatarActor.Get()))
 	{
-		SourceUnit->StartAttackCycle(ActualDuration);
+		SourceUnit->StartAttackAnimation(ActualDuration);
 	}
 
 	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
@@ -712,7 +712,7 @@ void USG_GameplayAbility_Attack::EndAbility(
 		{
 			// 只有在正常结束（非取消）或者你需要取消也算冷却时调用
 			// 通常这里无论是否取消都应该通知 Unit 重置 bIsAttacking 状态，否则 Unit 会卡死在攻击状态
-			SourceUnit->OnAttackAbilityFinished();
+			SourceUnit->OnAttackAnimationFinished();
 		}
 	}
 

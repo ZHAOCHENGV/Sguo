@@ -207,36 +207,7 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<ASG_MainCityBase> CachedEnemyMainCity = nullptr;
 
-	// ✨ 新增 - 方向控制回调（如果您要使用 SG_Player 的委托）
-	UFUNCTION()
-	void OnDirectionCycleInput();
 
-	UFUNCTION()
-	void OnDirectionRotateInput(float DeltaYaw);
-
-public:
-	// ========== ✨ 新增 - 计谋方向控制 ==========
-    
-	/**
-	 * @brief 切换计谋效果方向（用于流木计等需要选择方向的计谋）
-	 * @details
-	 * 功能说明：
-	 * - 调用当前计谋效果的方向切换函数
-	 * - 由输入系统触发（如按 Q/E 键或滚轮）
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Strategy", meta = (DisplayName = "切换计谋方向"))
-	void CycleStrategyDirection();
-
-	/**
-	 * @brief 旋转计谋效果方向
-	 * @param DeltaYaw 旋转角度（度）
-	 * @details
-	 * 功能说明：
-	 * - 用于自定义方向模式
-	 * - 可通过滚轮或方向键触发
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Strategy", meta = (DisplayName = "旋转计谋方向"))
-	void RotateStrategyDirection(float DeltaYaw);
 
 	
 };

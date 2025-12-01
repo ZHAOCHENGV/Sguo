@@ -109,7 +109,7 @@ struct FSGUnitAttackDefinition
      * @brief 冷却时间（秒）
      * @details 此次攻击后的硬直/冷却时间
      */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack", meta = (DisplayName = "冷却时间", ClampMin = "0.0", UIMin = "0.0", UIMax = "10.0"))
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attack", meta = (DisplayName = "冷却时间", ClampMin = "0.0", UIMin = "0.0", UIMax = "100.0"))
     float Cooldown = 1.0f;
     
     // 构造函数

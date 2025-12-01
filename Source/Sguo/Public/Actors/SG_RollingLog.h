@@ -238,12 +238,6 @@ public:
 public:
     // ==================== 公共接口 ====================
 
-    UFUNCTION(BlueprintCallable, Category = "Rolling Log", meta = (DisplayName = "初始化滚木"))
-    void InitializeRollingLog(
-        UAbilitySystemComponent* InSourceASC,
-        FGameplayTag InFactionTag,
-        FVector InRollDirection
-    );
 
     UFUNCTION(BlueprintCallable, Category = "Rolling Log", meta = (DisplayName = "设置滚动方向"))
     void SetRollDirection(FVector NewDirection);
@@ -331,4 +325,19 @@ public:
 
     UFUNCTION(BlueprintImplementableEvent, Category = "Rolling Log", meta = (DisplayName = "On Log Out Of Range (BP)"))
     void K2_OnLogOutOfRange();
+
+    /**
+    * @brief 初始化滚木
+    * @param InSourceASC 攻击者 ASC
+    * @param InFactionTag 攻击者阵营
+    * @param InRollDirection 滚动方向（世界空间）
+    * @param bKeepCurrentRotation 是否保持当前旋转（不被滚动方向覆盖）
+    */
+    UFUNCTION(BlueprintCallable, Category = "Rolling Log", meta = (DisplayName = "初始化滚木"))
+    void InitializeRollingLog(
+        UAbilitySystemComponent* InSourceASC,
+        FGameplayTag InFactionTag,
+        FVector InRollDirection,
+        bool bKeepCurrentRotation = false  // ✨ 新增参数
+    );
 };

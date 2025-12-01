@@ -158,49 +158,6 @@ void ASG_RollingLog::EndPlay(const EEndPlayReason::Type EndPlayReason)
     Super::EndPlay(EndPlayReason);
 }
 
-/**
- * @brief 初始化滚木
- */
-void ASG_RollingLog::InitializeRollingLog(
-    UAbilitySystemComponent* InSourceASC,
-    FGameplayTag InFactionTag,
-    FVector InRollDirection
-)
-{
-    UE_LOG(LogSGGameplay, Log, TEXT("========== 初始化滚木 =========="));
-    UE_LOG(LogSGGameplay, Log, TEXT("  滚木：%s"), *GetName());
-
-    SourceASC = InSourceASC;
-    SourceFactionTag = InFactionTag;
-
-    // 设置滚动方向（水平面）
-    InRollDirection.Z = 0.0f;
-    RollDirection = InRollDirection.GetSafeNormal();
-    if (RollDirection.IsNearlyZero())
-    {
-        RollDirection = FVector::ForwardVector;
-    }
-
-    // 设置 Actor 朝向（滚动方向）
-    FRotator ActorRotation = RollDirection.Rotation();
-    SetActorRotation(ActorRotation);
-
-    // 设置物理
-    if (bEnablePhysicsRolling)
-    {
-        SetupPhysics();
-        PhysicsWarmupTimer = PhysicsWarmupDuration;
-        ApplyInitialVelocity();
-    }
-
-    bIsInitialized = true;
-
-    UE_LOG(LogSGGameplay, Log, TEXT("  攻击者阵营：%s"), *SourceFactionTag.ToString());
-    UE_LOG(LogSGGameplay, Log, TEXT("  滚动方向：%s"), *RollDirection.ToString());
-    UE_LOG(LogSGGameplay, Log, TEXT("  初始速度：%.0f cm/s"), InitialRollSpeed);
-    UE_LOG(LogSGGameplay, Log, TEXT("  初始角速度：%.0f deg/s"), InitialAngularSpeed);
-    UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-}
 
 /**
  * @brief 设置滚动方向
@@ -749,4 +706,66 @@ void ASG_RollingLog::DrawDebugInfo()
         DrawDebugString(GetWorld(), Location + FVector(0, 0, 50.0f), DistText, nullptr, FColor::White, 0.0f, true);
     }
 #endif
+}
+
+
+/**
+ * @brief 初始化滚木
+ * @param InSourceASC 攻击者 ASC
+ * @param InFactionTag 攻击者阵营
+ * @param InRollDirection 滚动方向（世界空间）
+ * @param bKeepCurrentRotation 是否保持当前旋转
+ * @details
+ * **🔧 修改：**
+ * - 新增 bKeepCurrentRotation 参数
+ * - 如果为 true，保持生成时的旋转，不用滚动方向覆盖
+ */
+void ASG_RollingLog::InitializeRollingLog(UAbilitySystemComponent* InSourceASC, FGameplayTag InFactionTag,
+    FVector InRollDirection, bool bKeepCurrentRotation)
+{
+    UE_LOG(LogSGGameplay, Log, TEXT("========== 初始化滚木 =========="));
+    UE_LOG(LogSGGameplay, Log, TEXT("  滚木：%s"), *GetName());
+    UE_LOG(LogSGGameplay, Log, TEXT("  当前旋转：%s"), *GetActorRotation().ToString());
+    UE_LOG(LogSGGameplay, Log, TEXT("  保持当前旋转：%s"), bKeepCurrentRotation ? TEXT("是") : TEXT("否"));
+
+    SourceASC = InSourceASC;
+    SourceFactionTag = InFactionTag;
+
+    // 设置滚动方向（水平面）
+    InRollDirection.Z = 0.0f;
+    RollDirection = InRollDirection.GetSafeNormal();
+    if (RollDirection.IsNearlyZero())
+    {
+        RollDirection = FVector::ForwardVector;
+    }
+
+    // 🔧 关键修改 - 根据参数决定是否覆盖旋转
+    if (!bKeepCurrentRotation)
+    {
+        // 使用滚动方向设置旋转（原有逻辑）
+        FRotator ActorRotation = RollDirection.Rotation();
+        SetActorRotation(ActorRotation);
+        UE_LOG(LogSGGameplay, Log, TEXT("  设置旋转为滚动方向：%s"), *ActorRotation.ToString());
+    }
+    else
+    {
+        // 保持当前旋转（生成时已设置）
+        UE_LOG(LogSGGameplay, Log, TEXT("  保持生成时的旋转：%s"), *GetActorRotation().ToString());
+    }
+
+    // 设置物理
+    if (bEnablePhysicsRolling)
+    {
+        SetupPhysics();
+        PhysicsWarmupTimer = PhysicsWarmupDuration;
+        ApplyInitialVelocity();
+    }
+
+    bIsInitialized = true;
+
+    UE_LOG(LogSGGameplay, Log, TEXT("  攻击者阵营：%s"), *SourceFactionTag.ToString());
+    UE_LOG(LogSGGameplay, Log, TEXT("  滚动方向：%s"), *RollDirection.ToString());
+    UE_LOG(LogSGGameplay, Log, TEXT("  最终旋转：%s"), *GetActorRotation().ToString());
+    UE_LOG(LogSGGameplay, Log, TEXT("  初始速度：%.0f cm/s"), InitialRollSpeed);
+    UE_LOG(LogSGGameplay, Log, TEXT("========================================"));   
 }

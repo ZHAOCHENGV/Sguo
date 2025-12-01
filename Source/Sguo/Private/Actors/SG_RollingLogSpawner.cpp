@@ -279,18 +279,14 @@ FVector ASG_RollingLogSpawner::GetRollDirection() const
  */
 FRotator ASG_RollingLogSpawner::GetSpawnRotation() const
 {
-    if (bUseCustomSpawnRotation)
+    // 🔧 直接使用预览网格体的世界旋转
+    if (LogPreviewMesh)
     {
-        // 使用自定义旋转：Actor 旋转 + 偏移
-        FRotator BaseRotation = GetActorRotation();
-        return BaseRotation + SpawnRotationOffset;
+        return LogPreviewMesh->GetComponentRotation();
     }
-    else
-    {
-        // 自动计算：使用滚动方向
-        FVector RollDir = GetRollDirection();
-        return RollDir.Rotation() + SpawnRotationOffset;
-    }
+    
+    // 备用：使用滚动方向
+    return GetRollDirection().Rotation();
 }
 
 /**
@@ -319,10 +315,15 @@ void ASG_RollingLogSpawner::UpdatePreviewMesh()
     // 设置缩放
     LogPreviewMesh->SetRelativeScale3D(PreviewMeshScale);
 
-    // ✨ 关键 - 设置旋转
-    // 预览网格体应该显示生成时的旋转
-    FRotator PreviewRotation = SpawnRotationOffset;
-    LogPreviewMesh->SetRelativeRotation(PreviewRotation);
+    // 🔧 关键 - 预览网格体使用相对旋转
+    // 因为它附着在生成器上，相对旋转 = SpawnRotationOffset
+    // 最终世界旋转 = 生成器旋转 * SpawnRotationOffset（自动计算）
+    LogPreviewMesh->SetRelativeRotation(SpawnRotationOffset);
+
+    UE_LOG(LogSGGameplay, Verbose, TEXT("UpdatePreviewMesh:"));
+    UE_LOG(LogSGGameplay, Verbose, TEXT("  SpawnRotationOffset: %s"), *SpawnRotationOffset.ToString());
+    UE_LOG(LogSGGameplay, Verbose, TEXT("  预览网格相对旋转: %s"), *LogPreviewMesh->GetRelativeRotation().ToString());
+    UE_LOG(LogSGGameplay, Verbose, TEXT("  预览网格世界旋转: %s"), *LogPreviewMesh->GetComponentRotation().ToString());
 
     // 创建/更新半透明材质
     CreatePreviewMaterial();
@@ -501,14 +502,23 @@ void ASG_RollingLogSpawner::SpawnRollingLogs()
         return;
     }
 
-    // 获取滚动方向和生成旋转
+    // 获取滚动方向
     FVector RollDirection = GetRollDirection();
-    FRotator SpawnRotation = GetSpawnRotation();
+    
+    // 获取生成旋转
+    FRotator SpawnRotation;
+    if (LogPreviewMesh)
+    {
+        SpawnRotation = LogPreviewMesh->GetComponentRotation();
+        UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 使用 LogPreviewMesh 世界旋转：%s"), *SpawnRotation.ToString());
+    }
+    else
+    {
+        SpawnRotation = RollDirection.Rotation();
+    }
 
-    UE_LOG(LogSGGameplay, Log, TEXT("  生成滚木："));
-    UE_LOG(LogSGGameplay, Log, TEXT("    滚动方向：%s"), *RollDirection.ToString());
-    UE_LOG(LogSGGameplay, Log, TEXT("    生成旋转：%s"), *SpawnRotation.ToString());
-    UE_LOG(LogSGGameplay, Log, TEXT("    使用自定义旋转：%s"), bUseCustomSpawnRotation ? TEXT("是") : TEXT("否"));
+    UE_LOG(LogSGGameplay, Log, TEXT("  ========== 生成滚木 =========="));
+    UE_LOG(LogSGGameplay, Log, TEXT("    目标旋转：%s"), *SpawnRotation.ToString());
 
     // 生成滚木
     for (int32 i = 0; i < ActiveCardData->SpawnCountPerInterval; ++i)
@@ -519,16 +529,19 @@ void ASG_RollingLogSpawner::SpawnRollingLogs()
         SpawnParams.Owner = this;
         SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-        // 使用计算的生成旋转
+        // 生成滚木（使用默认旋转，稍后强制设置）
         ASG_RollingLog* NewLog = World->SpawnActor<ASG_RollingLog>(
             RollingLogClassToSpawn,
             SpawnLocation,
-            SpawnRotation,
+            FRotator::ZeroRotator,  // 🔧 先用零旋转生成
             SpawnParams
         );
 
         if (NewLog)
         {
+            // 🔧 关键 - 使用 ForceSetRotation 强制设置旋转
+            NewLog->ForceSetRotation(SpawnRotation);
+
             // 设置滚木参数
             NewLog->DamageAmount = ActiveCardData->DamageAmount;
             NewLog->DamageEffectClass = ActiveCardData->LogDamageEffectClass;
@@ -539,27 +552,24 @@ void ASG_RollingLogSpawner::SpawnRollingLogs()
             NewLog->LogLifeSpan = ActiveCardData->LogLifeSpan;
             NewLog->RotationSpeed = ActiveCardData->RotationSpeed;
 
-            // 🔧 关键修改 - 传递 bKeepCurrentRotation = true
-            // 这样滚木会保持我们设置的生成旋转，不会被滚动方向覆盖
+            // 初始化滚木，保持当前旋转
             NewLog->InitializeRollingLog(
                 SourceASC,
                 FactionTag,
                 RollDirection,
-                true  // ✨ 新增 - 保持当前旋转
+                true
             );
+
+            UE_LOG(LogSGGameplay, Log, TEXT("    [%d] 最终旋转：%s"), 
+                i, *NewLog->GetActorRotation().ToString());
 
             NewLog->OnLogDestroyed.AddDynamic(this, &ASG_RollingLogSpawner::OnRollingLogDestroyed);
             SpawnedLogs.Add(NewLog);
             K2_OnLogSpawned(NewLog);
-
-            UE_LOG(LogSGGameplay, Verbose, TEXT("    [%d] 位置：%s, 旋转：%s"), 
-                i, *SpawnLocation.ToString(), *NewLog->GetActorRotation().ToString());
-        }
-        else
-        {
-            UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 滚木生成失败！位置：%s"), *SpawnLocation.ToString());
         }
     }
+    
+    UE_LOG(LogSGGameplay, Log, TEXT("  ================================"));
 }
 
 FVector ASG_RollingLogSpawner::CalculateRandomSpawnLocation() const

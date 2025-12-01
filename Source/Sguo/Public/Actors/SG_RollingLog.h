@@ -340,4 +340,26 @@ public:
         FVector InRollDirection,
         bool bKeepCurrentRotation = false  // ✨ 新增参数
     );
+
+
+    // 在 SG_RollingLog.h 的 protected 区域添加：
+protected:
+    // ✨ 新增 - 缓存的生成旋转（用于修复旋转被覆盖的问题）
+    FRotator CachedSpawnRotation;
+    bool bHasCachedSpawnRotation = false;
+
+public:
+    // ==================== 公共接口 ====================
+
+    /**
+     * @brief 强制设置滚木旋转
+     * @param NewRotation 新的旋转
+     * @details
+     * **功能说明：**
+     * - 设置 Actor 旋转
+     * - 同时重置 MeshComponent 的相对旋转为零
+     * - 确保最终旋转就是传入的旋转
+     */
+    UFUNCTION(BlueprintCallable, Category = "Rolling Log", meta = (DisplayName = "强制设置旋转"))
+    void ForceSetRotation(FRotator NewRotation);
 };

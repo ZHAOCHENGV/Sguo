@@ -222,18 +222,38 @@ void ASG_RollingLog::SetupPhysics()
         return;
     }
 
+    // 🔧 调试 - 记录设置物理前的旋转
+    FRotator RotationBeforePhysics = GetActorRotation();
     UE_LOG(LogSGGameplay, Log, TEXT("  设置物理参数..."));
+    UE_LOG(LogSGGameplay, Log, TEXT("    物理设置前旋转：%s"), *RotationBeforePhysics.ToString());
 
+    // 启用物理模拟
     MeshComponent->SetSimulatePhysics(true);
+    
+    // 设置质量
     MeshComponent->SetMassOverrideInKg(NAME_None, LogMass, true);
+    
+    // 设置阻尼
     MeshComponent->SetLinearDamping(LinearDamping);
     MeshComponent->SetAngularDamping(AngularDamping);
+    
+    // 启用 CCD 防止穿透
     MeshComponent->BodyInstance.bUseCCD = true;
 
-    // 只锁定 Z 旋转，防止原地打转
+    // 🔧 关键 - 不锁定旋转轴，让物理自然滚动
+    // 但要确保这不会重置旋转
     MeshComponent->BodyInstance.bLockXRotation = false;
     MeshComponent->BodyInstance.bLockYRotation = false;
     MeshComponent->BodyInstance.bLockZRotation = true;
+
+    // 🔧 调试 - 记录设置物理后的旋转
+    FRotator RotationAfterPhysics = GetActorRotation();
+    UE_LOG(LogSGGameplay, Log, TEXT("    物理设置后旋转：%s"), *RotationAfterPhysics.ToString());
+    
+    if (!RotationBeforePhysics.Equals(RotationAfterPhysics, 0.1f))
+    {
+        UE_LOG(LogSGGameplay, Warning, TEXT("    ⚠️ 物理设置改变了旋转！"));
+    }
 
     UE_LOG(LogSGGameplay, Log, TEXT("    质量：%.1f kg"), LogMass);
     UE_LOG(LogSGGameplay, Log, TEXT("    线性阻尼：%.2f"), LinearDamping);
@@ -256,21 +276,39 @@ void ASG_RollingLog::ApplyInitialVelocity()
         return;
     }
 
+    // 🔧 调试 - 记录施加速度前的旋转
+    FRotator RotationBeforeVelocity = GetActorRotation();
+    UE_LOG(LogSGGameplay, Log, TEXT("  施加初始速度..."));
+    UE_LOG(LogSGGameplay, Log, TEXT("    施加前旋转：%s"), *RotationBeforeVelocity.ToString());
+
     // 设置线性速度
     FVector LinearVelocity = RollDirection * InitialRollSpeed;
     MeshComponent->SetPhysicsLinearVelocity(LinearVelocity);
 
-    // 设置角速度（绕垂直于滚动方向的水平轴旋转）
-    FVector RotationAxis = FVector::CrossProduct(FVector::UpVector, RollDirection);
-    RotationAxis.Normalize();
+    // 设置角速度
+    // 🔧 关键 - 角速度应该让木桩绕其长轴旋转
+    // 木桩的长轴取决于当前旋转
+    FVector LogLongAxis = GetActorRightVector();  // 假设木桩长轴是 Right 方向
     
     float AngularSpeedRadians = FMath::DegreesToRadians(InitialAngularSpeed);
-    FVector AngularVelocity = -RotationAxis * AngularSpeedRadians;
+    
+    // 滚动时，角速度方向应该垂直于滚动方向和木桩长轴
+    // 简单起见，让木桩绕其长轴旋转
+    FVector AngularVelocity = LogLongAxis * AngularSpeedRadians;
     
     MeshComponent->SetPhysicsAngularVelocityInRadians(AngularVelocity);
 
-    UE_LOG(LogSGGameplay, Log, TEXT("  施加初始速度："));
+    // 🔧 调试 - 记录施加速度后的旋转
+    FRotator RotationAfterVelocity = GetActorRotation();
+    UE_LOG(LogSGGameplay, Log, TEXT("    施加后旋转：%s"), *RotationAfterVelocity.ToString());
+    
+    if (!RotationBeforeVelocity.Equals(RotationAfterVelocity, 0.1f))
+    {
+        UE_LOG(LogSGGameplay, Warning, TEXT("    ⚠️ 施加速度改变了旋转！"));
+    }
+
     UE_LOG(LogSGGameplay, Log, TEXT("    线性速度：%s (%.0f cm/s)"), *LinearVelocity.ToString(), LinearVelocity.Size());
+    UE_LOG(LogSGGameplay, Log, TEXT("    木桩长轴：%s"), *LogLongAxis.ToString());
     UE_LOG(LogSGGameplay, Log, TEXT("    角速度：%.0f deg/s"), InitialAngularSpeed);
     
     // 验证
@@ -723,49 +761,107 @@ void ASG_RollingLog::DrawDebugInfo()
 void ASG_RollingLog::InitializeRollingLog(UAbilitySystemComponent* InSourceASC, FGameplayTag InFactionTag,
     FVector InRollDirection, bool bKeepCurrentRotation)
 {
-    UE_LOG(LogSGGameplay, Log, TEXT("========== 初始化滚木 =========="));
+   UE_LOG(LogSGGameplay, Log, TEXT(""));
+    UE_LOG(LogSGGameplay, Log, TEXT("╔══════════════════════════════════════╗"));
+    UE_LOG(LogSGGameplay, Log, TEXT("║       初始化滚木                      ║"));
+    UE_LOG(LogSGGameplay, Log, TEXT("╚══════════════════════════════════════╝"));
     UE_LOG(LogSGGameplay, Log, TEXT("  滚木：%s"), *GetName());
-    UE_LOG(LogSGGameplay, Log, TEXT("  当前旋转：%s"), *GetActorRotation().ToString());
-    UE_LOG(LogSGGameplay, Log, TEXT("  保持当前旋转：%s"), bKeepCurrentRotation ? TEXT("是") : TEXT("否"));
+    
+    // 🔧 关键调试 - 追踪旋转变化
+    FRotator Step0_SpawnRotation = GetActorRotation();
+    UE_LOG(LogSGGameplay, Log, TEXT("  [Step 0] 生成时旋转：%s"), *Step0_SpawnRotation.ToString());
+    UE_LOG(LogSGGameplay, Log, TEXT("  [Step 0] bKeepCurrentRotation = %s"), bKeepCurrentRotation ? TEXT("TRUE") : TEXT("FALSE"));
 
+    // 保存攻击者信息
     SourceASC = InSourceASC;
     SourceFactionTag = InFactionTag;
 
-    // 设置滚动方向（水平面）
+    // 设置滚动方向
     InRollDirection.Z = 0.0f;
     RollDirection = InRollDirection.GetSafeNormal();
     if (RollDirection.IsNearlyZero())
     {
         RollDirection = FVector::ForwardVector;
     }
+    UE_LOG(LogSGGameplay, Log, TEXT("  [Step 1] 滚动方向：%s"), *RollDirection.ToString());
 
-    // 🔧 关键修改 - 根据参数决定是否覆盖旋转
+    // 🔧 关键 - 是否覆盖旋转
     if (!bKeepCurrentRotation)
     {
-        // 使用滚动方向设置旋转（原有逻辑）
-        FRotator ActorRotation = RollDirection.Rotation();
-        SetActorRotation(ActorRotation);
-        UE_LOG(LogSGGameplay, Log, TEXT("  设置旋转为滚动方向：%s"), *ActorRotation.ToString());
+        FRotator NewRotation = RollDirection.Rotation();
+        SetActorRotation(NewRotation);
+        UE_LOG(LogSGGameplay, Log, TEXT("  [Step 2] 用滚动方向覆盖旋转：%s"), *NewRotation.ToString());
     }
     else
     {
-        // 保持当前旋转（生成时已设置）
-        UE_LOG(LogSGGameplay, Log, TEXT("  保持生成时的旋转：%s"), *GetActorRotation().ToString());
+        UE_LOG(LogSGGameplay, Log, TEXT("  [Step 2] 保持当前旋转，跳过"));
     }
+    
+    FRotator Step2_Rotation = GetActorRotation();
+    UE_LOG(LogSGGameplay, Log, TEXT("  [Step 2] 当前旋转：%s"), *Step2_Rotation.ToString());
 
     // 设置物理
     if (bEnablePhysicsRolling)
     {
+        UE_LOG(LogSGGameplay, Log, TEXT("  [Step 3] 开始设置物理..."));
         SetupPhysics();
+        
+        FRotator Step3_Rotation = GetActorRotation();
+        UE_LOG(LogSGGameplay, Log, TEXT("  [Step 3] 物理设置后旋转：%s"), *Step3_Rotation.ToString());
+        
         PhysicsWarmupTimer = PhysicsWarmupDuration;
+        
+        UE_LOG(LogSGGameplay, Log, TEXT("  [Step 4] 开始施加速度..."));
         ApplyInitialVelocity();
+        
+        FRotator Step4_Rotation = GetActorRotation();
+        UE_LOG(LogSGGameplay, Log, TEXT("  [Step 4] 施加速度后旋转：%s"), *Step4_Rotation.ToString());
     }
 
     bIsInitialized = true;
 
-    UE_LOG(LogSGGameplay, Log, TEXT("  攻击者阵营：%s"), *SourceFactionTag.ToString());
-    UE_LOG(LogSGGameplay, Log, TEXT("  滚动方向：%s"), *RollDirection.ToString());
-    UE_LOG(LogSGGameplay, Log, TEXT("  最终旋转：%s"), *GetActorRotation().ToString());
-    UE_LOG(LogSGGameplay, Log, TEXT("  初始速度：%.0f cm/s"), InitialRollSpeed);
-    UE_LOG(LogSGGameplay, Log, TEXT("========================================"));   
+    // 最终检查
+    FRotator FinalRotation = GetActorRotation();
+    UE_LOG(LogSGGameplay, Log, TEXT(""));
+    UE_LOG(LogSGGameplay, Log, TEXT("  ┌─────────────────────────────────┐"));
+    UE_LOG(LogSGGameplay, Log, TEXT("  │ 旋转追踪结果                     │"));
+    UE_LOG(LogSGGameplay, Log, TEXT("  ├─────────────────────────────────┤"));
+    UE_LOG(LogSGGameplay, Log, TEXT("  │ 生成时：%s"), *Step0_SpawnRotation.ToString());
+    UE_LOG(LogSGGameplay, Log, TEXT("  │ 最终：  %s"), *FinalRotation.ToString());
+    UE_LOG(LogSGGameplay, Log, TEXT("  │ 是否改变：%s"), 
+        Step0_SpawnRotation.Equals(FinalRotation, 0.1f) ? TEXT("否 ✓") : TEXT("是 ✗"));
+    UE_LOG(LogSGGameplay, Log, TEXT("  └─────────────────────────────────┘"));
+    UE_LOG(LogSGGameplay, Log, TEXT(""));
+}
+/**
+ * @brief 强制设置滚木旋转
+ * @param NewRotation 新的旋转
+ * @details
+ * **功能说明：**
+ * - 重置 MeshComponent 的相对旋转为零
+ * - 然后设置 Actor 的世界旋转
+ * - 这样确保最终旋转就是我们想要的
+ */
+void ASG_RollingLog::ForceSetRotation(FRotator NewRotation)
+{
+    UE_LOG(LogSGGameplay, Log, TEXT("  ForceSetRotation: %s"), *NewRotation.ToString());
+    
+    // 🔧 关键 - 先重置 MeshComponent 的相对旋转
+    if (MeshComponent)
+    {
+        FRotator OldRelativeRot = MeshComponent->GetRelativeRotation();
+        MeshComponent->SetRelativeRotation(FRotator::ZeroRotator);
+        UE_LOG(LogSGGameplay, Log, TEXT("    MeshComponent 相对旋转：%s -> ZeroRotator"), *OldRelativeRot.ToString());
+    }
+    
+    // 设置 Actor 旋转
+    SetActorRotation(NewRotation);
+    
+    // 验证
+    UE_LOG(LogSGGameplay, Log, TEXT("    最终 Actor 旋转：%s"), *GetActorRotation().ToString());
+    
+    if (MeshComponent)
+    {
+        UE_LOG(LogSGGameplay, Log, TEXT("    最终 MeshComponent 世界旋转：%s"), *MeshComponent->GetComponentRotation().ToString());
+    }
 }

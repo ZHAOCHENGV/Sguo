@@ -1,5 +1,5 @@
 ﻿// 📄 文件：Source/Sguo/Public/Actors/SG_RollingLog.h
-// 🔧 修改 - 完整文件，修复编译错误
+// 🔧 修改 - 简化胶囊体配置，使用组件本身尺寸
 
 #pragma once
 
@@ -14,66 +14,48 @@ class UStaticMeshComponent;
 class UGameplayEffect;
 class UAbilitySystemComponent;
 class UNiagaraComponent;
-class UNiagaraSystem;  // ✨ 新增 - 前置声明 Niagara 系统
+class UNiagaraSystem;
 class UAudioComponent;
-class USoundBase;      // ✨ 新增 - 前置声明音效类
+class USoundBase;
 
 /**
  * @brief 滚木击中信息结构体
- * @details 包含滚木击中目标时的所有相关信息
  */
 USTRUCT(BlueprintType)
 struct FSGRollingLogHitInfo
 {
     GENERATED_BODY()
 
-    /** 被击中的 Actor */
     UPROPERTY(BlueprintReadOnly, Category = "Hit Info", meta = (DisplayName = "击中目标"))
     AActor* HitActor = nullptr;
 
-    /** 击中的世界位置 */
     UPROPERTY(BlueprintReadOnly, Category = "Hit Info", meta = (DisplayName = "击中位置"))
     FVector HitLocation = FVector::ZeroVector;
 
-    /** 击退方向 */
     UPROPERTY(BlueprintReadOnly, Category = "Hit Info", meta = (DisplayName = "击退方向"))
     FVector KnockbackDirection = FVector::ZeroVector;
 
-    /** 滚木滚动方向 */
     UPROPERTY(BlueprintReadOnly, Category = "Hit Info", meta = (DisplayName = "滚动方向"))
     FVector RollDirection = FVector::ForwardVector;
 };
 
-// 前置声明本类（用于委托）
 class ASG_RollingLog;
 
-/** 滚木击中事件委托 */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSGRollingLogHitSignature, const FSGRollingLogHitInfo&, HitInfo);
-
-/** 滚木销毁事件委托 */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSGRollingLogDestroyedSignature, ASG_RollingLog*, DestroyedLog);
 
 /**
  * @brief 滚木Actor类
  * 
  * @details
- * **功能说明：**
- * - 流木计生成的滚动木桩
- * - 沿指定方向滚动
- * - 击中敌人时造成伤害并击退
- * - 击中一个目标后破碎销毁
+ * **组件结构：**
+ * - MeshComponent（根组件）：启用物理模拟，真实滚动
+ * - CollisionCapsule（附着）：仅用于 Overlap 检测敌方单位
  * 
- * **详细流程：**
- * 1. 由 SG_StrategyEffect_RollingLog 生成
- * 2. 沿指定方向滚动
- * 3. 检测与敌方单位的碰撞
- * 4. 击中时应用伤害和击退效果
- * 5. 击中后播放破碎特效并销毁
- * 
- * **注意事项：**
- * - 只击中敌方单位
- * - 击中一个目标后立即破碎
- * - 超出范围或超时后自动销毁
+ * **使用说明：**
+ * - 在蓝图中可以直接调整 CollisionCapsule 的变换（位置、旋转、缩放）
+ * - 胶囊体尺寸直接使用组件本身设置，无需额外配置
+ * - 击中敌人后立即破碎
  */
 UCLASS()
 class SGUO_API ASG_RollingLog : public AActor
@@ -91,157 +73,171 @@ protected:
 public:
     // ==================== 事件委托 ====================
 
-    /** 击中目标事件 */
     UPROPERTY(BlueprintAssignable, Category = "Rolling Log Events", meta = (DisplayName = "击中目标事件"))
     FSGRollingLogHitSignature OnLogHitTarget;
 
-    /** 滚木销毁事件 */
     UPROPERTY(BlueprintAssignable, Category = "Rolling Log Events", meta = (DisplayName = "滚木销毁事件"))
     FSGRollingLogDestroyedSignature OnLogDestroyed;
 
     // ==================== 组件 ====================
 
     /**
-     * @brief 场景根组件
-     */
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (DisplayName = "场景根"))
-    TObjectPtr<USceneComponent> SceneRoot;
-
-    /**
-     * @brief 碰撞胶囊体组件
-     * @details 用于检测与单位的碰撞，横向放置模拟滚木形状
-     */
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (DisplayName = "碰撞胶囊体"))
-    TObjectPtr<UCapsuleComponent> CollisionCapsule;
-
-    /**
-     * @brief 网格体组件
-     * @details 显示滚木的视觉效果
+     * @brief 网格体组件（根组件）
+     * @details 
+     * - 作为根组件，启用物理模拟
+     * - 显示木桩外观并进行物理滚动
      */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (DisplayName = "网格体"))
     TObjectPtr<UStaticMeshComponent> MeshComponent;
 
-    // ==================== 滚动配置 ====================
+    /**
+     * @brief 碰撞胶囊体组件
+     * @details 
+     * - 🔧 修改 - 可在蓝图视口中自由调整变换
+     * - 仅用于 Overlap 检测敌方单位
+     * - 尺寸直接使用组件本身设置
+     */
+    UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = "Components", meta = (DisplayName = "检测胶囊体"))
+    TObjectPtr<UCapsuleComponent> CollisionCapsule;
+
+    // ==================== 物理配置 ====================
 
     /**
-     * @brief 滚动速度（厘米/秒）
+     * @brief 是否启用物理滚动
      */
-    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Rolling Config", meta = (DisplayName = "滚动速度", ClampMin = "100.0", UIMin = "100.0", UIMax = "3000.0"))
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Physics Config", meta = (DisplayName = "启用物理滚动"))
+    bool bEnablePhysicsRolling = true;
+
+    /**
+     * @brief 初始滚动速度（厘米/秒）
+     */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Physics Config", meta = (DisplayName = "初始滚动速度", ClampMin = "0.0", UIMin = "0.0", UIMax = "5000.0"))
+    float InitialRollSpeed = 1500.0f;
+
+    /**
+     * @brief 初始角速度（度/秒）
+     */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Physics Config", meta = (DisplayName = "初始角速度", ClampMin = "0.0", UIMin = "0.0", UIMax = "1080.0"))
+    float InitialAngularSpeed = 400.0f;
+
+    /**
+     * @brief 滚木质量（千克）
+     */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Physics Config", meta = (DisplayName = "滚木质量", ClampMin = "1.0", UIMin = "1.0", UIMax = "500.0"))
+    float LogMass = 50.0f;
+
+    /**
+     * @brief 线性阻尼
+     */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Physics Config", meta = (DisplayName = "线性阻尼", ClampMin = "0.0", UIMin = "0.0", UIMax = "5.0"))
+    float LinearDamping = 0.2f;
+
+    /**
+     * @brief 角阻尼
+     */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Physics Config", meta = (DisplayName = "角阻尼", ClampMin = "0.0", UIMin = "0.0", UIMax = "5.0"))
+    float AngularDamping = 0.1f;
+
+    /**
+     * @brief 最小速度阈值
+     */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Physics Config", meta = (DisplayName = "最小速度阈值", ClampMin = "0.0", UIMin = "0.0", UIMax = "200.0"))
+    float MinVelocityThreshold = 30.0f;
+
+    /**
+     * @brief 物理预热时间（秒）
+     */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Physics Config", meta = (DisplayName = "物理预热时间", ClampMin = "0.1", UIMin = "0.1", UIMax = "2.0"))
+    float PhysicsWarmupDuration = 0.5f;
+
+    // ==================== 滚动配置（非物理模式）====================
+
+    /**
+     * @brief 滚动速度（厘米/秒）- 非物理模式
+     */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Rolling Config", meta = (DisplayName = "滚动速度", ClampMin = "100.0", UIMin = "100.0", UIMax = "3000.0", EditCondition = "!bEnablePhysicsRolling"))
     float RollSpeed = 800.0f;
 
     /**
-     * @brief 滚动旋转速度（度/秒）
-     * @details 滚木视觉上的旋转速度
+     * @brief 旋转速度（度/秒）- 非物理模式
      */
-    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Rolling Config", meta = (DisplayName = "旋转速度", ClampMin = "0.0", UIMin = "0.0", UIMax = "1080.0"))
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Rolling Config", meta = (DisplayName = "旋转速度", ClampMin = "0.0", UIMin = "0.0", UIMax = "1080.0", EditCondition = "!bEnablePhysicsRolling"))
     float RotationSpeed = 360.0f;
 
     /**
      * @brief 最大滚动距离（厘米）
-     * @details 超过此距离后自动销毁
      */
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Rolling Config", meta = (DisplayName = "最大滚动距离", ClampMin = "100.0", UIMin = "100.0", UIMax = "10000.0"))
     float MaxRollDistance = 3000.0f;
 
     /**
      * @brief 生存时间（秒）
-     * @details 超过此时间后自动销毁
      */
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Rolling Config", meta = (DisplayName = "生存时间", ClampMin = "1.0", UIMin = "1.0", UIMax = "30.0"))
-    float LogLifeSpan = 10.0f;  // 🔧 修改 - 重命名避免与 AActor::LifeSpan 冲突
+    float LogLifeSpan = 10.0f;
 
     // ==================== 伤害配置 ====================
 
-    /**
-     * @brief 伤害值
-     */
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Damage Config", meta = (DisplayName = "伤害值", ClampMin = "0.0", UIMin = "0.0"))
     float DamageAmount = 100.0f;
 
-    /**
-     * @brief 伤害效果类
-     */
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Damage Config", meta = (DisplayName = "伤害效果"))
     TSubclassOf<UGameplayEffect> DamageEffectClass;
 
     // ==================== 击退配置 ====================
 
-    /**
-     * @brief 击退距离（厘米）
-     */
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Knockback Config", meta = (DisplayName = "击退距离", ClampMin = "0.0", UIMin = "0.0", UIMax = "1000.0"))
     float KnockbackDistance = 300.0f;
 
-    /**
-     * @brief 击退持续时间（秒）
-     * @details 击退效果的持续时间
-     */
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Knockback Config", meta = (DisplayName = "击退持续时间", ClampMin = "0.1", UIMin = "0.1", UIMax = "2.0"))
     float KnockbackDuration = 0.3f;
 
     /**
-     * @brief 击退曲线
-     * @details 控制击退速度随时间的变化，如果为空则使用线性插值
+     * @brief 击退向上分量
+     * @details 击退时添加的垂直速度，让目标被弹起
      */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Knockback Config", meta = (DisplayName = "击退向上分量", ClampMin = "0.0", UIMin = "0.0", UIMax = "500.0"))
+    float KnockbackUpwardForce = 150.0f;
+
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Knockback Config", meta = (DisplayName = "击退曲线"))
     TObjectPtr<UCurveFloat> KnockbackCurve;
 
     // ==================== 视觉效果配置 ====================
-    // 🔧 修改 - 使用原始指针而非 TObjectPtr，避免 Niagara 类型问题
 
-    /**
-     * @brief 破碎特效
-     */
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Visual Effects", meta = (DisplayName = "破碎粒子特效"))
     UNiagaraSystem* BreakParticleSystem;
 
-    /**
-     * @brief 滚动尘土特效
-     */
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Visual Effects", meta = (DisplayName = "滚动尘土特效"))
     UNiagaraSystem* RollDustParticleSystem;
 
-    /**
-     * @brief 破碎音效
-     */
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Visual Effects", meta = (DisplayName = "破碎音效"))
     USoundBase* BreakSound;
 
-    /**
-     * @brief 滚动音效
-     */
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Visual Effects", meta = (DisplayName = "滚动音效"))
     USoundBase* RollSound;
 
     // ==================== 运行时数据 ====================
 
-    /**
-     * @brief 攻击者的能力系统组件
-     */
     UPROPERTY(Transient, BlueprintReadOnly, Category = "Runtime", meta = (DisplayName = "攻击者ASC"))
-    UAbilitySystemComponent* SourceASC;  // 🔧 修改 - 使用原始指针并重命名
+    UAbilitySystemComponent* SourceASC;
 
-    /**
-     * @brief 攻击者的阵营标签
-     */
     UPROPERTY(Transient, BlueprintReadOnly, Category = "Runtime", meta = (DisplayName = "攻击者阵营"))
-    FGameplayTag SourceFactionTag;  // 🔧 修改 - 重命名
+    FGameplayTag SourceFactionTag;
+
+    // ==================== 调试配置 ====================
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Debug", meta = (DisplayName = "显示检测胶囊体"))
+    bool bShowDetectionCapsule = false;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Debug", meta = (DisplayName = "显示速度信息"))
+    bool bShowVelocityDebug = false;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Debug", meta = (DisplayName = "显示滚动方向"))
+    bool bShowRollDirection = false;
 
 public:
-    // ==================== 初始化接口 ====================
+    // ==================== 公共接口 ====================
 
-    /**
-     * @brief 初始化滚木
-     * @param InSourceASC 攻击者 ASC
-     * @param InFactionTag 攻击者阵营
-     * @param InRollDirection 滚动方向（世界空间）
-     * 
-     * @details
-     * **功能说明：**
-     * - 设置滚木的攻击者信息
-     * - 设置滚动方向
-     * - 初始化移动参数
-     */
     UFUNCTION(BlueprintCallable, Category = "Rolling Log", meta = (DisplayName = "初始化滚木"))
     void InitializeRollingLog(
         UAbilitySystemComponent* InSourceASC,
@@ -249,37 +245,28 @@ public:
         FVector InRollDirection
     );
 
-    /**
-     * @brief 设置滚动方向
-     * @param NewDirection 新的滚动方向
-     */
     UFUNCTION(BlueprintCallable, Category = "Rolling Log", meta = (DisplayName = "设置滚动方向"))
     void SetRollDirection(FVector NewDirection);
 
-    /**
-     * @brief 获取滚动方向
-     * @return 当前滚动方向
-     */
     UFUNCTION(BlueprintPure, Category = "Rolling Log", meta = (DisplayName = "获取滚动方向"))
     FVector GetRollDirection() const { return RollDirection; }
 
-    /**
-     * @brief 获取已滚动距离
-     * @return 已滚动的距离
-     */
     UFUNCTION(BlueprintPure, Category = "Rolling Log", meta = (DisplayName = "获取已滚动距离"))
     float GetRolledDistance() const { return RolledDistance; }
 
-    /**
-     * @brief 手动销毁滚木（播放破碎效果）
-     */
+    UFUNCTION(BlueprintPure, Category = "Rolling Log", meta = (DisplayName = "获取当前速度"))
+    FVector GetCurrentVelocity() const;
+
+    UFUNCTION(BlueprintPure, Category = "Rolling Log", meta = (DisplayName = "获取当前速度大小"))
+    float GetCurrentSpeed() const;
+
     UFUNCTION(BlueprintCallable, Category = "Rolling Log", meta = (DisplayName = "破碎销毁"))
     void BreakAndDestroy();
 
 protected:
     // ==================== 内部状态 ====================
 
-    /** 滚动方向（归一化） */
+    /** 滚动方向（世界空间，归一化） */
     FVector RollDirection = FVector::ForwardVector;
 
     /** 起始位置 */
@@ -297,32 +284,24 @@ protected:
     /** 是否正在销毁 */
     bool bIsDestroying = false;
 
-    /** 滚动尘土特效组件 */
+    /** 物理预热计时器 */
+    float PhysicsWarmupTimer = 0.0f;
+
     UPROPERTY()
     TObjectPtr<UNiagaraComponent> DustEffectComponent;
 
-    /** 滚动音效组件 */
     UPROPERTY()
     TObjectPtr<UAudioComponent> RollAudioComponent;
 
 protected:
     // ==================== 内部函数 ====================
 
-    /**
-     * @brief 更新滚动位置
-     * @param DeltaTime 帧间隔
-     */
+    void SetupPhysics();
+    void ApplyInitialVelocity();
+    void UpdatePhysicsRolling(float DeltaTime);
     void UpdateRolling(float DeltaTime);
-
-    /**
-     * @brief 更新视觉旋转
-     * @param DeltaTime 帧间隔
-     */
     void UpdateVisualRotation(float DeltaTime);
 
-    /**
-     * @brief 碰撞检测回调
-     */
     UFUNCTION()
     void OnCapsuleOverlap(
         UPrimitiveComponent* OverlappedComponent,
@@ -333,59 +312,23 @@ protected:
         const FHitResult& SweepResult
     );
 
-    /**
-     * @brief 处理击中目标
-     * @param HitActor 被击中的 Actor
-     * @param HitLocation 击中位置
-     */
     void HandleHitTarget(AActor* HitActor, const FVector& HitLocation);
-
-    /**
-     * @brief 应用伤害到目标
-     * @param Target 目标 Actor
-     */
-    void ApplyDamageToTarget(AActor* Target);
-
-    /**
-     * @brief 应用击退效果
-     * @param Target 目标 Actor
-     * @param KnockbackDir 击退方向
-     */
+    bool ApplyDamageToTarget(AActor* Target);
     void ApplyKnockbackToTarget(AActor* Target, const FVector& KnockbackDir);
-
-    /**
-     * @brief 播放破碎特效
-     */
     void PlayBreakEffects();
-
-    /**
-     * @brief 启动滚动特效
-     */
     void StartRollingEffects();
-
-    /**
-     * @brief 停止滚动特效
-     */
     void StopRollingEffects();
+    void DrawDebugInfo();
 
 public:
     // ==================== 蓝图事件 ====================
 
-    /**
-     * @brief 击中目标蓝图事件
-     */
     UFUNCTION(BlueprintImplementableEvent, Category = "Rolling Log", meta = (DisplayName = "On Hit Target (BP)"))
     void K2_OnHitTarget(const FSGRollingLogHitInfo& HitInfo);
 
-    /**
-     * @brief 滚木破碎蓝图事件
-     */
     UFUNCTION(BlueprintImplementableEvent, Category = "Rolling Log", meta = (DisplayName = "On Log Break (BP)"))
     void K2_OnLogBreak(FVector BreakLocation);
 
-    /**
-     * @brief 滚木超出范围蓝图事件
-     */
     UFUNCTION(BlueprintImplementableEvent, Category = "Rolling Log", meta = (DisplayName = "On Log Out Of Range (BP)"))
     void K2_OnLogOutOfRange();
 };

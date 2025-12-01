@@ -18,6 +18,7 @@
 #include "Kismet/GameplayStatics.h"
 // ✨ 新增 - 计谋效果基类
 #include "Strategies/SG_StrategyEffectBase.h"
+#include "Strategies/SG_StrategyEffect_RollingLog.h"  // ✨ 新增
 
 ASG_PlayerController::ASG_PlayerController()
 {
@@ -929,4 +930,70 @@ FRotator ASG_PlayerController::CalculateUnitSpawnRotation(const FVector& UnitLoc
 	}
 	
 	return FRotator(0.0f, 0.0f, 0.0f);
+}
+
+
+// ========== ✨ 新增 - 计谋方向控制实现 ==========
+
+void ASG_PlayerController::CycleStrategyDirection()
+{
+	// 检查是否在计谋目标选择模式
+	if (CurrentPlacementMode != ESGPlacementMode::StrategyTarget)
+	{
+		return;
+	}
+
+	// 检查是否有活跃的计谋效果
+	if (!ActiveStrategyEffect)
+	{
+		return;
+	}
+
+	// 检查是否是流木计效果
+	ASG_StrategyEffect_RollingLog* RollingLogEffect = Cast<ASG_StrategyEffect_RollingLog>(ActiveStrategyEffect);
+	if (RollingLogEffect)
+	{
+		// 切换方向
+		RollingLogEffect->CycleRollDirection();
+        
+		UE_LOG(LogSGGameplay, Log, TEXT("流木计方向切换：%s"), 
+			RollingLogEffect->CurrentRollDirectionType == ESGRollingLogDirection::Left ? TEXT("向左") :
+			RollingLogEffect->CurrentRollDirectionType == ESGRollingLogDirection::Right ? TEXT("向右") :
+			RollingLogEffect->CurrentRollDirectionType == ESGRollingLogDirection::Forward ? TEXT("向前") : TEXT("自定义"));
+	}
+}
+
+void ASG_PlayerController::RotateStrategyDirection(float DeltaYaw)
+{
+	// 检查是否在计谋目标选择模式
+	if (CurrentPlacementMode != ESGPlacementMode::StrategyTarget)
+	{
+		return;
+	}
+
+	// 检查是否有活跃的计谋效果
+	if (!ActiveStrategyEffect)
+	{
+		return;
+	}
+
+	// 检查是否是流木计效果
+	ASG_StrategyEffect_RollingLog* RollingLogEffect = Cast<ASG_StrategyEffect_RollingLog>(ActiveStrategyEffect);
+	if (RollingLogEffect)
+	{
+		// 旋转方向
+		RollingLogEffect->RotateRollDirection(DeltaYaw);
+	}
+}
+
+void ASG_PlayerController::OnDirectionCycleInput()
+{
+	UE_LOG(LogTemp, Log, TEXT("🔄 收到方向切换输入"));
+	CycleStrategyDirection();
+}
+
+void ASG_PlayerController::OnDirectionRotateInput(float DeltaYaw)
+{
+	UE_LOG(LogTemp, Verbose, TEXT("🔄 收到方向旋转输入：%.1f"), DeltaYaw);
+	RotateStrategyDirection(DeltaYaw);
 }

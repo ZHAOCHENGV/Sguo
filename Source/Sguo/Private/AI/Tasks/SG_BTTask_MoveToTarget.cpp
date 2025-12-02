@@ -16,6 +16,7 @@
 #include "Navigation/PathFollowingComponent.h"
 #include "Debug/SG_LogCategories.h"
 #include "Components/BoxComponent.h"  // ✨ 新增
+#include "Kismet/KismetMathLibrary.h"
 
 /**
  * @brief 构造函数
@@ -42,185 +43,198 @@ USG_BTTask_MoveToTarget::USG_BTTask_MoveToTarget()
  * @param NodeMemory 节点内存
  * @return 任务执行结果
  * @details
- * 功能说明：
- * - 🔧 修改：移动到主城的攻击检测盒位置
+ * 🔧 核心修改：
+ * - 开始移动时重置移动计时器
+ * - 设置目标状态为 Moving
  */
 EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
 {
-	// ========== 步骤1-5：获取基础对象（保持不变）==========
-	AAIController* AIController = OwnerComp.GetAIOwner();
-	if (!AIController)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("❌ 移动到目标任务：AI Controller 无效"));
-		return EBTNodeResult::Failed;
-	}
-	
-	ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
-	if (!ControlledUnit)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("❌ 移动到目标任务：控制的单位无效"));
-		return EBTNodeResult::Failed;
-	}
-	
-	UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
-	if (!BlackboardComp)
-	{
-		UE_LOG(LogSGGameplay, Error, TEXT("❌ 移动到目标任务：黑板组件无效"));
-		return EBTNodeResult::Failed;
-	}
-	
-	AActor* Target = Cast<AActor>(BlackboardComp->GetValueAsObject(TargetKey.SelectedKeyName));
-	if (!Target)
-	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ 移动到目标任务：目标无效"));
-		return EBTNodeResult::Failed;
-	}
-	
-	ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(Target);
-	bool bIsTargetMainCity = (TargetMainCity != nullptr);
-	
-	// ========== 步骤6：计算实际距离 ==========
-	FVector UnitLocation = ControlledUnit->GetActorLocation();
-	float AttackRange = ControlledUnit->GetAttackRangeForAI();
-	float ActualDistance = 0.0f;
-	
-	// 用于移动的目标位置
-	FVector MoveTargetLocation;
-	
-	if (bIsTargetMainCity && TargetMainCity->GetAttackDetectionBox())
-	{
-		// 主城：计算到检测盒表面的实际距离
-		UBoxComponent* DetectionBox = TargetMainCity->GetAttackDetectionBox();
-		FVector BoxCenter = DetectionBox->GetComponentLocation();
-		FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
-		float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
-		
-		float DistanceToCenter = FVector::Dist(UnitLocation, BoxCenter);
-		ActualDistance = FMath::Max(0.0f, DistanceToCenter - BoxRadius);
-		
-		// 移动目标位置 = 主城地面位置（投影到导航网格）
-		MoveTargetLocation = TargetMainCity->GetActorLocation();
-		
-		// 投影到导航网格
-		FNavLocation NavLocation;
-		UNavigationSystemV1* NavSys = UNavigationSystemV1::GetCurrent(GetWorld());
-		if (NavSys && NavSys->ProjectPointToNavigation(MoveTargetLocation, NavLocation, FVector(500.0f, 500.0f, 1000.0f)))
-		{
-			MoveTargetLocation = NavLocation.Location;
-		}
-		
-		UE_LOG(LogSGGameplay, Log, TEXT("  主城目标距离计算："));
-		UE_LOG(LogSGGameplay, Log, TEXT("    单位位置：%s"), *UnitLocation.ToString());
-		UE_LOG(LogSGGameplay, Log, TEXT("    检测盒中心：%s"), *BoxCenter.ToString());
-		UE_LOG(LogSGGameplay, Log, TEXT("    检测盒半径：%.2f"), BoxRadius);
-		UE_LOG(LogSGGameplay, Log, TEXT("    到中心距离：%.2f"), DistanceToCenter);
-		UE_LOG(LogSGGameplay, Log, TEXT("    到表面距离：%.2f"), ActualDistance);
-		UE_LOG(LogSGGameplay, Log, TEXT("    攻击范围：%.2f"), AttackRange);
-		UE_LOG(LogSGGameplay, Log, TEXT("    移动目标位置：%s"), *MoveTargetLocation.ToString());
-	}
-	else
-	{
-		// 普通单位：直接计算距离
-		MoveTargetLocation = Target->GetActorLocation();
-		ActualDistance = FVector::Dist(UnitLocation, MoveTargetLocation);
-	}
-	
-	// ========== 步骤7：检查是否已在攻击范围内 ==========
-	if (ActualDistance <= AttackRange)
-	{
-		UE_LOG(LogSGGameplay, Log, TEXT("✓ 移动到目标任务：已在攻击范围内"));
-		UE_LOG(LogSGGameplay, Log, TEXT("  实际距离：%.2f / 攻击范围：%.2f"), ActualDistance, AttackRange);
-		
-		// ❌ 删除 - 不再在这里停止移动
-		// AIController->StopMovement();
-		
-		return EBTNodeResult::Succeeded;
-	}
-	
-	// ========== 步骤8：计算停止距离 ==========
-	float StopDistance = AcceptableRadius;
-	
-	if (StopDistance < 0.0f)
-	{
-		if (bIsTargetMainCity)
-		{
-			// 主城停止距离 = 攻击范围
-			StopDistance = AttackRange;
-			UE_LOG(LogSGGameplay, Log, TEXT("  主城停止距离：%.2f（= 攻击范围）"), StopDistance);
-		}
-		else
-		{
-			// 普通单位：攻击范围 - 100（提前一点停止）
-			StopDistance = FMath::Max(AttackRange - 100.0f, 50.0f);
-		}
-	}
-	
-	// ========== 步骤9：移动到目标位置 ==========
-	UE_LOG(LogSGGameplay, Log, TEXT("  开始移动到目标："));
-	UE_LOG(LogSGGameplay, Log, TEXT("    当前位置：%s"), *UnitLocation.ToString());
-	UE_LOG(LogSGGameplay, Log, TEXT("    目标位置：%s"), *MoveTargetLocation.ToString());
-	UE_LOG(LogSGGameplay, Log, TEXT("    停止距离：%.2f"), StopDistance);
-	UE_LOG(LogSGGameplay, Log, TEXT("    当前距离：%.2f"), ActualDistance);
-	
-	EPathFollowingRequestResult::Type Result = AIController->MoveToLocation(
-		MoveTargetLocation,
-		StopDistance,
-		true,   // 停止时到达
-		true,   // 使用寻路
-		true,   // 可以跨越
-		true,   // 允许部分路径
-		nullptr // 过滤器类
-	);
-	
-	// ========== 步骤10：检查移动请求结果 ==========
-	if (Result == EPathFollowingRequestResult::RequestSuccessful)
-	{
-		const TCHAR* TargetTypeStr = bIsTargetMainCity ? TEXT("主城") : TEXT("单位");
-		
-		UE_LOG(LogSGGameplay, Log, TEXT("✓ 移动到目标任务：移动请求成功"));
-		UE_LOG(LogSGGameplay, Log, TEXT("  目标：%s（%s）"), *Target->GetName(), TargetTypeStr);
-		
-		return EBTNodeResult::InProgress;
-	}
-	else if (Result == EPathFollowingRequestResult::AlreadyAtGoal)
-	{
-		UE_LOG(LogSGGameplay, Log, TEXT("✓ 移动到目标任务：已在目标位置"));
-		return EBTNodeResult::Succeeded;
-	}
-	else
-	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ 移动到目标任务：移动请求失败"));
-		UE_LOG(LogSGGameplay, Warning, TEXT("  目标：%s"), *Target->GetName());
-		UE_LOG(LogSGGameplay, Warning, TEXT("  移动目标位置：%s"), *MoveTargetLocation.ToString());
-		UE_LOG(LogSGGameplay, Warning, TEXT("  单位位置：%s"), *UnitLocation.ToString());
-		UE_LOG(LogSGGameplay, Warning, TEXT("  停止距离：%.2f"), StopDistance);
-		UE_LOG(LogSGGameplay, Warning, TEXT("  实际距离：%.2f"), ActualDistance);
-		
-		return EBTNodeResult::Failed;
-	}	
+	   AAIController* AIController = OwnerComp.GetAIOwner();
+    if (!AIController)
+    {
+        return EBTNodeResult::Failed;
+    }
+    
+    ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
+    if (!ControlledUnit)
+    {
+        return EBTNodeResult::Failed;
+    }
+    
+    UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
+    if (!BlackboardComp)
+    {
+        return EBTNodeResult::Failed;
+    }
+    
+    AActor* Target = Cast<AActor>(BlackboardComp->GetValueAsObject(TargetKey.SelectedKeyName));
+    if (!Target)
+    {
+        return EBTNodeResult::Failed;
+    }
+
+    // ✨ 新增 - 获取预约的槽位位置
+    FVector MoveDestination = Target->GetActorLocation();
+    float AcceptanceRadius = 50.0f;
+
+    if (UWorld* World = GetWorld())
+    {
+        USG_CombatTargetManager* CombatManager = World->GetSubsystem<USG_CombatTargetManager>();
+        if (CombatManager)
+        {
+            FVector SlotPosition;
+            if (CombatManager->GetReservedSlotPosition(ControlledUnit, Target, SlotPosition))
+            {
+                // 使用槽位位置作为目的地
+                MoveDestination = SlotPosition;
+                AcceptanceRadius = 30.0f;  // 槽位位置需要更精确
+
+                UE_LOG(LogSGGameplay, Verbose, TEXT("%s 移动到槽位位置：%s"),
+                    *ControlledUnit->GetName(), *SlotPosition.ToString());
+            }
+        }
+    }
+
+    // 检查是否已经在目的地附近
+    float CurrentDistance = FVector::Dist(ControlledUnit->GetActorLocation(), MoveDestination);
+    if (CurrentDistance <= AcceptanceRadius + 20.0f)
+    {
+        return EBTNodeResult::Succeeded;
+    }
+
+    // 执行移动
+    EPathFollowingRequestResult::Type Result = AIController->MoveToLocation(
+        MoveDestination,
+        AcceptanceRadius,
+        true,   // bStopOnOverlap
+        true,   // bUsePathfinding
+        true,   // bProjectDestinationToNavigation
+        true,   // bCanStrafe
+        nullptr
+    );
+
+    if (Result == EPathFollowingRequestResult::RequestSuccessful)
+    {
+        return EBTNodeResult::InProgress;
+    }
+    else if (Result == EPathFollowingRequestResult::AlreadyAtGoal)
+    {
+        return EBTNodeResult::Succeeded;
+    }
+    else
+    {
+        // 移动失败，可能需要切换目标
+        UE_LOG(LogSGGameplay, Warning, TEXT("%s 移动到槽位失败"), *ControlledUnit->GetName());
+        return EBTNodeResult::Failed;
+    }
 }
 
+/**
+ * @brief Tick 更新
+ * @param OwnerComp 行为树组件
+ * @param NodeMemory 节点内存
+ * @param DeltaSeconds 帧间隔
+ * @details
+ * 🔧 核心修改：
+ * - 检测是否卡住
+ * - 卡住时标记目标不可达，切换目标
+ */
 void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds)
 {
-	Super::TickTask(OwnerComp, NodeMemory, DeltaSeconds);
+	  Super::TickTask(OwnerComp, NodeMemory, DeltaSeconds);
 
-	AAIController* AIController = OwnerComp.GetAIOwner();
-	if (!AIController)
-	{
-		FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
-		return;
-	}
+    AAIController* AIController = OwnerComp.GetAIOwner();
+    if (!AIController)
+    {
+        FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
+        return;
+    }
 
-	// 获取当前的移动状态
-	EPathFollowingStatus::Type Status = AIController->GetMoveStatus();
+    // ✨ 新增 - 转换为我们的 AI 控制器
+    ASG_AIControllerBase* SGAIController = Cast<ASG_AIControllerBase>(AIController);
+    
+    ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
+    if (!ControlledUnit)
+    {
+        FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
+        return;
+    }
 
-	// 如果状态是 Idle，说明移动已经结束（可能到达了，也可能被 StopMovement 中断了）
-	if (Status == EPathFollowingStatus::Idle)
-	{
-		// 移动结束，任务完成
-		// 无论是因为到达还是被中断，我们都返回 Succeeded，让行为树进入下一个周期
-		// 如果是因为被中断（发现了新敌人），行为树会在下一个 Tick 重新评估，发现有新目标从而进入攻击状态
-		FinishLatentTask(OwnerComp, EBTNodeResult::Succeeded);
-	}
-	// 注意：如果状态是 Waiting 或 Moving，任务继续保持 InProgress
+    // ✨ 新增 - 检测是否卡住
+    if (SGAIController && SGAIController->IsStuck())
+    {
+        UE_LOG(LogSGGameplay, Warning, TEXT("🚧 %s 被卡住，标记目标不可达并切换目标"),
+            *ControlledUnit->GetName());
+        
+        // 标记当前目标不可达
+        SGAIController->MarkCurrentTargetUnreachable();
+        
+        // 停止当前移动
+        AIController->StopMovement();
+        
+        // 查找新的可达目标
+        AActor* NewTarget = SGAIController->FindNearestReachableTarget();
+        if (NewTarget)
+        {
+            SGAIController->SetCurrentTarget(NewTarget);
+            UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 切换到新目标：%s"), *NewTarget->GetName());
+        }
+        else
+        {
+            UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 没有可达目标，继续等待"));
+        }
+        
+        // 任务失败，让行为树重新评估
+        FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
+        return;
+    }
+
+    // ✨ 新增 - 检查是否已进入攻击范围
+    UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
+    if (BlackboardComp)
+    {
+        AActor* Target = Cast<AActor>(BlackboardComp->GetValueAsObject(FName("CurrentTarget")));
+        if (Target)
+        {
+            float AttackRange = ControlledUnit->GetAttackRangeForAI();
+            float Distance = FVector::Dist(ControlledUnit->GetActorLocation(), Target->GetActorLocation());
+            
+            // 主城特殊处理
+            ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(Target);
+            if (TargetMainCity && TargetMainCity->GetAttackDetectionBox())
+            {
+                UBoxComponent* DetectionBox = TargetMainCity->GetAttackDetectionBox();
+                FVector BoxCenter = DetectionBox->GetComponentLocation();
+                FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
+                float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
+                Distance = FMath::Max(0.0f, FVector::Dist(ControlledUnit->GetActorLocation(), BoxCenter) - BoxRadius);
+            }
+            
+            // 如果已经在攻击范围内
+            if (Distance <= AttackRange)
+            {
+                // 设置为战斗状态
+                if (SGAIController)
+                {
+                    SGAIController->SetTargetEngagementState(ESGTargetEngagementState::Engaged);
+                }
+                
+                // 停止移动
+                AIController->StopMovement();
+                
+                // 任务成功
+                FinishLatentTask(OwnerComp, EBTNodeResult::Succeeded);
+                return;
+            }
+        }
+    }
+
+    // 获取当前的移动状态
+    EPathFollowingStatus::Type Status = AIController->GetMoveStatus();
+
+    // 如果状态是 Idle，说明移动已经结束
+    if (Status == EPathFollowingStatus::Idle)
+    {
+        FinishLatentTask(OwnerComp, EBTNodeResult::Succeeded);
+    }
 }

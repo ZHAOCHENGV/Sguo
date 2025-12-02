@@ -341,4 +341,19 @@ public:
 
     UFUNCTION(BlueprintPure, Category = "AI Config", meta = (DisplayName = "是否有自定义行为树"))
     bool HasCustomBehaviorTree() const { return UnitBehaviorTree != nullptr; }
+
+public:
+    // ✨ 新增 - 开始攻击目标时调用
+    UFUNCTION(BlueprintCallable, Category = "Combat")
+    void OnStartAttackingTarget(AActor* Target);
+
+    // ✨ 新增 - 停止攻击目标时调用
+    UFUNCTION(BlueprintCallable, Category = "Combat")
+    void OnStopAttackingTarget(AActor* Target);
+
+private:
+    // ✨ 新增 - 当前正在攻击的目标（用于注销）
+    UPROPERTY()
+    TWeakObjectPtr<AActor> CurrentAttackingTarget;
+
 };

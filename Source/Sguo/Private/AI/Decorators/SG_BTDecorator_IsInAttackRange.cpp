@@ -41,109 +41,126 @@ USG_BTDecorator_IsInAttackRange::USG_BTDecorator_IsInAttackRange()
 bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) const
 {
 	
-	// ========== 步骤1-5：获取基础信息（保持不变）==========
-	AAIController* AIController = OwnerComp.GetAIOwner();
-	if (!AIController) return false;
-	
-	ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
-	if (!ControlledUnit) return false;
-	
-	UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
-	if (!BlackboardComp) return false;
-	
-	FName KeyName = TargetKey.SelectedKeyName;
-	if (KeyName.IsNone()) return false;
-	
-	AActor* Target = Cast<AActor>(BlackboardComp->GetValueAsObject(KeyName));
-	
-	
-	// ✨ 新增 - 步骤2：检查目标是否有效（存在且存活）
-	if (!Target)
-	{
-		UE_LOG(LogSGGameplay, Verbose, TEXT("  IsInAttackRange: 目标为空，返回 false"));
-		return false;
-	}
+  // ========== 步骤1-5：获取基础信息 ==========
+    AAIController* AIController = OwnerComp.GetAIOwner();
+    if (!AIController) return false;
     
-	// ✨ 新增 - 检查单位是否已死亡
-	if (ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(Target))
-	{
-		if (TargetUnit->bIsDead)
-		{
-			UE_LOG(LogSGGameplay, Verbose, TEXT("  IsInAttackRange: 目标单位已死亡，返回 false"));
-			return false;
-		}
-		// ✨ 新增 - 检查是否可被选为目标
-		if (!TargetUnit->CanBeTargeted())
-		{
-			UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位不可被选中：%s"), *TargetUnit->GetName());
-			return false;
-		}
-	}
-
-	
-	// ✨ 新增 - 检查主城是否已摧毁
-	if (ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(Target))
-	{
-		if (!TargetMainCity->IsAlive())
-		{
-			UE_LOG(LogSGGameplay, Verbose, TEXT("  IsInAttackRange: 目标主城已摧毁，返回 false"));
-			return false;
-		}
-	}
-	
-	// ========== 步骤6：获取单位位置和攻击范围 ==========
-	FVector UnitLocation = ControlledUnit->GetActorLocation();
-	float AttackRange = ControlledUnit->GetAttackRangeForAI();
-	
-	// ========== 步骤7：计算到目标的实际距离 ==========
-	float ActualDistance = 0.0f;
-	bool bIsMainCity = false;
-	
-	ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(Target);
-	if (MainCity && MainCity->GetAttackDetectionBox())
-	{
-		bIsMainCity = true;
-		
-		UBoxComponent* DetectionBox = MainCity->GetAttackDetectionBox();
-		FVector BoxCenter = DetectionBox->GetComponentLocation();
-		FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
-		
-		float DistanceToCenter = FVector::Dist(UnitLocation, BoxCenter);
-		float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
-		
-		ActualDistance = DistanceToCenter - BoxRadius;
-		
-		if (ActualDistance < 0.0f)
-		{
-			ActualDistance = 0.0f;
-		}
-	}
-	else
-	{
-		ActualDistance = FVector::Dist(UnitLocation, Target->GetActorLocation());
-	}
-	
-	// ========== 步骤8：判断是否在攻击范围内 ==========
-	bool bInRange = ActualDistance <= (AttackRange + DistanceTolerance);
-	
-	// ========== ✨ 新增 - 步骤9：进入攻击范围时立即停止移动 ==========
-	static TMap<ASG_UnitsBase*, bool> LastInRangeStatus;
-	bool bWasInRange = LastInRangeStatus.FindOrAdd(ControlledUnit, false);
-	
-	if (bInRange && !bWasInRange)
-	{
-		// 刚进入攻击范围，立即停止移动
-		AIController->StopMovement();
-		UE_LOG(LogSGGameplay, Warning, TEXT("🛑 %s 进入攻击范围，立即停止移动"), *ControlledUnit->GetName());
-	}
-	
-	LastInRangeStatus[ControlledUnit] = bInRange;
-	
-	// ========== 步骤10：输出详细调试日志 ==========
-	UE_LOG(LogSGGameplay, Log, TEXT("🎯 IsInAttackRange 检查："));
-	UE_LOG(LogSGGameplay, Log, TEXT("  单位：%s"), *ControlledUnit->GetName());
-	UE_LOG(LogSGGameplay, Log, TEXT("  目标：%s%s"), *Target->GetName(), bIsMainCity ? TEXT("（主城）") : TEXT(""));
-	UE_LOG(LogSGGameplay, Log, TEXT("  单位位置：%s"), *UnitLocation.ToString());
+    // ✨ 新增 - 转换为我们的 AI 控制器
+    ASG_AIControllerBase* SGAIController = Cast<ASG_AIControllerBase>(AIController);
+    
+    ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
+    if (!ControlledUnit) return false;
+    
+    UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
+    if (!BlackboardComp) return false;
+    
+    FName KeyName = TargetKey.SelectedKeyName;
+    if (KeyName.IsNone()) return false;
+    
+    AActor* Target = Cast<AActor>(BlackboardComp->GetValueAsObject(KeyName));
+    
+    // 检查目标是否有效
+    if (!Target)
+    {
+        UE_LOG(LogSGGameplay, Verbose, TEXT("  IsInAttackRange: 目标为空，返回 false"));
+        return false;
+    }
+    
+    // 检查单位是否已死亡
+    if (ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(Target))
+    {
+        if (TargetUnit->bIsDead)
+        {
+            UE_LOG(LogSGGameplay, Verbose, TEXT("  IsInAttackRange: 目标单位已死亡，返回 false"));
+            return false;
+        }
+        if (!TargetUnit->CanBeTargeted())
+        {
+            UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位不可被选中：%s"), *TargetUnit->GetName());
+            return false;
+        }
+    }
+    
+    // 检查主城是否已摧毁
+    if (ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(Target))
+    {
+        if (!TargetMainCity->IsAlive())
+        {
+            UE_LOG(LogSGGameplay, Verbose, TEXT("  IsInAttackRange: 目标主城已摧毁，返回 false"));
+            return false;
+        }
+    }
+    
+    // ========== 步骤6：获取单位位置和攻击范围 ==========
+    FVector UnitLocation = ControlledUnit->GetActorLocation();
+    float AttackRange = ControlledUnit->GetAttackRangeForAI();
+    
+    // ========== 步骤7：计算到目标的实际距离 ==========
+    float ActualDistance = 0.0f;
+    bool bIsMainCity = false;
+    
+    ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(Target);
+    if (MainCity && MainCity->GetAttackDetectionBox())
+    {
+        bIsMainCity = true;
+        
+        UBoxComponent* DetectionBox = MainCity->GetAttackDetectionBox();
+        FVector BoxCenter = DetectionBox->GetComponentLocation();
+        FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
+        
+        float DistanceToCenter = FVector::Dist(UnitLocation, BoxCenter);
+        float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
+        
+        ActualDistance = DistanceToCenter - BoxRadius;
+        
+        if (ActualDistance < 0.0f)
+        {
+            ActualDistance = 0.0f;
+        }
+    }
+    else
+    {
+        ActualDistance = FVector::Dist(UnitLocation, Target->GetActorLocation());
+    }
+    
+    // ========== 步骤8：判断是否在攻击范围内 ==========
+    bool bInRange = ActualDistance <= (AttackRange + DistanceTolerance);
+    
+    // ========== ✨ 新增 - 步骤9：更新战斗锁定状态 ==========
+    static TMap<ASG_UnitsBase*, bool> LastInRangeStatus;
+    bool bWasInRange = LastInRangeStatus.FindOrAdd(ControlledUnit, false);
+    
+    if (bInRange && !bWasInRange)
+    {
+        // 刚进入攻击范围
+        AIController->StopMovement();
+        
+        // ✨ 关键：设置为战斗锁定状态
+        if (SGAIController)
+        {
+            SGAIController->SetTargetEngagementState(ESGTargetEngagementState::Engaged);
+        }
+        
+        UE_LOG(LogSGGameplay, Warning, TEXT("🔒 %s 进入攻击范围，锁定目标 %s"),
+            *ControlledUnit->GetName(), *Target->GetName());
+    }
+    else if (!bInRange && bWasInRange)
+    {
+        // 离开攻击范围（通常是目标移动了）
+        // 注意：不改变锁定状态，继续追击当前目标
+        UE_LOG(LogSGGameplay, Verbose, TEXT("  %s 离开攻击范围，继续追击"), *ControlledUnit->GetName());
+    }
+    
+    LastInRangeStatus[ControlledUnit] = bInRange;
+    
+    // ========== 步骤10：输出详细调试日志 ==========
+    UE_LOG(LogSGGameplay, Log, TEXT("🎯 IsInAttackRange 检查："));
+    UE_LOG(LogSGGameplay, Log, TEXT("  单位：%s"), *ControlledUnit->GetName());
+    UE_LOG(LogSGGameplay, Log, TEXT("  目标：%s%s"), *Target->GetName(), bIsMainCity ? TEXT("（主城）") : TEXT(""));
+    UE_LOG(LogSGGameplay, Log, TEXT("  距离：%.2f, 攻击范围：%.2f"), ActualDistance, AttackRange);
+    UE_LOG(LogSGGameplay, Log, TEXT("  结果：%s"), bInRange ? TEXT("✅ 在范围内") : TEXT("❌ 不在范围内"));
+    
+   
 	
 	if (bIsMainCity)
 	{
@@ -164,9 +181,7 @@ bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeCo
 		UE_LOG(LogSGGameplay, Log, TEXT("  距离：%.2f"), ActualDistance);
 	}
 	
-	UE_LOG(LogSGGameplay, Log, TEXT("  单位攻击范围：%.2f"), AttackRange);
-	UE_LOG(LogSGGameplay, Log, TEXT("  容差：%.2f"), DistanceTolerance);
-	UE_LOG(LogSGGameplay, Log, TEXT("  结果：%s"), bInRange ? TEXT("✅ 在范围内") : TEXT("❌ 不在范围内"));
+	
 	
 	return bInRange;
 }

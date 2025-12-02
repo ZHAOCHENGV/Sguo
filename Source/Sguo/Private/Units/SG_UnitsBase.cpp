@@ -18,6 +18,8 @@
 
 #include "DrawDebugHelpers.h"
 #include "AI/SG_AIControllerBase.h"
+#include "AI/SG_CombatTargetManager.h"
+#include "AI/SG_TargetingSubsystem.h"
 
 #include "Data/SG_CharacterCardData.h"
 
@@ -28,6 +30,7 @@ ASG_UnitsBase::ASG_UnitsBase()
 	// 🔧 修改 - 启用 Tick（用于调试可视化）
 	PrimaryActorTick.bCanEverTick = true;
 
+	
 	// 创建 Ability System Component
 	// 为什么在构造函数创建：组件必须在构造时创建
 	AbilitySystemComponent = CreateDefaultSubobject<USG_AbilitySystemComponent>(TEXT("AbilitySystemComponent"));
@@ -39,6 +42,26 @@ ASG_UnitsBase::ASG_UnitsBase()
 	// 创建 Attribute Set
 	// 为什么用 CreateDefaultSubobject：确保在构造时创建，支持网络复制
 	AttributeSet = CreateDefaultSubobject<USG_AttributeSet>(TEXT("AttributeSet"));
+
+	// ========== ✨ 新增 - 导航与避让设置 ==========
+	// 1. 关键：禁止单位动态修改导航网格
+	// 如果为 true，前排单位会在地上"挖洞"，导致后排单位认为路断了而停止移动
+	if (GetCapsuleComponent())
+	{
+		GetCapsuleComponent()->SetCanEverAffectNavigation(false);
+	}
+
+	// 2. 配置移动组件
+	if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+	{
+		// 启用 RVO 避让
+		MoveComp->bUseRVOAvoidance = true;
+		// 修正后的变量名 (UE5)
+		MoveComp->AvoidanceConsiderationRadius = 100.0f;
+		// 随机权重，防止面对面卡死
+		MoveComp->AvoidanceWeight = 0.5f; 
+	}
+
 }
 
 /**
@@ -192,7 +215,19 @@ void ASG_UnitsBase::BeginPlay()
             InitializeCharacter(InitFactionTag, 1.0f, 1.0f, 1.0f);
         }
     }
-    
+
+	// 解决后排单位被前排阻挡而发呆的问题
+	if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+	{
+		
+        
+		// 设置避让权重（0.0-1.0）
+		// 🔧 技巧：使用随机权重，打破对称性，防止两个单位面对面卡住
+		MoveComp->AvoidanceWeight = FMath::FRandRange(0.1f, 0.9f);
+        
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 启用 RVO 避让 (权重: %.2f)"), MoveComp->AvoidanceWeight);
+	}
+	
     // ========== 步骤3：加载攻击技能配置 ==========
     if (bUseDataTable)
     {
@@ -439,7 +474,20 @@ void ASG_UnitsBase::OnDeath_Implementation()
     bIsDead = true;
     
     UE_LOG(LogSGGameplay, Log, TEXT("========== %s 执行死亡逻辑 =========="), *GetName());
-    
+	// ✨ 新增 - 死亡时注销攻击者
+	if (CurrentAttackingTarget.IsValid())
+	{
+		OnStopAttackingTarget(CurrentAttackingTarget.Get());
+	}
+	// ✨ 新增 - 释放所有攻击槽位
+	if (UWorld* World = GetWorld())
+	{
+		USG_CombatTargetManager* CombatManager = World->GetSubsystem<USG_CombatTargetManager>();
+		if (CombatManager)
+		{
+			CombatManager->ReleaseAllSlots(this);
+		}
+	}
     // 步骤0：立即强制停止所有行为
     ForceStopAllActions();
     
@@ -606,8 +654,14 @@ void ASG_UnitsBase::SetTarget(AActor* NewTarget)
 {
 	if (NewTarget != CurrentTarget)
 	{
+		// ✨ 新增 - 停止攻击旧目标
+		if (CurrentTarget)
+		{
+			OnStopAttackingTarget(CurrentTarget);
+		}
+
 		CurrentTarget = NewTarget;
-		
+
 		if (CurrentTarget)
 		{
 			UE_LOG(LogTemp, Log, TEXT("%s 切换目标：%s"), *GetName(), *CurrentTarget->GetName());
@@ -1488,6 +1542,53 @@ bool ASG_UnitsBase::CanBeTargeted() const
 	// 默认返回 true
 	// 普通单位总是可以被选为目标
 	return true;
+}
+
+void ASG_UnitsBase::OnStartAttackingTarget(AActor* Target)
+{
+	if (!Target)
+	{
+		return;
+	}
+
+	// 如果已经在攻击其他目标，先注销
+	if (CurrentAttackingTarget.IsValid() && CurrentAttackingTarget.Get() != Target)
+	{
+		OnStopAttackingTarget(CurrentAttackingTarget.Get());
+	}
+
+	// 注册到目标管理系统
+	if (UWorld* World = GetWorld())
+	{
+		if (USG_TargetingSubsystem* TargetingSystem = World->GetSubsystem<USG_TargetingSubsystem>())
+		{
+			TargetingSystem->RegisterAttacker(this, Target);
+		}
+	}
+
+	CurrentAttackingTarget = Target;
+}
+
+void ASG_UnitsBase::OnStopAttackingTarget(AActor* Target)
+{
+	if (!Target)
+	{
+		return;
+	}
+
+	// 从目标管理系统注销
+	if (UWorld* World = GetWorld())
+	{
+		if (USG_TargetingSubsystem* TargetingSystem = World->GetSubsystem<USG_TargetingSubsystem>())
+		{
+			TargetingSystem->UnregisterAttacker(this, Target);
+		}
+	}
+
+	if (CurrentAttackingTarget.Get() == Target)
+	{
+		CurrentAttackingTarget = nullptr;
+	}
 }
 
 /**

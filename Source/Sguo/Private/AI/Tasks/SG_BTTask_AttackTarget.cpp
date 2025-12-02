@@ -55,6 +55,7 @@ EBTNodeResult::Type USG_BTTask_AttackTarget::ExecuteTask(UBehaviorTreeComponent&
     {
         return EBTNodeResult::Failed;
     }
+
     
     // 获取任务内存
     FSG_BTTaskAttackMemory* Memory = reinterpret_cast<FSG_BTTaskAttackMemory*>(NodeMemory);
@@ -69,6 +70,12 @@ EBTNodeResult::Type USG_BTTask_AttackTarget::ExecuteTask(UBehaviorTreeComponent&
         if (!IsTargetAlive(Target))
         {
             return EBTNodeResult::Failed;
+        }
+        
+        // ✨ 新增 - 注册为攻击者
+        if (Target)
+        {
+            ControlledUnit->OnStartAttackingTarget(Target);
         }
     }
 

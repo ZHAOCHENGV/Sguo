@@ -1262,8 +1262,10 @@ void ASG_Projectile::HandleTargetLost()
 
 /**
  * @brief 处理投射物落地
- * * @details 
+ * 
+ * @details 
  * **功能说明：**
+ * - 🔧 修复：先禁用碰撞，再设置标记，防止竞态条件
  * - 标记已落地
  * - 禁用碰撞（防止后续物理检测消耗）
  * - 禁用 Tick（防止后续逻辑消耗，重大性能优化）
@@ -1273,54 +1275,53 @@ void ASG_Projectile::HandleTargetLost()
  */
 void ASG_Projectile::HandleGroundImpact()
 {
+    UE_LOG(LogSGGameplay, Warning, TEXT("🟤 HandleGroundImpact 被调用"));
+    UE_LOG(LogSGGameplay, Warning, TEXT("  投射物：%s"), *GetName());
+    UE_LOG(LogSGGameplay, Warning, TEXT("  当前 bHasLanded：%s"), bHasLanded ? TEXT("true") : TEXT("false"));
+
     // 防止重复处理
     if (bHasLanded)
     {
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 已经落地过，跳过"));
         return;
+    }
+
+    // 🔧 修复 - 立即禁用碰撞（在设置 bHasLanded 之前）
+    if (CollisionCapsule)
+    {
+        CollisionCapsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        CollisionCapsule->SetGenerateOverlapEvents(false);
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ✓ 已禁用碰撞和重叠事件"));
     }
 
     // 标记已落地
     bHasLanded = true;
-    
-    // 禁用碰撞，防止单位走上去被卡住，或投射物被二次检测
-    if (CollisionCapsule)
-    {
-        CollisionCapsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-    }
+    UE_LOG(LogSGGameplay, Warning, TEXT("  ✓ 设置 bHasLanded = true"));
 
-
-    // 落地后投射物不再移动，完全不需要 Tick，节省 CPU
     SetActorTickEnabled(false);
     
-    // 清零速度
     CurrentVelocity = FVector::ZeroVector;
     
-    // 获取落地位置
     FVector ImpactLocation = GetActorLocation();
-    ImpactLocation.Z = GroundZ;  // 确保在地面高度
+    ImpactLocation.Z = GroundZ;
     
-    UE_LOG(LogSGGameplay, Log, TEXT("投射物落地：%s（飞行进度：%.2f）"), *ImpactLocation.ToString(), FlightProgress);
+    UE_LOG(LogSGGameplay, Warning, TEXT("  落地位置：%s"), *ImpactLocation.ToString());
 
-    // 移除飞行拖尾特效
     RemoveTrailGameplayCue();
-
-    // 执行落地 GameplayCue
     ExecuteGroundImpactGameplayCue(ImpactLocation);
 
-    // 构建落地信息
     FSGProjectileHitInfo GroundHitInfo;
     GroundHitInfo.HitLocation = ImpactLocation;
     GroundHitInfo.HitNormal = FVector::UpVector;
     GroundHitInfo.ProjectileDirection = CurrentVelocity.IsNearlyZero() ? GetActorForwardVector() : CurrentVelocity.GetSafeNormal();
-    GroundHitInfo.ProjectileSpeed = 0.0f;  // 已停止
+    GroundHitInfo.ProjectileSpeed = 0.0f;
 
-    // 调用蓝图事件
     K2_OnGroundImpact(ImpactLocation);
-    // 广播落地事件
     OnProjectileGroundImpact.Broadcast(GroundHitInfo);
 
-    // 🔧 修改：使用配置的落地销毁延迟
     SetLifeSpan(GroundImpactDestroyDelay);
+    
+    UE_LOG(LogSGGameplay, Warning, TEXT("  ✓ 落地处理完成，%.1f秒后销毁"), GroundImpactDestroyDelay);
 }
 
 // ==================== 区域随机点计算函数 ====================
@@ -1513,94 +1514,110 @@ void ASG_Projectile::OnCapsuleHit(
  * - 每个目标只会被添加一次，因此只受一次伤害
  * - 穿透模式：可以击中多个不同目标，每个一次
  * - 非穿透模式：击中第一个目标后停止
+ * 
+ * **注意事项：**
+ * - 🔧 修复：落地后不再对单位造成伤害
  */
 void ASG_Projectile::HandleProjectileImpact(AActor* OtherActor, const FHitResult& Hit)
 {
-  // ========== 前置状态检查（最高优先级） ==========
+      // ✨ 新增 - 所有碰撞事件的入口日志
+    UE_LOG(LogSGGameplay, Warning, TEXT("🔶 HandleProjectileImpact 被调用"));
+    UE_LOG(LogSGGameplay, Warning, TEXT("  投射物：%s"), *GetName());
+    UE_LOG(LogSGGameplay, Warning, TEXT("  碰撞对象：%s"), OtherActor ? *OtherActor->GetName() : TEXT("空"));
+    UE_LOG(LogSGGameplay, Warning, TEXT("  当前状态：bHasLanded=%s, bHasHitTarget=%s, bIsInitialized=%s"),
+        bHasLanded ? TEXT("true") : TEXT("false"),
+        bHasHitTarget ? TEXT("true") : TEXT("false"),
+        bIsInitialized ? TEXT("true") : TEXT("false"));
+
+    // ========== 前置状态检查（最高优先级） ==========
     
-    // 如果未初始化，忽略所有碰撞
-    if (!bIsInitialized)
-    {
-        return;
-    }
-
-    // 如果已命中目标并停止，忽略后续碰撞
-    if (bHasHitTarget)
-    {
-        return;
-    }
-
-    // 如果已落地，忽略后续碰撞
+    // 🔧 修复 - 将 bHasLanded 检查移到最前面
     if (bHasLanded)
     {
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 已落地，忽略此碰撞"));
+        return;
+    }
+    
+    if (!bIsInitialized)
+    {
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 未初始化，忽略此碰撞"));
+        return;
+    }
+  
+    if (bHasHitTarget)
+    {
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 已命中目标，忽略此碰撞"));
         return;
     }
 
     // ========== 基础有效性检查 ==========
     
-    // 忽略空 Actor
     if (!OtherActor)
     {
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 碰撞对象为空，忽略"));
         return;
     }
     
-    // 忽略自己
     if (OtherActor == this)
     {
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 碰撞对象是自己，忽略"));
         return;
     }
     
-    // 忽略所有者和施放者
     if (OtherActor == GetOwner() || OtherActor == GetInstigator())
     {
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 碰撞对象是所有者/施放者，忽略"));
         return;
     }
 
-    // ========== 🔧 关键修复：统一的重复击中检查 ==========
-    // 在任何伤害逻辑之前检查，确保每个目标只处理一次
+    // ========== 重复击中检查 ==========
     if (HitActors.Contains(OtherActor))
     {
-        UE_LOG(LogSGGameplay, Verbose, TEXT("投射物跳过已击中目标：%s"), *OtherActor->GetName());
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 已击中过此目标，忽略"));
         return;
     }
 
     // ========== 友方过滤 ==========
 
-    // 检查是否是单位
     ASG_UnitsBase* OtherUnit = Cast<ASG_UnitsBase>(OtherActor);
     if (OtherUnit)
     {
-        // 忽略友方单位
+        UE_LOG(LogSGGameplay, Warning, TEXT("  碰撞对象是单位：%s"), *OtherUnit->GetName());
+        UE_LOG(LogSGGameplay, Warning, TEXT("    单位阵营：%s"), *OtherUnit->FactionTag.ToString());
+        UE_LOG(LogSGGameplay, Warning, TEXT("    投射物阵营：%s"), *InstigatorFactionTag.ToString());
+        UE_LOG(LogSGGameplay, Warning, TEXT("    单位是否死亡：%s"), OtherUnit->bIsDead ? TEXT("是") : TEXT("否"));
+        
         if (OtherUnit->FactionTag == InstigatorFactionTag)
         {
+            UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 友方单位，忽略"));
             return;
         }
         
-        // 忽略已死亡的单位
         if (OtherUnit->bIsDead)
         {
+            UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 已死亡单位，忽略"));
             return;
         }
     }
 
-    // 检查是否是主城
     ASG_MainCityBase* OtherMainCity = Cast<ASG_MainCityBase>(OtherActor);
     if (OtherMainCity)
     {
-        // 忽略友方主城
+        UE_LOG(LogSGGameplay, Warning, TEXT("  碰撞对象是主城：%s"), *OtherMainCity->GetName());
+        
         if (OtherMainCity->FactionTag == InstigatorFactionTag)
         {
+            UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 友方主城，忽略"));
             return;
         }
         
-        // 忽略已摧毁的主城
         if (!OtherMainCity->IsAlive())
         {
+            UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 已摧毁主城，忽略"));
             return;
         }
     }
     
-    // 检查碰撞组件是否属于友方主城
     UPrimitiveComponent* HitComponent = Hit.GetComponent();
     if (HitComponent)
     {
@@ -1610,6 +1627,7 @@ void ASG_Projectile::HandleProjectileImpact(AActor* OtherActor, const FHitResult
             ASG_MainCityBase* OwnerCity = Cast<ASG_MainCityBase>(ComponentOwner);
             if (OwnerCity && OwnerCity->FactionTag == InstigatorFactionTag)
             {
+                UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 组件属于友方主城，忽略"));
                 return;
             }
         }
@@ -1619,11 +1637,9 @@ void ASG_Projectile::HandleProjectileImpact(AActor* OtherActor, const FHitResult
     
     if (OtherUnit || OtherMainCity)
     {
-        UE_LOG(LogSGGameplay, Log, TEXT("投射物击中目标：%s（第 %d 个目标）"), 
-            *OtherActor->GetName(), 
-            HitActors.Num() + 1);
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ✅ 有效敌方目标，准备应用伤害"));
+        UE_LOG(LogSGGameplay, Warning, TEXT("  击中位置：%s"), *Hit.ImpactPoint.ToString());
 
-        // 构建击中信息
         FSGProjectileHitInfo HitInfo;
         HitInfo.HitActor = OtherActor;
         HitInfo.HitLocation = Hit.ImpactPoint.IsNearlyZero() ? OtherActor->GetActorLocation() : FVector(Hit.ImpactPoint);
@@ -1632,36 +1648,30 @@ void ASG_Projectile::HandleProjectileImpact(AActor* OtherActor, const FHitResult
         HitInfo.ProjectileDirection = CurrentVelocity.GetSafeNormal();
         HitInfo.ProjectileSpeed = CurrentVelocity.Size();
 
-        // 🔧 关键：先记录已击中，再应用伤害
-        // 这样即使在同一帧有多次碰撞事件，也只会处理一次
         HitActors.Add(OtherActor);
 
-        // 应用伤害（每个目标只执行一次）
+        // 应用伤害
         ApplyDamageToTarget(OtherActor);
 
-        // 执行击中特效和事件
         ExecuteHitGameplayCue(HitInfo);
         K2_OnHitTarget(HitInfo);
         OnProjectileHitTarget.Broadcast(HitInfo);
 
-        // 检查是否应该停止
         bool bShouldStop = false;
         
         if (!bPenetrate)
         {
-            // 非穿透模式：击中第一个目标就停止
             bShouldStop = true;
         }
         else if (MaxPenetrateCount > 0 && HitActors.Num() >= MaxPenetrateCount)
         {
-            // 穿透模式：达到最大穿透数量后停止
             bShouldStop = true;
-            UE_LOG(LogSGGameplay, Log, TEXT("  达到最大穿透数量：%d"), MaxPenetrateCount);
+            UE_LOG(LogSGGameplay, Warning, TEXT("  达到最大穿透数量：%d"), MaxPenetrateCount);
         }
 
         if (bShouldStop)
         {
-            // 调用命中处理函数（停止移动、隐藏网格等）
+            UE_LOG(LogSGGameplay, Warning, TEXT("  投射物停止（非穿透或达到上限）"));
             HandleHitTarget(OtherActor, HitInfo);
         }
         
@@ -1670,18 +1680,15 @@ void ASG_Projectile::HandleProjectileImpact(AActor* OtherActor, const FHitResult
 
     // ========== 处理地面碰撞 ==========
     
-    // 检查是否是地面（法线朝上）
     if (Hit.ImpactNormal.Z > 0.7f)
     {
-        UE_LOG(LogSGGameplay, Log, TEXT("投射物撞击地面"));
-        // 更新地面高度为实际碰撞点
+        UE_LOG(LogSGGameplay, Warning, TEXT("  🟤 检测到地面碰撞，法线Z：%.2f"), Hit.ImpactNormal.Z);
         GroundZ = Hit.ImpactPoint.Z;
         HandleGroundImpact();
         return;
     }
     
-    // 其他物体（如墙壁），让投射物继续飞行
-    UE_LOG(LogSGGameplay, Verbose, TEXT("  忽略静态物体：%s"), *OtherActor->GetName());
+    UE_LOG(LogSGGameplay, Warning, TEXT("  忽略其他静态物体"));
    
 }
 
@@ -1692,10 +1699,28 @@ void ASG_Projectile::HandleProjectileImpact(AActor* OtherActor, const FHitResult
  */
 void ASG_Projectile::ApplyDamageToTarget(AActor* Target)
 {
+     // ✨ 新增 - 调试日志：输出伤害来源信息
+    UE_LOG(LogSGGameplay, Warning, TEXT("========== 投射物伤害调试 =========="));
+    UE_LOG(LogSGGameplay, Warning, TEXT("  投射物：%s"), *GetName());
+    UE_LOG(LogSGGameplay, Warning, TEXT("  目标：%s"), Target ? *Target->GetName() : TEXT("空"));
+    UE_LOG(LogSGGameplay, Warning, TEXT("  投射物状态："));
+    UE_LOG(LogSGGameplay, Warning, TEXT("    bIsInitialized: %s"), bIsInitialized ? TEXT("true") : TEXT("false"));
+    UE_LOG(LogSGGameplay, Warning, TEXT("    bHasHitTarget: %s"), bHasHitTarget ? TEXT("true") : TEXT("false"));
+    UE_LOG(LogSGGameplay, Warning, TEXT("    bHasLanded: %s"), bHasLanded ? TEXT("true") : TEXT("false"));
+    UE_LOG(LogSGGameplay, Warning, TEXT("    bTargetLost: %s"), bTargetLost ? TEXT("true") : TEXT("false"));
+    UE_LOG(LogSGGameplay, Warning, TEXT("    FlightProgress: %.2f"), FlightProgress);
+    UE_LOG(LogSGGameplay, Warning, TEXT("    当前位置：%s"), *GetActorLocation().ToString());
+    UE_LOG(LogSGGameplay, Warning, TEXT("    地面高度：%.1f"), GroundZ);
+    UE_LOG(LogSGGameplay, Warning, TEXT("    已击中目标数：%d"), HitActors.Num());
+    
+    // ✨ 新增 - 输出调用堆栈信息
+    UE_LOG(LogSGGameplay, Warning, TEXT("  调用来源（检查是否从落地状态调用）"));
+    
     // 检查目标有效性
     if (!Target)
     {
-        UE_LOG(LogSGGameplay, Error, TEXT("ApplyDamageToTarget 失败：目标为空"));
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ ApplyDamageToTarget 失败：目标为空"));
+        UE_LOG(LogSGGameplay, Warning, TEXT("========================================"));
         return;
     }
 
@@ -1703,30 +1728,31 @@ void ASG_Projectile::ApplyDamageToTarget(AActor* Target)
     UAbilitySystemComponent* TargetASC = UAbilitySystemGlobals::GetAbilitySystemComponentFromActor(Target);
     if (!TargetASC)
     {
-        UE_LOG(LogSGGameplay, Error, TEXT("ApplyDamageToTarget 失败：目标没有 ASC"));
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ ApplyDamageToTarget 失败：目标没有 ASC"));
+        UE_LOG(LogSGGameplay, Warning, TEXT("========================================"));
         return;
     }
 
     // 检查攻击者 ASC
     if (!InstigatorASC)
     {
-        UE_LOG(LogSGGameplay, Error, TEXT("ApplyDamageToTarget 失败：攻击者 ASC 为空"));
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ ApplyDamageToTarget 失败：攻击者 ASC 为空"));
+        UE_LOG(LogSGGameplay, Warning, TEXT("========================================"));
         return;
     }
 
     // 检查伤害效果类
     if (!DamageEffectClass)
     {
-        UE_LOG(LogSGGameplay, Error, TEXT("ApplyDamageToTarget 失败：伤害 GE 未设置"));
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ ApplyDamageToTarget 失败：伤害 GE 未设置"));
+        UE_LOG(LogSGGameplay, Warning, TEXT("========================================"));
         return;
     }
 
     // 创建效果上下文
     FGameplayEffectContextHandle EffectContext = InstigatorASC->MakeEffectContext();
     
-    // 🔧 修改 - 使用 GetInstigator() 而不是 GetOwner()
-    // 原因：在 SpawnActor 时，SpawnParams.Instigator 通常会被设置，但 SpawnParams.Owner 未必被设置。
-    // 使用 GetInstigator() 能确保 Context 正确获取到施法者信息，保证 Attributes Capture (AttackDamage) 正常工作。
+    // 使用 GetInstigator() 而不是 GetOwner()
     EffectContext.AddInstigator(GetInstigator(), this);
 
     // 创建效果规格
@@ -1734,7 +1760,8 @@ void ASG_Projectile::ApplyDamageToTarget(AActor* Target)
 
     if (!SpecHandle.IsValid())
     {
-        UE_LOG(LogSGGameplay, Error, TEXT("ApplyDamageToTarget 失败：创建 EffectSpec 失败"));
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ ApplyDamageToTarget 失败：创建 EffectSpec 失败"));
+        UE_LOG(LogSGGameplay, Warning, TEXT("========================================"));
         return;
     }
 
@@ -1748,12 +1775,16 @@ void ASG_Projectile::ApplyDamageToTarget(AActor* Target)
     // 检查应用结果
     if (ActiveHandle.IsValid() || SpecHandle.IsValid())
     {
-        UE_LOG(LogSGGameplay, Log, TEXT("    ✓ 投射物伤害应用成功（倍率：%.2f）"), DamageMultiplier);
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ✓ 投射物伤害应用成功"));
+        UE_LOG(LogSGGameplay, Warning, TEXT("    伤害倍率：%.2f"), DamageMultiplier);
+        UE_LOG(LogSGGameplay, Warning, TEXT("    攻击者：%s"), GetInstigator() ? *GetInstigator()->GetName() : TEXT("空"));
     }
     else
     {
-        UE_LOG(LogSGGameplay, Error, TEXT("    ❌ 投射物伤害应用失败"));
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 投射物伤害应用失败"));
     }
+    
+    UE_LOG(LogSGGameplay, Warning, TEXT("========================================"));
 }
 
 /**

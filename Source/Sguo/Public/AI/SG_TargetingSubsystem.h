@@ -94,7 +94,7 @@ public:
      * @return 最佳目标 Actor
      */
     // 🔧 修改 - 增加 IgnoredActors 参数
-   
+    UFUNCTION()
     AActor* FindBestTarget(ASG_UnitsBase* Querier,float SearchRadius,TArray<FSGTargetCandidate>& OutCandidates,const TSet<TWeakObjectPtr<AActor>>& IgnoredActors);
 
    

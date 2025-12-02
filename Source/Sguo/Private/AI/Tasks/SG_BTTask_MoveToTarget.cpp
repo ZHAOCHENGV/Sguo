@@ -142,7 +142,7 @@ EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent&
  */
 void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds)
 {
-    Super::TickTask(OwnerComp, NodeMemory, DeltaSeconds);
+   Super::TickTask(OwnerComp, NodeMemory, DeltaSeconds);
 
     AAIController* AIController = OwnerComp.GetAIOwner();
     if (!AIController)
@@ -176,8 +176,6 @@ void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
         AIController->StopMovement();
         
         // 3. 查找新的可达目标
-        // 注意：FindNearestReachableTarget 内部已经调用了 TargetingSubsystem
-        // 并且传入了 UnreachableTargets 黑名单，所以这次查找会避开旧目标
         AActor* NewTarget = SGAIController->FindNearestReachableTarget();
         
         if (NewTarget && NewTarget != CurrentTarget)
@@ -187,18 +185,17 @@ void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
             UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 成功切换到新目标：%s"), *NewTarget->GetName());
             
             // ❗ 关键：任务失败，让行为树重置并重新执行 MoveTo
-            // 如果不返回 Failed，行为树可能会卡在当前节点
             FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
         }
         else
         {
             UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 没有其他可达目标，只能待机"));
-            // 实在没地方去了，也只能失败
             FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
         }
         return;
     }
-    // 检查是否已进入攻击范围
+
+    // ✨ 新增 - 检查是否已进入攻击范围
     UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
     if (BlackboardComp)
     {
@@ -213,6 +210,10 @@ void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
             if (TargetMainCity && TargetMainCity->GetAttackDetectionBox())
             {
                 UBoxComponent* DetectionBox = TargetMainCity->GetAttackDetectionBox();
+                
+                // 🔧 修复 - 补全漏掉的 BoxCenter 定义
+                FVector BoxCenter = DetectionBox->GetComponentLocation();
+                
                 FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
                 float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
                 Distance = FMath::Max(0.0f, FVector::Dist(ControlledUnit->GetActorLocation(), BoxCenter) - BoxRadius);
@@ -225,7 +226,11 @@ void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
                 {
                     SGAIController->SetTargetEngagementState(ESGTargetEngagementState::Engaged);
                 }
+                
+                // 停止移动
                 AIController->StopMovement();
+                
+                // 任务成功
                 FinishLatentTask(OwnerComp, EBTNodeResult::Succeeded);
                 return;
             }
@@ -235,10 +240,9 @@ void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
     // 获取当前的移动状态
     EPathFollowingStatus::Type Status = AIController->GetMoveStatus();
 
-    // 如果状态是 Idle，说明移动已经结束（可能到达，也可能失败）
+    // 如果状态是 Idle，说明移动已经结束
     if (Status == EPathFollowingStatus::Idle)
     {
-        // 这里简单处理为成功，具体视需求而定，或者检查 Result
         FinishLatentTask(OwnerComp, EBTNodeResult::Succeeded);
     }
 }

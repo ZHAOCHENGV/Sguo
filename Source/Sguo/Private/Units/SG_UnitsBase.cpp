@@ -793,11 +793,10 @@ void ASG_UnitsBase::GrantCommonAttackAbility()
  */
 bool ASG_UnitsBase::PerformAttack()
 {
-	 UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
     UE_LOG(LogSGGameplay, Log, TEXT("🔫 %s 尝试执行攻击"), *GetName());
     
     // ========== 步骤1：检查动画僵直 ==========
-    // 🔧 修改 - 只检查动画僵直，不检查全局冷却
     if (bIsAttacking)
     {
         UE_LOG(LogSGGameplay, Verbose, TEXT("  ⚠️ 正在播放攻击动画，剩余：%.2f秒"), AttackAnimationRemainingTime);
@@ -812,7 +811,6 @@ bool ASG_UnitsBase::PerformAttack()
     }
     
     // ========== 步骤3：获取最佳可用技能 ==========
-    // ✨ 新增 - 使用优先级系统选择技能
     int32 BestAbilityIndex = GetBestAvailableAbilityIndex();
     
     if (BestAbilityIndex == -1)
@@ -837,7 +835,7 @@ bool ASG_UnitsBase::PerformAttack()
 
     FGameplayAbilitySpecHandle AbilityHandleToActivate;
     
-    // 如果有指定的特定能力类，使用它
+    // 获取能力句柄
     if (SelectedAttack.SpecificAbilityClass)
     {
         FGameplayAbilitySpecHandle* FoundHandle = GrantedSpecificAbilities.Find(SelectedAttack.SpecificAbilityClass);
@@ -847,14 +845,15 @@ bool ASG_UnitsBase::PerformAttack()
         }
         else
         {
+            // 如果尚未授予，现在授予
             FGameplayAbilitySpec AbilitySpec(SelectedAttack.SpecificAbilityClass, 1, INDEX_NONE, this);
             AbilityHandleToActivate = AbilitySystemComponent->GiveAbility(AbilitySpec);
             GrantedSpecificAbilities.Add(SelectedAttack.SpecificAbilityClass, AbilityHandleToActivate);
+            UE_LOG(LogSGGameplay, Log, TEXT("  ✨ 首次授予技能：%s"), *SelectedAttack.SpecificAbilityClass->GetName());
         }
     }
     else
     {
-        // 使用通用攻击能力
         if (!GrantedCommonAttackHandle.IsValid())
         {
             UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 通用攻击能力未授予！"));
@@ -862,7 +861,40 @@ bool ASG_UnitsBase::PerformAttack()
         }
         AbilityHandleToActivate = GrantedCommonAttackHandle;
     }
-    
+
+    // ✨✨✨ 深度调试：检查为什么激活可能会失败 ✨✨✨
+    FGameplayAbilitySpec* Spec = AbilitySystemComponent->FindAbilitySpecFromHandle(AbilityHandleToActivate);
+    if (Spec)
+    {
+        // 1. 检查是否已经是激活状态（这是最常见的“卡死”原因）
+        if (Spec->IsActive())
+        {
+            UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 警告：该技能当前已处于激活状态（IsActive=true）！可能是上次执行未正常结束（EndAbility未调用）。"));
+            
+            // 尝试强制结束它，以便可以重新释放（自愈逻辑）
+            AbilitySystemComponent->CancelAbilityHandle(AbilityHandleToActivate);
+            UE_LOG(LogSGGameplay, Warning, TEXT("  🔄 已尝试强制 Cancel 该技能，请重试..."));
+            // 这次返回 false，但下次 Tick 应该就能成功了
+            return false; 
+        }
+
+        // 2. 检查 GAS 内部的 CanActivate
+        UGameplayAbility* AbilityInst = Spec->GetPrimaryInstance();
+        if (!AbilityInst) AbilityInst = Spec->Ability; // 如果不是 Instanced，使用 CDO
+
+        if (AbilityInst)
+        {
+            FGameplayTagContainer FailureTags;
+            if (!AbilityInst->CanActivateAbility(AbilityHandleToActivate, AbilitySystemComponent->AbilityActorInfo.Get(), nullptr, nullptr, &FailureTags))
+            {
+                UE_LOG(LogSGGameplay, Error, TEXT("  ❌ GAS 拒绝激活 (CanActivateAbility 返回 false)"));
+                UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 拒绝原因 (Tags): %s"), *FailureTags.ToString());
+                UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 可能原因：资源不足、被 Tag 阻挡、Cooldown GE 未结束"));
+                return false;
+            }
+        }
+    }
+
     // 尝试激活能力
     bool bSuccess = AbilitySystemComponent->TryActivateAbility(AbilityHandleToActivate);
     
@@ -870,14 +902,12 @@ bool ASG_UnitsBase::PerformAttack()
     {
         UE_LOG(LogSGGameplay, Log, TEXT("  ✅ 攻击能力激活成功"));
         
-        // ✨ 新增 - 启动该技能的独立冷却
+        // 启动该技能的独立冷却（手动冷却）
         StartAbilityCooldown(CurrentAttackIndex, SelectedAttack.Cooldown);
-        
-        // 动画僵直会在 GA 中通过 StartAttackAnimation 设置
     }
     else
     {
-        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 攻击能力激活失败"));
+        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 攻击能力激活失败（TryActivateAbility 返回 false，请查看上方详细原因）"));
     }
     
     return bSuccess;

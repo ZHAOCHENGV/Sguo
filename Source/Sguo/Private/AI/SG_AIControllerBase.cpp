@@ -191,6 +191,21 @@ bool ASG_AIControllerBase::StartBehaviorTree(UBehaviorTree* BehaviorTreeToRun)
 // ========== OnUnPossess ==========
 void ASG_AIControllerBase::OnUnPossess()
 {
+    // ✨ 新增 - 确保注销当前的攻击记录，防止单位死亡/回收后仍占据攻击名额
+    if (AActor* CurrentTarget = GetCurrentTarget())
+    {
+        if (ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn()))
+        {
+            if (UWorld* World = GetWorld())
+            {
+                if (USG_TargetingSubsystem* TargetingSys = World->GetSubsystem<USG_TargetingSubsystem>())
+                {
+                    TargetingSys->UnregisterAttacker(ControlledUnit, CurrentTarget);
+                }
+            }
+        }
+    }
+
     if (CurrentListenedTarget.IsValid())
     {
         UnbindTargetDeathEvent(CurrentListenedTarget.Get());
@@ -205,7 +220,7 @@ void ASG_AIControllerBase::OnUnPossess()
     
     CurrentBehaviorTree = nullptr;
     
-    // ✨ 新增 - 清理状态
+    // 清理状态
     UnreachableTargets.Empty();
     TargetEngagementState = ESGTargetEngagementState::Searching;
     
@@ -428,126 +443,32 @@ AActor* ASG_AIControllerBase::FindNearestReachableTarget()
         return nullptr;
     }
 
-    FGameplayTag MyFaction = ControlledUnit->FactionTag;
-    FVector MyLoc = ControlledUnit->GetActorLocation();
-    float DetectionRadius = ControlledUnit->GetDetectionRange();
-
-    // 获取导航系统
-    UNavigationSystemV1* NavSys = UNavigationSystemV1::GetCurrent(GetWorld());
-
-    // 收集所有敌方单位
-    TArray<AActor*> AllUnits;
-    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_UnitsBase::StaticClass(), AllUnits);
-    
-    // 候选目标列表（带距离）
-    struct FTargetCandidate
+    // ✨ 修改 - 优先使用 TargetingSubsystem
+    if (USG_TargetingSubsystem* TargetingSys = GetWorld()->GetSubsystem<USG_TargetingSubsystem>())
     {
-        AActor* Target;
-        float Distance;
-        bool bIsReachable;
-    };
-    TArray<FTargetCandidate> Candidates;
-
-    for (AActor* Actor : AllUnits)
-    {
-        if (Actor == ControlledUnit) continue;
-
-        ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(Actor);
-        if (!Unit) continue;
-        if (Unit->bIsDead) continue;
-        if (Unit->FactionTag == MyFaction) continue;
-        if (!Unit->CanBeTargeted()) continue;
-
-        // ✨ 关键：跳过不可达列表中的目标
-        if (IsTargetUnreachable(Unit))
-        {
-            continue;
-        }
-
-        float Distance = FVector::Dist(MyLoc, Unit->GetActorLocation());
+        TArray<FSGTargetCandidate> Candidates;
         
-        // 检查是否在检测范围内
-        if (Distance > DetectionRadius)
+        // 调用子系统，并传入当前的 UnreachableTargets 集合作为忽略列表
+        // 这样可以确保这次查找会避开之前标记为“不可达”的那些目标
+        AActor* BestTarget = TargetingSys->FindBestTarget(
+            ControlledUnit, 
+            ControlledUnit->GetDetectionRange(), 
+            Candidates, 
+            UnreachableTargets
+        );
+
+        if (BestTarget)
         {
-            continue;
-        }
-
-        // 检查路径可达性
-        bool bIsReachable = true;
-        if (NavSys)
-        {
-            FPathFindingQuery Query;
-            Query.StartLocation = MyLoc;
-            Query.EndLocation = Unit->GetActorLocation();
-            Query.NavData = NavSys->GetDefaultNavDataInstance();
-            
-            FPathFindingResult Result = NavSys->FindPathSync(Query);
-            bIsReachable = Result.IsSuccessful();
-        }
-
-        FTargetCandidate Candidate;
-        Candidate.Target = Unit;
-        Candidate.Distance = Distance;
-        Candidate.bIsReachable = bIsReachable;
-        Candidates.Add(Candidate);
-    }
-
-    // 排序：优先可达目标，其次距离近的
-    Candidates.Sort([](const FTargetCandidate& A, const FTargetCandidate& B)
-    {
-        // 可达的优先
-        if (A.bIsReachable != B.bIsReachable)
-        {
-            return A.bIsReachable;
-        }
-        // 距离近的优先
-        return A.Distance < B.Distance;
-    });
-
-    // 返回最佳候选
-    if (Candidates.Num() > 0)
-    {
-        AActor* BestTarget = Candidates[0].Target;
-        UE_LOG(LogSGGameplay, Log, TEXT("FindNearestReachableTarget: %s 选中目标 %s (距离: %.0f, 可达: %s)"),
-            *ControlledUnit->GetName(),
-            *BestTarget->GetName(),
-            Candidates[0].Distance,
-            Candidates[0].bIsReachable ? TEXT("是") : TEXT("否"));
-        return BestTarget;
-    }
-
-    // 如果没有敌方单位，查找敌方主城
-    TArray<AActor*> AllMainCities;
-    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_MainCityBase::StaticClass(), AllMainCities);
-    
-    AActor* NearestMainCity = nullptr;
-    float NearestMainCityDist = FLT_MAX;
-    
-    for (AActor* Actor : AllMainCities)
-    {
-        ASG_MainCityBase* City = Cast<ASG_MainCityBase>(Actor);
-        if (!City) continue;
-        if (!City->IsAlive()) continue;
-        if (City->FactionTag == MyFaction) continue;
-        if (IsTargetUnreachable(City)) continue;
-        
-        float Dist = FVector::Dist(MyLoc, City->GetActorLocation());
-        
-        if (Dist < NearestMainCityDist)
-        {
-            NearestMainCityDist = Dist;
-            NearestMainCity = City;
+            UE_LOG(LogSGGameplay, Log, TEXT("FindNearestReachableTarget: %s 通过子系统找到新目标 %s"),
+                *ControlledUnit->GetName(), *BestTarget->GetName());
+            return BestTarget;
         }
     }
-    
-    if (NearestMainCity)
-    {
-        UE_LOG(LogSGGameplay, Log, TEXT("FindNearestReachableTarget: %s 选中敌方主城 %s"),
-            *ControlledUnit->GetName(), *NearestMainCity->GetName());
-        return NearestMainCity;
-    }
 
+    // 如果子系统没找到，或者不存在，回退到简单的查找逻辑（可选，为了稳健性）
+    UE_LOG(LogSGGameplay, Warning, TEXT("FindNearestReachableTarget: 子系统未找到目标，返回空"));
     return nullptr;
+
 }
 
 // ========== FindNearestTarget ==========
@@ -778,7 +699,7 @@ bool ASG_AIControllerBase::DetectNearbyThreats(float DetectionRadius)
 // ========== SetCurrentTarget ==========
 void ASG_AIControllerBase::SetCurrentTarget(AActor* NewTarget)
 {
-   UBlackboardComponent* BlackboardComp = GetBlackboardComponent();
+ UBlackboardComponent* BlackboardComp = GetBlackboardComponent();
     if (!BlackboardComp)
     {
         return;
@@ -786,15 +707,23 @@ void ASG_AIControllerBase::SetCurrentTarget(AActor* NewTarget)
     
     ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
     AActor* OldTarget = GetCurrentTarget();
+    USG_TargetingSubsystem* TargetingSys = GetWorld() ? GetWorld()->GetSubsystem<USG_TargetingSubsystem>() : nullptr;
 
-    // ✨ 新增 - 释放旧目标的槽位
+    // 1. 处理旧目标注销
     if (OldTarget && OldTarget != NewTarget)
     {
         if (UWorld* World = GetWorld())
         {
+            // 释放 CombatManager 槽位
             if (USG_CombatTargetManager* CombatManager = World->GetSubsystem<USG_CombatTargetManager>())
             {
                 CombatManager->ReleaseAttackSlot(ControlledUnit, OldTarget);
+            }
+
+            // ✨ 新增 - 向目标子系统注销攻击者身份
+            if (TargetingSys && ControlledUnit)
+            {
+                TargetingSys->UnregisterAttacker(ControlledUnit, OldTarget);
             }
         }
     }
@@ -823,13 +752,19 @@ void ASG_AIControllerBase::SetCurrentTarget(AActor* NewTarget)
         ControlledUnit->SetTarget(NewTarget);
     }
     
-    // ✨ 新增 - 预约新目标的槽位
+    // 2. 处理新目标注册
     if (NewTarget)
     {
         if (ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(NewTarget))
         {
             BindTargetDeathEvent(TargetUnit);
             CurrentListenedTarget = TargetUnit;
+        }
+
+        // ✨ 新增 - 向目标子系统注册攻击者身份
+        if (TargetingSys && ControlledUnit)
+        {
+            TargetingSys->RegisterAttacker(ControlledUnit, NewTarget);
         }
         
         // 预约槽位
@@ -840,7 +775,6 @@ void ASG_AIControllerBase::SetCurrentTarget(AActor* NewTarget)
                 FVector SlotPosition;
                 if (CombatManager->TryReserveAttackSlot(ControlledUnit, NewTarget, SlotPosition))
                 {
-                    // 槽位位置可以用于更精确的移动
                     UE_LOG(LogSGGameplay, Log, TEXT("🎯 %s 预约了槽位，位置: %s"),
                         *ControlledUnit->GetName(), *SlotPosition.ToString());
                 }

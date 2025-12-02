@@ -115,9 +115,10 @@ void USG_TargetingSubsystem::PerformSphereQuery(const FVector& Center, float Rad
 AActor* USG_TargetingSubsystem::FindBestTarget(
     ASG_UnitsBase* Querier,
     float SearchRadius,
-    TArray<FSGTargetCandidate>& OutCandidates)
+    TArray<FSGTargetCandidate>& OutCandidates,
+    const TSet<TWeakObjectPtr<AActor>>& IgnoredActors)
 {
-    OutCandidates.Empty();
+  OutCandidates.Empty();
 
     if (!Querier)
     {
@@ -136,6 +137,12 @@ AActor* USG_TargetingSubsystem::FindBestTarget(
     {
         // 跳过自己
         if (Actor == Querier)
+        {
+            continue;
+        }
+        
+        // ✨ 新增 - 检查是否在忽略列表中
+        if (IgnoredActors.Contains(Actor))
         {
             continue;
         }
@@ -168,7 +175,7 @@ AActor* USG_TargetingSubsystem::FindBestTarget(
             // 获取拥挤度
             int32 AttackerCount = GetAttackerCount(Unit);
 
-            // 计算评分
+            // 计算评分（这里会应用新的拥挤度惩罚）
             float Score = CalculateTargetScore(Querier, Unit, Distance, AttackerCount);
 
             // 添加到候选列表
@@ -177,7 +184,7 @@ AActor* USG_TargetingSubsystem::FindBestTarget(
             Candidate.Distance = Distance;
             Candidate.AttackerCount = AttackerCount;
             Candidate.Score = Score;
-            Candidate.bIsReachable = true;  // 可以后续添加可达性检测
+            Candidate.bIsReachable = true;
 
             OutCandidates.Add(Candidate);
         }
@@ -194,6 +201,12 @@ AActor* USG_TargetingSubsystem::FindBestTarget(
         {
             ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(Actor);
             if (!MainCity)
+            {
+                continue;
+            }
+            
+            // ✨ 新增 - 主城也要检查忽略列表
+            if (IgnoredActors.Contains(MainCity))
             {
                 continue;
             }
@@ -263,16 +276,8 @@ AActor* USG_TargetingSubsystem::FindBestTarget(
     return BestTarget;
 }
 
-/**
- * @brief 快速版本：只返回最佳目标
- */
-AActor* USG_TargetingSubsystem::FindBestTargetFast(ASG_UnitsBase* Querier, float SearchRadius)
-{
-    TArray<FSGTargetCandidate> Candidates;
-    return FindBestTarget(Querier, SearchRadius, Candidates);
-}
 
-// ========== 评分计算 ==========
+
 
 /**
  * @brief 计算目标评分
@@ -294,18 +299,35 @@ float USG_TargetingSubsystem::CalculateTargetScore(
 {
     // 基础分数：距离越近分数越高
     float MaxDistance = Querier->GetDetectionRange();
+    if (MaxDistance <= 0.0f) MaxDistance = 1000.0f; // 安全检查
+
     float DistanceScore = FMath::Clamp((MaxDistance - Distance) / MaxDistance, 0.0f, 1.0f);
 
-    // 应用距离权重
-    float BaseScore = DistanceScore * DistanceWeight;
+    // ✨ 修改 - 动态计算拥挤惩罚因子
+    // 假设单位包围一个目标，超过 4-6 人就很难挤进去了
+    float PenaltyFactor = 1.0f;
+    
+    if (AttackerCount > 4)
+    {
+        // 极度拥挤：如果有超过4个人在打，且你自己不是其中之一，评分大幅下降
+        // 这会迫使后排单位去寻找其他目标
+        PenaltyFactor = 5.0f + (AttackerCount - 4) * 2.0f;
+    }
+    else if (AttackerCount > 0)
+    {
+        // 轻微拥挤
+        PenaltyFactor = 1.0f + (AttackerCount * 0.5f);
+    }
 
-    // 应用拥挤惩罚
-    float CrowdingMultiplier = 1.0f / (1.0f + AttackerCount * CrowdingPenalty);
+    // 基础分扩大，便于观察
+    float BaseScore = DistanceScore * 100.0f;
 
-    float FinalScore = BaseScore * CrowdingMultiplier;
+    // 最终分 = 基础分 / 拥挤惩罚
+    // 如果拥挤度很高，FinalScore 会变得很小，单位就会选择稍远但没人打的目标
+    float FinalScore = BaseScore / PenaltyFactor;
 
-    UE_LOG(LogSGGameplay, Verbose, TEXT("  评分计算 [%s]: 距离分=%.2f, 拥挤系数=%.2f, 最终=%.2f"),
-        *Target->GetName(), DistanceScore, CrowdingMultiplier, FinalScore);
+    UE_LOG(LogSGGameplay, Verbose, TEXT("  评分计算 [%s]: 距离分=%.2f, 攻击者=%d, 惩罚因子=%.2f, 最终=%.2f"),
+        *Target->GetName(), DistanceScore, AttackerCount, PenaltyFactor, FinalScore);
 
     return FinalScore;
 }

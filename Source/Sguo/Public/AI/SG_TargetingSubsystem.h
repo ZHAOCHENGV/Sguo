@@ -84,31 +84,20 @@ public:
 
     // ========== 目标查询 ==========
 
+  
     /**
-     * @brief 使用场景查询查找最佳目标
-     * @param Querier 查询者（发起寻敌的单位）
+     * @brief 查找最佳目标（增加忽略列表支持）
+     * @param Querier 查询者单位
      * @param SearchRadius 搜索半径
-     * @param OutCandidates 输出：所有候选目标（可选）
-     * @return 最佳目标，如果没有则返回 nullptr
-     * @details
-     * 功能说明：
-     * - 使用 OverlapSphere 高效查询范围内单位
-     * - 计算每个目标的评分（距离 + 拥挤度）
-     * - 返回评分最高的目标
+     * @param OutCandidates 输出：候选目标列表
+     * @param IgnoredActors (新增) 需要忽略的 Actor 列表（默认为空）
+     * @return 最佳目标 Actor
      */
-    UFUNCTION(BlueprintCallable, Category = "Targeting", meta = (DisplayName = "查找最佳目标"))
-    AActor* FindBestTarget(
-        ASG_UnitsBase* Querier,
-        float SearchRadius,
-        TArray<FSGTargetCandidate>& OutCandidates
-    );
+    // 🔧 修改 - 增加 IgnoredActors 参数
+   
+    AActor* FindBestTarget(ASG_UnitsBase* Querier,float SearchRadius,TArray<FSGTargetCandidate>& OutCandidates,const TSet<TWeakObjectPtr<AActor>>& IgnoredActors);
 
-    /**
-     * @brief 快速版本：只返回最佳目标
-     */
-    UFUNCTION(BlueprintCallable, Category = "Targeting", meta = (DisplayName = "查找最佳目标(快速)"))
-    AActor* FindBestTargetFast(ASG_UnitsBase* Querier, float SearchRadius);
-
+   
     // ========== 拥挤度管理 ==========
 
     /**

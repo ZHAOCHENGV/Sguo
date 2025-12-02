@@ -1531,93 +1531,115 @@ void ASG_Projectile::HandleProjectileImpact(AActor* OtherActor, const FHitResult
 
     // ========== 前置状态检查（最高优先级） ==========
     
-    // 🔧 修复 - 将 bHasLanded 检查移到最前面
+  
+    // ========== 前置状态检查（最高优先级） ==========
+    
+    // 如果已落地，忽略所有后续碰撞
     if (bHasLanded)
     {
-        UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 已落地，忽略此碰撞"));
         return;
     }
     
+    // 如果未初始化，忽略所有碰撞
     if (!bIsInitialized)
     {
-        UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 未初始化，忽略此碰撞"));
         return;
     }
   
+    // 如果已命中目标并停止，忽略后续碰撞
     if (bHasHitTarget)
     {
-        UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 已命中目标，忽略此碰撞"));
         return;
     }
 
     // ========== 基础有效性检查 ==========
     
+    // 忽略空 Actor
     if (!OtherActor)
     {
-        UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 碰撞对象为空，忽略"));
         return;
     }
     
+    // 忽略自己
     if (OtherActor == this)
     {
-        UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 碰撞对象是自己，忽略"));
         return;
     }
     
+    // 忽略所有者和施放者
     if (OtherActor == GetOwner() || OtherActor == GetInstigator())
     {
-        UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 碰撞对象是所有者/施放者，忽略"));
         return;
     }
 
     // ========== 重复击中检查 ==========
     if (HitActors.Contains(OtherActor))
     {
-        UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 已击中过此目标，忽略"));
         return;
+    }
+
+    // ========== 判断碰撞对象类型 ==========
+    ASG_UnitsBase* OtherUnit = Cast<ASG_UnitsBase>(OtherActor);
+    ASG_MainCityBase* OtherMainCity = Cast<ASG_MainCityBase>(OtherActor);
+    
+    // ✨ 新增 - 对单位/主城的碰撞进行高度检查
+    // 如果投射物已经在地面或以下，不应该对单位造成伤害
+    if (OtherUnit || OtherMainCity)
+    {
+        // 获取当前投射物的 Z 高度
+        float CurrentZ = GetActorLocation().Z;
+        
+        // 添加一个小的容差值（防止浮点误差）
+        float GroundTolerance = 10.0f;
+        
+        // 如果投射物高度 <= 地面高度 + 容差，认为已经落地，不造成伤害
+        if (CurrentZ <= GroundZ + GroundTolerance)
+        {
+            UE_LOG(LogSGGameplay, Log, TEXT("投射物高度（%.1f）<= 地面高度（%.1f），忽略单位碰撞：%s"), 
+                CurrentZ, GroundZ, *OtherActor->GetName());
+            
+            // 🔧 关键：如果还没标记落地，现在标记并处理落地
+            if (!bHasLanded)
+            {
+                HandleGroundImpact();
+            }
+            return;
+        }
     }
 
     // ========== 友方过滤 ==========
 
-    ASG_UnitsBase* OtherUnit = Cast<ASG_UnitsBase>(OtherActor);
     if (OtherUnit)
     {
-        UE_LOG(LogSGGameplay, Warning, TEXT("  碰撞对象是单位：%s"), *OtherUnit->GetName());
-        UE_LOG(LogSGGameplay, Warning, TEXT("    单位阵营：%s"), *OtherUnit->FactionTag.ToString());
-        UE_LOG(LogSGGameplay, Warning, TEXT("    投射物阵营：%s"), *InstigatorFactionTag.ToString());
-        UE_LOG(LogSGGameplay, Warning, TEXT("    单位是否死亡：%s"), OtherUnit->bIsDead ? TEXT("是") : TEXT("否"));
-        
+        // 忽略友方单位
         if (OtherUnit->FactionTag == InstigatorFactionTag)
         {
-            UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 友方单位，忽略"));
             return;
         }
         
+        // 忽略已死亡的单位
         if (OtherUnit->bIsDead)
         {
-            UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 已死亡单位，忽略"));
             return;
         }
     }
 
-    ASG_MainCityBase* OtherMainCity = Cast<ASG_MainCityBase>(OtherActor);
     if (OtherMainCity)
     {
-        UE_LOG(LogSGGameplay, Warning, TEXT("  碰撞对象是主城：%s"), *OtherMainCity->GetName());
-        
+        // 忽略友方主城
         if (OtherMainCity->FactionTag == InstigatorFactionTag)
         {
-            UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 友方主城，忽略"));
             return;
         }
         
+        // 忽略已摧毁的主城
         if (!OtherMainCity->IsAlive())
         {
-            UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 已摧毁主城，忽略"));
             return;
         }
     }
     
+    // 检查碰撞组件是否属于友方主城
     UPrimitiveComponent* HitComponent = Hit.GetComponent();
     if (HitComponent)
     {
@@ -1627,7 +1649,6 @@ void ASG_Projectile::HandleProjectileImpact(AActor* OtherActor, const FHitResult
             ASG_MainCityBase* OwnerCity = Cast<ASG_MainCityBase>(ComponentOwner);
             if (OwnerCity && OwnerCity->FactionTag == InstigatorFactionTag)
             {
-                UE_LOG(LogSGGameplay, Warning, TEXT("  ⛔ 组件属于友方主城，忽略"));
                 return;
             }
         }
@@ -1637,9 +1658,11 @@ void ASG_Projectile::HandleProjectileImpact(AActor* OtherActor, const FHitResult
     
     if (OtherUnit || OtherMainCity)
     {
-        UE_LOG(LogSGGameplay, Warning, TEXT("  ✅ 有效敌方目标，准备应用伤害"));
-        UE_LOG(LogSGGameplay, Warning, TEXT("  击中位置：%s"), *Hit.ImpactPoint.ToString());
+        UE_LOG(LogSGGameplay, Log, TEXT("投射物击中目标：%s（第 %d 个目标）"), 
+            *OtherActor->GetName(), 
+            HitActors.Num() + 1);
 
+        // 构建击中信息
         FSGProjectileHitInfo HitInfo;
         HitInfo.HitActor = OtherActor;
         HitInfo.HitLocation = Hit.ImpactPoint.IsNearlyZero() ? OtherActor->GetActorLocation() : FVector(Hit.ImpactPoint);
@@ -1648,30 +1671,35 @@ void ASG_Projectile::HandleProjectileImpact(AActor* OtherActor, const FHitResult
         HitInfo.ProjectileDirection = CurrentVelocity.GetSafeNormal();
         HitInfo.ProjectileSpeed = CurrentVelocity.Size();
 
+        // 先记录已击中，再应用伤害
         HitActors.Add(OtherActor);
 
         // 应用伤害
         ApplyDamageToTarget(OtherActor);
 
+        // 执行击中特效和事件
         ExecuteHitGameplayCue(HitInfo);
         K2_OnHitTarget(HitInfo);
         OnProjectileHitTarget.Broadcast(HitInfo);
 
+        // 检查是否应该停止
         bool bShouldStop = false;
         
         if (!bPenetrate)
         {
+            // 非穿透模式：击中第一个目标就停止
             bShouldStop = true;
         }
         else if (MaxPenetrateCount > 0 && HitActors.Num() >= MaxPenetrateCount)
         {
+            // 穿透模式：达到最大穿透数量后停止
             bShouldStop = true;
-            UE_LOG(LogSGGameplay, Warning, TEXT("  达到最大穿透数量：%d"), MaxPenetrateCount);
+            UE_LOG(LogSGGameplay, Log, TEXT("  达到最大穿透数量：%d"), MaxPenetrateCount);
         }
 
         if (bShouldStop)
         {
-            UE_LOG(LogSGGameplay, Warning, TEXT("  投射物停止（非穿透或达到上限）"));
+            // 调用命中处理函数（停止移动、隐藏网格等）
             HandleHitTarget(OtherActor, HitInfo);
         }
         
@@ -1680,15 +1708,18 @@ void ASG_Projectile::HandleProjectileImpact(AActor* OtherActor, const FHitResult
 
     // ========== 处理地面碰撞 ==========
     
+    // 检查是否是地面（法线朝上）
     if (Hit.ImpactNormal.Z > 0.7f)
     {
-        UE_LOG(LogSGGameplay, Warning, TEXT("  🟤 检测到地面碰撞，法线Z：%.2f"), Hit.ImpactNormal.Z);
+        UE_LOG(LogSGGameplay, Log, TEXT("投射物撞击地面"));
+        // 更新地面高度为实际碰撞点
         GroundZ = Hit.ImpactPoint.Z;
         HandleGroundImpact();
         return;
     }
     
-    UE_LOG(LogSGGameplay, Warning, TEXT("  忽略其他静态物体"));
+    // 其他物体（如墙壁），让投射物继续飞行
+    UE_LOG(LogSGGameplay, Verbose, TEXT("  忽略静态物体：%s"), *OtherActor->GetName());
    
 }
 

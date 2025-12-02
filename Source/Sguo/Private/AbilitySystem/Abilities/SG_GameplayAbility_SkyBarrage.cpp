@@ -224,10 +224,11 @@ UAnimMontage* USG_GameplayAbility_SkyBarrage::FindMontageFromUnitData() const
 
 void USG_GameplayAbility_SkyBarrage::StartBarrageLoop()
 {
-    ACharacter* AvatarChar = Cast<ACharacter>(GetAvatarActorFromActorInfo());
+  ACharacter* AvatarChar = Cast<ACharacter>(GetAvatarActorFromActorInfo());
     FVector OwnerLoc = AvatarChar ? AvatarChar->GetActorLocation() : FVector::ZeroVector;
     FVector Forward = AvatarChar ? AvatarChar->GetActorForwardVector() : FVector::ForwardVector;
     
+    // ... (目标位置计算保持不变) ...
     CachedTargetCenter = OwnerLoc + (Forward * TargetDistance);
     
     FHitResult HitResult;
@@ -238,45 +239,90 @@ void USG_GameplayAbility_SkyBarrage::StartBarrageLoop()
         CachedTargetCenter = HitResult.Location;
     }
 
+    // ========== 🔧 修复开始 ==========
+    
+    // 1. 重置计数器
     ProjectilesSpawned = 0;
-    if (TotalProjectiles > 0)
+
+    // 2. 参数安全检查
+    if (TotalProjectiles <= 0)
     {
-        IntervalPerShot = Duration / (float)TotalProjectiles;
-        if (IntervalPerShot < 0.01f) IntervalPerShot = 0.01f;
+        UE_LOG(LogTemp, Warning, TEXT("SkyBarrage: TotalProjectiles (%d) 无效，强制设为 1"), TotalProjectiles);
+        TotalProjectiles = 1;
+    }
+    
+    if (Duration <= 0.0f)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("SkyBarrage: Duration (%.2f) 无效，强制设为 1.0"), Duration);
+        Duration = 1.0f;
     }
 
+    // 3. 计算发射间隔
+    // 减去 1 是为了让最后一发正好落在 Duration 结束点（例如：0s, 0.5s, 1.0s 共3发，时长1.0s，间隔0.5s）
+    // 如果想要每秒 N 发，可以用 Duration / TotalProjectiles
+    IntervalPerShot = Duration / (float)FMath::Max(1, TotalProjectiles);
+
+    // 4. 最小间隔钳位日志提示
+    if (IntervalPerShot < 0.01f)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("SkyBarrage: 发射密度过高！间隔 (%.4f) 被钳位到 0.01s。实际持续时间将延长到 %.2f秒"), 
+            IntervalPerShot, TotalProjectiles * 0.01f);
+        IntervalPerShot = 0.01f;
+    }
+
+    // 5. 🔍 输出调试日志 (关键：检查这里输出的数值是否和你设置的一样)
+    UE_LOG(LogTemp, Log, TEXT("========== 开始剑雨 =========="));
+    UE_LOG(LogTemp, Log, TEXT("  配置数量: %d"), TotalProjectiles);
+    UE_LOG(LogTemp, Log, TEXT("  配置时长: %.2f"), Duration);
+    UE_LOG(LogTemp, Log, TEXT("  计算间隔: %.4f"), IntervalPerShot);
+
+    // 6. 启动定时器
     if (GetWorld())
     {
+        // 立即执行第一次生成 (FirstDelay = 0.0f 会在有些版本立即触发，或下一帧触发)
+        // 建议手动调用一次 SpawnProjectileLoop() 确保由第一帧开始，
+        // 然后定时器从 IntervalPerShot 后开始。
+        // 但为了保持原有结构，我们这里保持原样，只加个检查。
+        
         GetWorld()->GetTimerManager().SetTimer(
             BarrageTimerHandle,
             this,
             &USG_GameplayAbility_SkyBarrage::SpawnProjectileLoop,
             IntervalPerShot,
-            true,
-            0.0f
+            true, // 循环
+            0.0f  // 首次延迟
         );
     }
 }
 
 void USG_GameplayAbility_SkyBarrage::SpawnProjectileLoop()
 {
-   if (ProjectilesSpawned >= TotalProjectiles || !GetAvatarActorFromActorInfo())
+    // 检查是否完成
+    if (ProjectilesSpawned >= TotalProjectiles || !GetAvatarActorFromActorInfo())
     {
-        GetWorld()->GetTimerManager().ClearTimer(BarrageTimerHandle);
-        
-        // 通知单位动画结束
-        if (AActor* AvatarActor = GetAvatarActorFromActorInfo())
+        // 只有当定时器还在跑的时候才打印完成日志，避免重复
+        if (GetWorld() && GetWorld()->GetTimerManager().IsTimerActive(BarrageTimerHandle))
         {
-            if (ASG_UnitsBase* OwnerUnit = Cast<ASG_UnitsBase>(AvatarActor))
+            UE_LOG(LogTemp, Log, TEXT("SkyBarrage: 剑雨完成，共生成 %d/%d 个，停止定时器"), 
+                ProjectilesSpawned, TotalProjectiles);
+                
+            GetWorld()->GetTimerManager().ClearTimer(BarrageTimerHandle);
+            
+            // 通知单位动画结束
+            if (AActor* AvatarActor = GetAvatarActorFromActorInfo())
             {
-                OwnerUnit->OnAttackAnimationFinished();
+                if (ASG_UnitsBase* OwnerUnit = Cast<ASG_UnitsBase>(AvatarActor))
+                {
+                    OwnerUnit->OnAttackAnimationFinished();
+                }
             }
+            
+            EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, false);
         }
-        
-        EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, false);
         return;
     }
 
+    // 增加计数
     ProjectilesSpawned++;
     if (!ProjectileClass) return;
 

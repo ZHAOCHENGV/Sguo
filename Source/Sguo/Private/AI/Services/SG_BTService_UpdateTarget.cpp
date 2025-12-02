@@ -49,90 +49,104 @@ void USG_BTService_UpdateTarget::TickNode(UBehaviorTreeComponent& OwnerComp, uin
 	Super::TickNode(OwnerComp, NodeMemory, DeltaSeconds);
     
     ASG_AIControllerBase* AIController = Cast<ASG_AIControllerBase>(OwnerComp.GetAIOwner());
-    if (!AIController)
-    {
-        return;
-    }
+    if (!AIController) return;
     
-    // 获取控制的单位，检查攻击状态
     ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
-    if (!ControlledUnit)
-    {
-        return;
-    }
+    if (!ControlledUnit) return;
     
     UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
-    if (!BlackboardComp)
-    {
-        return;
-    }
+    if (!BlackboardComp) return;
     
+    // 获取当前黑板中的目标
     AActor* CurrentTarget = Cast<AActor>(BlackboardComp->GetValueAsObject(TargetKey.SelectedKeyName));
     
-    // ========== 检查目标是否有效 ==========
+    // ========== 1. 验证当前目标是否有效 ==========
     bool bIsTargetValid = false;
     if (CurrentTarget)
     {
-        // 检查单位
         ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(CurrentTarget);
         if (TargetUnit)
         {
-            // 🔧 修改 - 增加 CanBeTargeted 检查
+            // 检查生命值、是否死亡、是否可被选取
             bIsTargetValid = !TargetUnit->bIsDead && 
-                             TargetUnit->CanBeTargeted() &&  // ✨ 新增
+                             TargetUnit->CanBeTargeted() && 
                              (!TargetUnit->AttributeSet || TargetUnit->AttributeSet->GetHealth() > 0.0f);
-            
-            // ✨ 新增 - 如果目标不可被选中，输出日志
-            if (!TargetUnit->CanBeTargeted())
-            {
-                UE_LOG(LogSGGameplay, Log, TEXT("🔄 目标不可被选中，需要重新寻找目标：%s"), *TargetUnit->GetName());
-            }
         }
-        // 检查主城
         else
         {
+            // 检查主城
             ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(CurrentTarget);
             if (TargetMainCity)
             {
                 bIsTargetValid = TargetMainCity->IsAlive();
-                
-                if (!bIsTargetValid)
-                {
-                    UE_LOG(LogSGGameplay, Log, TEXT("🏆 目标主城已被摧毁：%s"), *TargetMainCity->GetName());
-                }
             }
         }
     }
+
+    // ========== 2. ✨ 新增：移动过程中的动态择优 ==========
+    // 如果当前目标有效，但我们还没开始攻击（说明还在路上），我们看看有没有更近的倒霉蛋
+    if (bIsTargetValid && !ControlledUnit->bIsAttacking)
+    {
+        // 调用 Controller 的寻敌（底层应调用 Subsystem->FindBestTarget）
+        // FindBestTarget 会根据距离和拥挤度评分，返回当前这一刻的最佳目标
+        AActor* BetterTarget = AIController->FindNearestTarget();
+
+        // 如果找到了目标，且这个目标不是当前目标 -> 说明它是“更好”的目标（通常意味着更近）
+        if (BetterTarget && BetterTarget != CurrentTarget)
+        {
+            // 切换目标！
+            UE_LOG(LogSGGameplay, Log, TEXT("⚡ [动态索敌] %s 在移动途中发现更好目标: %s -> %s"), 
+                *ControlledUnit->GetName(),
+                *CurrentTarget->GetName(),
+                *BetterTarget->GetName());
+
+            BlackboardComp->SetValueAsObject(TargetKey.SelectedKeyName, BetterTarget);
+            AIController->SetCurrentTarget(BetterTarget);
+            
+            // 更新本地变量，防止进入下方的无效处理逻辑
+            CurrentTarget = BetterTarget;
+            
+            // 只要切换了目标，就不需要继续执行下面的无效处理了
+            return; 
+        }
+    }
     
-    // ========== 如果目标无效，查找新目标 ==========
+    // ========== 3. 如果目标无效，查找新目标 ==========
     if (!bIsTargetValid)
     {
         bool bIsAttacking = ControlledUnit->bIsAttacking;
         
-        UE_LOG(LogSGGameplay, Log, TEXT("🔄 目标无效，查找新目标 (正在攻击: %s)"), 
-            bIsAttacking ? TEXT("是") : TEXT("否"));
+        // 只有当之前有目标且正在攻击时才输出详细日志，避免空闲时刷屏
+        if (CurrentTarget)
+        {
+            UE_LOG(LogSGGameplay, Log, TEXT("🔄 目标无效/死亡，查找新目标 (曾攻击: %s)"), 
+                bIsAttacking ? TEXT("是") : TEXT("否"));
+        }
         
         AActor* NewTarget = AIController->FindNearestTarget();
         if (NewTarget)
         {
-            // 更新黑板和 AI Controller 中的目标
             BlackboardComp->SetValueAsObject(TargetKey.SelectedKeyName, NewTarget);
             AIController->SetCurrentTarget(NewTarget);
             
             UE_LOG(LogSGGameplay, Log, TEXT("✓ 找到新目标：%s"), *NewTarget->GetName());
             
-            // 如果不在攻击中，请求行为树重新评估
-            if (!bIsAttacking)
+            // 如果处于攻击状态但目标没了，重置攻击状态以便重新寻路
+            if (bIsAttacking)
             {
                 BlackboardComp->SetValueAsBool(FName("IsInAttackRange"), false);
+                ControlledUnit->bIsAttacking = false; // 确保状态复位
             }
         }
         else
         {
-            BlackboardComp->ClearValue(TargetKey.SelectedKeyName);
-            AIController->SetCurrentTarget(nullptr);
-            
-            UE_LOG(LogSGGameplay, Log, TEXT("⚠️ 未找到新目标"));
+            // 真没目标了（全清空了）
+            if (CurrentTarget != nullptr)
+            {
+                BlackboardComp->ClearValue(TargetKey.SelectedKeyName);
+                AIController->SetCurrentTarget(nullptr);
+                UE_LOG(LogSGGameplay, Log, TEXT("⚠️ 视野内无有效目标"));
+            }
         }
     }
 }

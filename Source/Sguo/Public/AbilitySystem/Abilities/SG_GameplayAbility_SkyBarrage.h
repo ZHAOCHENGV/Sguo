@@ -48,6 +48,13 @@ public:
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Barrage Config|Flight", meta = (DisplayName = "生成范围抖动"))
     float SpawnSourceSpread = 200.0f;
 
+    /**
+     * @brief 伤害倍率
+     * @details 此技能生成的投射物的伤害倍率（例如 0.5 表示 50% 攻击力）
+     */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Barrage Config|Damage", meta = (DisplayName = "伤害倍率", ClampMin = "0.0"))
+    float DamageMultiplier = 1.0f;
+    
     // ✨ NEW - 速度与朝向控制
     UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Barrage Config|Flight", meta = (DisplayName = "覆盖飞行速度", ToolTip = "-1 表示使用投射物默认速度"))
     float OverrideFlightSpeed = -1.0f;

@@ -1719,7 +1719,11 @@ void ASG_Projectile::ApplyDamageToTarget(AActor* Target)
 
     // 创建效果上下文
     FGameplayEffectContextHandle EffectContext = InstigatorASC->MakeEffectContext();
-    EffectContext.AddInstigator(GetOwner(), this);
+    
+    // 🔧 修改 - 使用 GetInstigator() 而不是 GetOwner()
+    // 原因：在 SpawnActor 时，SpawnParams.Instigator 通常会被设置，但 SpawnParams.Owner 未必被设置。
+    // 使用 GetInstigator() 能确保 Context 正确获取到施法者信息，保证 Attributes Capture (AttackDamage) 正常工作。
+    EffectContext.AddInstigator(GetInstigator(), this);
 
     // 创建效果规格
     FGameplayEffectSpecHandle SpecHandle = InstigatorASC->MakeOutgoingSpec(DamageEffectClass, 1.0f, EffectContext);

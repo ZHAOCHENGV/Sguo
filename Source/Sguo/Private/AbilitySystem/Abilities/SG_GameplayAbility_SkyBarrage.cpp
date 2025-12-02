@@ -260,11 +260,11 @@ void USG_GameplayAbility_SkyBarrage::StartBarrageLoop()
 
 void USG_GameplayAbility_SkyBarrage::SpawnProjectileLoop()
 {
-    if (ProjectilesSpawned >= TotalProjectiles || !GetAvatarActorFromActorInfo())
+   if (ProjectilesSpawned >= TotalProjectiles || !GetAvatarActorFromActorInfo())
     {
         GetWorld()->GetTimerManager().ClearTimer(BarrageTimerHandle);
         
-        // 🔧 修改 - 通知单位动画结束
+        // 通知单位动画结束
         if (AActor* AvatarActor = GetAvatarActorFromActorInfo())
         {
             if (ASG_UnitsBase* OwnerUnit = Cast<ASG_UnitsBase>(AvatarActor))
@@ -296,6 +296,8 @@ void USG_GameplayAbility_SkyBarrage::SpawnProjectileLoop()
     FActorSpawnParameters SpawnParams;
     SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
     SpawnParams.Instigator = Cast<APawn>(GetAvatarActorFromActorInfo());
+    // 🔧 修改 - 显式设置 Owner，确保 Projectile 的 GetOwner() 有值（虽已修复 Projectile 使用 GetInstigator，但这仍是好习惯）
+    SpawnParams.Owner = GetAvatarActorFromActorInfo();
 
     ASG_Projectile* NewProjectile = GetWorld()->SpawnActor<ASG_Projectile>(
         ProjectileClass,
@@ -314,6 +316,10 @@ void USG_GameplayAbility_SkyBarrage::SpawnProjectileLoop()
         {
             NewProjectile->SetFlightSpeed(OverrideFlightSpeed);
         }
+        
+        // ✨ 新增 - 应用 GA 中配置的伤害倍率到投射物
+        // 注意：请确保在 SG_GameplayAbility_SkyBarrage.h 中添加了 DamageMultiplier 变量
+        NewProjectile->DamageMultiplier = DamageMultiplier;
 
         NewProjectile->TargetMode = ESGProjectileTargetMode::AreaRandom;
         NewProjectile->SetAreaParameters(ESGProjectileAreaShape::Circle, AreaRadius);

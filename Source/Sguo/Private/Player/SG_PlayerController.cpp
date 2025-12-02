@@ -818,78 +818,84 @@ void ASG_PlayerController::SpawnUnitFromCard(USG_CardDataBase* CardData, const F
 			);
 
 			for (int32 Row = 0; Row < Rows; ++Row)
-			{
-				for (int32 Col = 0; Col < Cols; ++Col)
-				{
-					FVector UnitOffset = FVector(
-						Col * Spacing,
-						Row * Spacing,
-						0.0f
-					);
+            {
+                for (int32 Col = 0; Col < Cols; ++Col)
+                {
+                    FVector UnitOffset = FVector(Col * Spacing, Row * Spacing, 0.0f);
+                    FVector FinalUnitLocation = UnitSpawnLocation + StartOffset + UnitOffset;
 
-					FVector FinalUnitLocation = UnitSpawnLocation + StartOffset + UnitOffset;
+                    FActorSpawnParameters SpawnParams;
+                    SpawnParams.Owner = this;
+                    SpawnParams.Instigator = GetPawn();
+                    SpawnParams.bDeferConstruction = true;
+                    // 🔧 核心修复：强制生成，有碰撞则调整位置
+                    SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
 
-					FActorSpawnParameters SpawnParams;
-					SpawnParams.Owner = this;
-					SpawnParams.Instigator = GetPawn();
-					SpawnParams.bDeferConstruction = true;
+                    AActor* SpawnedUnit = GetWorld()->SpawnActor<AActor>(
+                        CharacterCard->CharacterClass,
+                        FinalUnitLocation,
+                        UnitSpawnRotation,
+                        SpawnParams
+                    );
 
-					AActor* SpawnedUnit = GetWorld()->SpawnActor<AActor>(
-						CharacterCard->CharacterClass,
-						FinalUnitLocation,
-						UnitSpawnRotation,
-						SpawnParams
-					);
+                    if (SpawnedUnit)
+                    {
+                        if (ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(SpawnedUnit))
+                        {
+                            Unit->SourceCardData = CharacterCard;
+                            Unit->FinishSpawning(FTransform(UnitSpawnRotation, FinalUnitLocation));
+                        }
+                        else
+                        {
+                            SpawnedUnit->FinishSpawning(FTransform(UnitSpawnRotation, FinalUnitLocation));
+                        }
+                    }
+                    else
+                    {
+                        UE_LOG(LogTemp, Warning, TEXT("❌ 兵团单位生成失败 (Row:%d, Col:%d)"), Row, Col);
+                    }
+                }
+            }
+            UE_LOG(LogTemp, Log, TEXT("✓ 兵团生成尝试完成，共 %d 个单位"), Rows * Cols);
+        }
+        else
+        {
+            UE_LOG(LogTemp, Log, TEXT("生成英雄"));
 
-					if (SpawnedUnit)
-					{
-						if (ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(SpawnedUnit))
-						{
-							Unit->SourceCardData = CharacterCard;
-							Unit->FinishSpawning(FTransform(UnitSpawnRotation, FinalUnitLocation));
-						}
-						else
-						{
-							SpawnedUnit->FinishSpawning(FTransform(UnitSpawnRotation, FinalUnitLocation));
-						}
-					}
-				}
-			}
+            FActorSpawnParameters SpawnParams;
+            SpawnParams.Owner = this;
+            SpawnParams.Instigator = GetPawn();
+            SpawnParams.bDeferConstruction = true;
+            // 🔧 核心修复：强制生成，有碰撞则调整位置
+            SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
 
-			UE_LOG(LogTemp, Log, TEXT("✓ 兵团生成完成，共 %d 个单位"), Rows * Cols);
-		}
-		else
-		{
-			UE_LOG(LogTemp, Log, TEXT("生成英雄"));
+            AActor* SpawnedUnit = GetWorld()->SpawnActor<AActor>(
+                CharacterCard->CharacterClass,
+                UnitSpawnLocation,
+                UnitSpawnRotation,
+                SpawnParams
+            );
 
-			FActorSpawnParameters SpawnParams;
-			SpawnParams.Owner = this;
-			SpawnParams.Instigator = GetPawn();
-			SpawnParams.bDeferConstruction = true;
+            if (SpawnedUnit)
+            {
+                if (ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(SpawnedUnit))
+                {
+                    Unit->SourceCardData = CharacterCard;
+                    Unit->FinishSpawning(FTransform(UnitSpawnRotation, UnitSpawnLocation));
+                }
+                else
+                {
+                    SpawnedUnit->FinishSpawning(FTransform(UnitSpawnRotation, UnitSpawnLocation));
+                }
+            }
+            else
+            {
+                UE_LOG(LogTemp, Error, TEXT("❌ 英雄生成失败"));
+            }
+        }
+    }
 
-			AActor* SpawnedUnit = GetWorld()->SpawnActor<AActor>(
-				CharacterCard->CharacterClass,
-				UnitSpawnLocation,
-				UnitSpawnRotation,
-				SpawnParams
-			);
-
-			if (SpawnedUnit)
-			{
-				if (ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(SpawnedUnit))
-				{
-					Unit->SourceCardData = CharacterCard;
-					Unit->FinishSpawning(FTransform(UnitSpawnRotation, UnitSpawnLocation));
-				}
-				else
-				{
-					SpawnedUnit->FinishSpawning(FTransform(UnitSpawnRotation, UnitSpawnLocation));
-				}
-			}
-		}
-	}
-
-	UE_LOG(LogTemp, Log, TEXT("========================================"));
+    UE_LOG(LogTemp, Log, TEXT("========================================"));
 }
 
 ASG_MainCityBase* ASG_PlayerController::FindEnemyMainCity()

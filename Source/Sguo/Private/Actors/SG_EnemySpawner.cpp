@@ -310,7 +310,7 @@ float ASG_EnemySpawner::GetNextSpawnInterval() const
 
 void ASG_EnemySpawner::SpawnUnit(USG_CardDataBase* CardData, const FVector& CenterLocation)
 {
-    USG_CharacterCardData* CharCard = Cast<USG_CharacterCardData>(CardData);
+   USG_CharacterCardData* CharCard = Cast<USG_CharacterCardData>(CardData);
     if (!CharCard || !CharCard->CharacterClass)
     {
         UE_LOG(LogSGGameplay, Warning, TEXT("Spawner: 选中了非角色卡或无效卡牌，跳过生成"));
@@ -341,8 +341,22 @@ void ASG_EnemySpawner::SpawnUnit(USG_CardDataBase* CardData, const FVector& Cent
                 FVector RotatedOffset = SpawnRotation.RotateVector(StartOffset + UnitOffset);
                 FVector FinalLoc = CenterLocation + RotatedOffset;
 
+                // 地面吸附逻辑
+                FHitResult HitResult;
+                FVector TraceStart = FinalLoc + FVector(0, 0, 500.0f);
+                FVector TraceEnd = FinalLoc - FVector(0, 0, 1000.0f);
+                FCollisionQueryParams QueryParams;
+                QueryParams.AddIgnoredActor(this);
+
+                if (GetWorld()->LineTraceSingleByChannel(HitResult, TraceStart, TraceEnd, ECC_WorldStatic, QueryParams))
+                {
+                    FinalLoc = HitResult.Location + FVector(0.0f, 0.0f, 50.0f);
+                }
+
                 // 延迟生成
                 FTransform SpawnTransform(SpawnRotation, FinalLoc);
+                
+                // 🔧 核心修复：使用 AdjustIfPossibleButAlwaysSpawn 确保生成
                 ASG_UnitsBase* NewUnit = GetWorld()->SpawnActorDeferred<ASG_UnitsBase>(
                     CharCard->CharacterClass,
                     SpawnTransform,
@@ -368,7 +382,23 @@ void ASG_EnemySpawner::SpawnUnit(USG_CardDataBase* CardData, const FVector& Cent
     else
     {
         // 生成单个英雄
-        FTransform SpawnTransform(SpawnRotation, CenterLocation);
+        FVector FinalLoc = CenterLocation;
+
+        // 地面吸附
+        FHitResult HitResult;
+        FVector TraceStart = FinalLoc + FVector(0, 0, 500.0f);
+        FVector TraceEnd = FinalLoc - FVector(0, 0, 1000.0f);
+        FCollisionQueryParams QueryParams;
+        QueryParams.AddIgnoredActor(this);
+
+        if (GetWorld()->LineTraceSingleByChannel(HitResult, TraceStart, TraceEnd, ECC_WorldStatic, QueryParams))
+        {
+            FinalLoc = HitResult.Location + FVector(0.0f, 0.0f, 50.0f);
+        }
+
+        FTransform SpawnTransform(SpawnRotation, FinalLoc);
+        
+        // 🔧 核心修复：使用 AdjustIfPossibleButAlwaysSpawn 确保生成
         ASG_UnitsBase* NewUnit = GetWorld()->SpawnActorDeferred<ASG_UnitsBase>(
             CharCard->CharacterClass,
             SpawnTransform,

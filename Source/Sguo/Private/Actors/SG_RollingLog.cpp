@@ -6,6 +6,8 @@
 #include "Components/StaticMeshComponent.h"
 #include "Components/AudioComponent.h"
 #include "NiagaraComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/Controller.h"  // ✨ 新增 - 需要访问控制器来停止移动
 #include "NiagaraSystem.h"
 #include "NiagaraFunctionLibrary.h"
 #include "AbilitySystemComponent.h"
@@ -529,8 +531,9 @@ bool ASG_RollingLog::ApplyDamageToTarget(AActor* Target)
  * @param KnockbackDir 击退方向（已确保是滚动方向）
  * @details
  * **🔧 修改：**
- * - 击退方向直接使用传入的 KnockbackDir（已经是 RollDirection）
- * - 添加可配置的向上分量
+ * - 停止控制器的移动请求（防止 AI 顶风作案）
+ * - 停止移动组件的当前速度/加速度
+ * - 强制设为下落模式（消除地面摩擦力干扰）
  */
 void ASG_RollingLog::ApplyKnockbackToTarget(AActor* Target, const FVector& KnockbackDir)
 {
@@ -552,18 +555,42 @@ void ASG_RollingLog::ApplyKnockbackToTarget(AActor* Target, const FVector& Knock
         return;
     }
 
-    // 🔧 修改 - 计算击退速度
+    // ========== 🔧 核心修复开始 ==========
+
+    // 1. 停止 AI/玩家 的移动请求 (清除 Input Acceleration)
+    // 这一步至关重要，防止 AI 在击退过程中继续尝试“走回来”
+    if (AController* UnitController = TargetUnit->GetController())
+    {
+        UnitController->StopMovement();
+    }
+
+    // 2. 清除物理动量 (清除 Velocity & Acceleration)
+    // 确保击退是从零速度开始，而不是与之前的移动速度叠加
+    MovementComp->StopMovementImmediately();
+
+    // 3. 强制切换到下落状态 (Detach from Ground)
+    // 即使 KnockbackUpwardForce 很小，也要强制离地，避免第一帧就被 GroundFriction 刹停
+    if (MovementComp->IsMovingOnGround())
+    {
+        MovementComp->SetMovementMode(MOVE_Falling);
+    }
+
+    // ========== 🔧 核心修复结束 ==========
+
+    // 计算击退速度
     // 水平方向速度 = 击退距离 / 击退时间
+    // 注意：这假设的是无阻力的理想运动，实际距离会因 AirDrag 略微缩短，但已足够稳定
     float HorizontalSpeed = KnockbackDistance / KnockbackDuration;
     
     // 构建击退速度向量
     FVector LaunchVelocity = KnockbackDir * HorizontalSpeed;
-    LaunchVelocity.Z = KnockbackUpwardForce;  // 🔧 修改 - 使用可配置的向上分量
+    LaunchVelocity.Z = KnockbackUpwardForce;
 
-    // 执行击退
+    // 执行击退 (XYOverride=true, ZOverride=true)
+    // 覆盖当前所有速度
     TargetUnit->LaunchCharacter(LaunchVelocity, true, true);
 
-    UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 击退应用成功"));
+    UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 击退应用成功（已重置目标状态）"));
     UE_LOG(LogSGGameplay, Log, TEXT("    击退方向：%s"), *KnockbackDir.ToString());
     UE_LOG(LogSGGameplay, Log, TEXT("    水平速度：%.0f cm/s"), HorizontalSpeed);
     UE_LOG(LogSGGameplay, Log, TEXT("    向上分量：%.0f cm/s"), KnockbackUpwardForce);

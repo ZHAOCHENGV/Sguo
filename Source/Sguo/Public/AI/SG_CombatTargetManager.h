@@ -6,6 +6,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "GameplayTagContainer.h"
+#include "Units/SG_UnitsBase.h"
 #include "SG_CombatTargetManager.generated.h"
 
 class ASG_UnitsBase;

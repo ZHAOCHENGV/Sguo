@@ -13,6 +13,7 @@
 #include "BehaviorTree/BlackboardComponent.h"
 #include "AIController.h"
 #include "NavigationSystem.h"
+#include "AI/SG_CombatTargetManager.h"
 #include "Navigation/PathFollowingComponent.h"
 #include "Debug/SG_LogCategories.h"
 #include "Components/BoxComponent.h"  // ✨ 新增

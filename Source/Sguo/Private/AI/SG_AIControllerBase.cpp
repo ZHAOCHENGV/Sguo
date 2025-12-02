@@ -11,6 +11,7 @@
 #include "Buildings/SG_MainCityBase.h"
 #include "Debug/SG_LogCategories.h"
 #include "NavigationSystem.h"
+#include "AI/SG_CombatTargetManager.h"
 #include "AI/SG_TargetingSubsystem.h"
 
 

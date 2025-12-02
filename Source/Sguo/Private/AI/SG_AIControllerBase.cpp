@@ -404,24 +404,74 @@ void ASG_AIControllerBase::UpdateMovementTimer(float DeltaTime)
     }
     
     APawn* ControlledPawn = GetPawn();
-    if (!ControlledPawn)
-    {
-        return;
-    }
+    if (!ControlledPawn) return;
+
+    // 1. 获取当前速度
+    float Speed = ControlledPawn->GetVelocity().Size();
     
-    FVector CurrentPosition = ControlledPawn->GetActorLocation();
-    float MovedDistance = FVector::Dist(CurrentPosition, LastPosition);
-    
-    // 如果移动了足够距离，重置计时器
-    if (MovedDistance >= MinMovementDistance)
+    // 2. 速度极低（被挡住）
+    if (Speed < 10.0f)
     {
-        MovementTimer = 0.0f;
-        LastPosition = CurrentPosition;
+        MovementTimer += DeltaTime;
     }
     else
     {
-        // 没有移动足够距离，累加计时器
-        MovementTimer += DeltaTime;
+        // 只要动起来了，就重置，说明 RVO 正在起作用
+        MovementTimer = 0.0f; 
+    }
+
+    // 3. 判定为卡住（例如超过 0.5 秒没动）
+    // 阈值要短，反应才快
+    if (MovementTimer > 0.5f)
+    {
+        // 🚨 触发侧面绕行逻辑 🚨
+        UE_LOG(LogSGGameplay, Warning, TEXT("🚧 %s 被人墙阻挡，尝试重新规划侧面路线..."), *ControlledPawn->GetName());
+        
+        // 重置计时器，防止连续触发
+        MovementTimer = 0.0f;
+        
+        TryFlankingMove();
+    }
+}
+
+
+// ✨ 新增函数 - TryFlankingMove (尝试侧面绕行)
+// 需要在 .h 文件中声明: void TryFlankingMove();
+void ASG_AIControllerBase::TryFlankingMove()
+{
+    ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(GetPawn());
+    AActor* CurrentTarget = GetCurrentTarget();
+    
+    if (!Unit || !CurrentTarget) return;
+
+    if (UWorld* World = GetWorld())
+    {
+        USG_CombatTargetManager* CombatManager = World->GetSubsystem<USG_CombatTargetManager>();
+        if (CombatManager)
+        {
+            // 1. 释放当前死磕的槽位
+            CombatManager->ReleaseAttackSlot(Unit, CurrentTarget);
+            
+            // 2. 重新预约一个槽位
+            // 注意：由于我们修改了 FindNearestAvailableSlot，
+            // 它现在会根据 Unit 的当前位置重新计算。
+            // 既然当前位置被堵住了，Unit 会稍微被挤偏一点，这会导致算出不同的最优槽位。
+            FVector NewSlotPos;
+            if (CombatManager->TryReserveAttackSlot(Unit, CurrentTarget, NewSlotPos))
+            {
+                // 3. 强制移动到新槽位
+                MoveToLocation(NewSlotPos, -1.0f, true, true, true);
+                UE_LOG(LogSGGameplay, Log, TEXT("  ↪️ 切换到侧翼槽位: %s"), *NewSlotPos.ToString());
+            }
+            else
+            {
+                // 4. 真的没位置了（所有侧面都满了）
+                // 这时候才考虑标记为不可达，去打别人
+                MarkCurrentTargetUnreachable();
+                StopMovement();
+                // 行为树会在下一帧自动处理 FindNearestTarget
+            }
+        }
     }
 }
 

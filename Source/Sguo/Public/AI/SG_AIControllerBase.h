@@ -26,6 +26,9 @@ class SGUO_API ASG_AIControllerBase : public AAIController
 public:
     ASG_AIControllerBase();
 
+    UFUNCTION(BlueprintCallable, Category = "AI|Movement")
+    void TryFlankingMove();
+    
     virtual void BeginPlay() override;
     virtual void OnPossess(APawn* InPawn) override;
     virtual void OnUnPossess() override;

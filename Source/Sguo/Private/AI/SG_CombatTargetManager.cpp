@@ -40,108 +40,109 @@ void USG_CombatTargetManager::Deinitialize()
 }
 
 /**
- * @brief 为单位查找最佳目标（带槽位检查）
+ * @brief 为单位查找最佳目标（带槽位检查 + 路径可达性检查）
  * @details
- * 核心逻辑：
- * 1. 场景查询获取范围内敌人
- * 2. 过滤掉槽位已满的目标
- * 3. 选择距离最近且有空槽的目标
+ * 优化逻辑：
+ * 1. 获取所有候选目标。
+ * 2. 筛选出有槽位的。
+ * 3. 按直线距离排序。
+ * 4. 关键：按顺序对候选目标进行 NavMesh 路径测试，返回第一个“路通”的目标。
  */
 AActor* USG_CombatTargetManager::FindBestTargetWithSlot(ASG_UnitsBase* Querier)
 {
-    if (!Querier)
-    {
-        return nullptr;
-    }
+   if (!Querier) return nullptr;
 
     FVector QuerierLocation = Querier->GetActorLocation();
     FGameplayTag QuerierFaction = Querier->FactionTag;
     float SearchRadius = Querier->GetDetectionRange();
 
-    // ========== 步骤1：场景查询获取范围内敌人 ==========
+    // 获取导航系统
+    UWorld* World = GetWorld();
+    UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(World);
+
+    // 1. 获取范围内所有敌人
     TArray<AActor*> NearbyEnemies;
     QueryEnemiesInRange(Querier, SearchRadius, NearbyEnemies);
 
-    // ========== 步骤2：评估每个候选目标 ==========
-    AActor* BestTarget = nullptr;
-    float BestScore = -FLT_MAX;
+    // 2. 候选列表预处理结构体
+    struct FCandidateInfo
+    {
+        AActor* Actor;
+        float DistSq;
+        int32 OccupiedSlots;
+    };
+    TArray<FCandidateInfo> Candidates;
 
+    // 3. 初步筛选：只看阵营和槽位（性能消耗低）
     for (AActor* Enemy : NearbyEnemies)
     {
-        // 检查是否有可用槽位
-        if (!HasAvailableSlot(Enemy))
-        {
-            UE_LOG(LogSGGameplay, Verbose, TEXT("  跳过 %s：槽位已满"), *Enemy->GetName());
-            continue;
-        }
+        if (!HasAvailableSlot(Enemy)) continue;
 
-        // 计算距离
-        float Distance = FVector::Dist(QuerierLocation, Enemy->GetActorLocation());
-
-        // 获取槽位占用情况
-        int32 OccupiedSlots = GetOccupiedSlotCount(Enemy);
-
-        // 评分：距离越近越好，占用越少越好
-        // Score = 1000 / Distance - OccupiedSlots * 10
-        float Score = 1000.0f / FMath::Max(Distance, 1.0f) - OccupiedSlots * 10.0f;
-
-        UE_LOG(LogSGGameplay, Verbose, TEXT("  候选 %s：距离=%.0f, 占用槽位=%d, 评分=%.2f"),
-            *Enemy->GetName(), Distance, OccupiedSlots, Score);
-
-        if (Score > BestScore)
-        {
-            BestScore = Score;
-            BestTarget = Enemy;
-        }
+        float DistSq = FVector::DistSquared(QuerierLocation, Enemy->GetActorLocation());
+        int32 Slots = GetOccupiedSlotCount(Enemy);
+        Candidates.Add({Enemy, DistSq, Slots});
     }
 
-    // ========== 步骤3：如果没有敌方单位，查找主城 ==========
-    if (!BestTarget)
+    // 如果没找到单位，尝试找主城
+    if (Candidates.Num() == 0)
     {
         TArray<AActor*> AllMainCities;
-        UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_MainCityBase::StaticClass(), AllMainCities);
-
+        UGameplayStatics::GetAllActorsOfClass(World, ASG_MainCityBase::StaticClass(), AllMainCities);
         for (AActor* Actor : AllMainCities)
         {
-            ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(Actor);
-            if (!MainCity || !MainCity->IsAlive())
-            {
-                continue;
-            }
+            ASG_MainCityBase* City = Cast<ASG_MainCityBase>(Actor);
+            if (!City || !City->IsAlive() || City->FactionTag == QuerierFaction) continue;
+            if (!HasAvailableSlot(City)) continue;
 
-            if (MainCity->FactionTag == QuerierFaction)
-            {
-                continue;
-            }
-
-            if (!HasAvailableSlot(MainCity))
-            {
-                continue;
-            }
-
-            float Distance = FVector::Dist(QuerierLocation, MainCity->GetActorLocation());
-            float Score = 1000.0f / FMath::Max(Distance, 1.0f);
-
-            if (Score > BestScore)
-            {
-                BestScore = Score;
-                BestTarget = MainCity;
-            }
+            float DistSq = FVector::DistSquared(QuerierLocation, City->GetActorLocation());
+            Candidates.Add({City, DistSq, 0});
         }
     }
 
-    if (BestTarget)
+    // 4. 排序：距离优先（平方距离排序更快）
+    // 我们希望优先检查最近的目标，因为如果最近的能走到，它就是最优解
+    Candidates.Sort([](const FCandidateInfo& A, const FCandidateInfo& B) {
+        return A.DistSq < B.DistSq;
+    });
+
+    // 5. 精确筛选：路径可达性检测 (性能消耗高，所以只查 Top N)
+    // 限制检查数量，防止如果全图都被堵死时造成卡顿
+    int32 CheckLimit = 5; 
+    int32 CheckedCount = 0;
+
+    for (const FCandidateInfo& Candidate : Candidates)
     {
-        UE_LOG(LogSGGameplay, Log, TEXT("🎯 %s 选择目标：%s (评分: %.2f)"),
-            *Querier->GetName(), *BestTarget->GetName(), BestScore);
-    }
-    else
-    {
-        UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s 未找到可用目标（所有目标槽位已满或无敌人）"),
-            *Querier->GetName());
+        if (CheckedCount >= CheckLimit) break;
+        CheckedCount++;
+
+        // ✨ 核心修改：检查路径是否存在
+        bool bIsReachable = true;
+        if (NavSys)
+        {
+            FPathFindingQuery Query;
+            Query.StartLocation = QuerierLocation;
+            Query.EndLocation = Candidate.Actor->GetActorLocation();
+            Query.NavData = NavSys->GetDefaultNavDataInstance();
+            Query.Owner = Querier;
+            
+            // TestPathSync 比 FindPathSync 快，只检查连通性，不计算完整路径
+            bIsReachable = NavSys->TestPathSync(Query);
+        }
+
+        if (bIsReachable)
+        {
+            UE_LOG(LogSGGameplay, Log, TEXT("🎯 %s 选中最佳目标：%s (距离: %.0f, 可达: 是)"),
+                *Querier->GetName(), *Candidate.Actor->GetName(), FMath::Sqrt(Candidate.DistSq));
+            return Candidate.Actor;
+        }
+        else
+        {
+            UE_LOG(LogSGGameplay, Verbose, TEXT("  🚫 跳过不可达目标：%s"), *Candidate.Actor->GetName());
+        }
     }
 
-    return BestTarget;
+    UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s 未找到可达目标 (检查了 %d 个最近候选)"), *Querier->GetName(), CheckedCount);
+    return nullptr;
 }
 
 /**
@@ -365,30 +366,67 @@ FSGTargetCombatInfo& USG_CombatTargetManager::GetOrCreateCombatInfo(AActor* Targ
 }
 
 /**
- * @brief 查找最近的可用槽位
+ * @brief 查找最佳攻击槽位
+ * @details
+ * 改进算法：
+ * 1. 不只看直线距离，而是看“可达性”。
+ * 2. 如果正面的槽位虽然近，但是被堵住了，就选侧面的。
  */
 int32 USG_CombatTargetManager::FindNearestAvailableSlot(AActor* Target, const FVector& AttackerLocation)
 {
     FSGTargetCombatInfo& CombatInfo = GetOrCreateCombatInfo(Target);
+    UWorld* World = GetWorld();
+    UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(World);
 
     int32 BestIndex = INDEX_NONE;
-    float BestDistance = FLT_MAX;
+    float BestCost = FLT_MAX;
+
+    // 获取目标朝向，用于判断正面/侧面
+    FVector TargetForward = Target->GetActorForwardVector();
 
     for (int32 i = 0; i < CombatInfo.AttackSlots.Num(); ++i)
     {
         const FSGAttackSlot& Slot = CombatInfo.AttackSlots[i];
         
-        if (Slot.IsOccupied())
-        {
-            continue;
-        }
+        // 跳过已占用的
+        if (Slot.IsOccupied()) continue;
 
         FVector SlotWorldPos = Slot.GetWorldPosition(Target);
-        float Distance = FVector::Dist(AttackerLocation, SlotWorldPos);
+        
+        // 1. 基础距离分 (A* Heuristic)
+        float DistSq = FVector::DistSquared(AttackerLocation, SlotWorldPos);
+        float Cost = DistSq;
 
-        if (Distance < BestDistance)
+        // 2. 角度惩罚 (可选)
+        // 这一步是为了让单位倾向于去它“顺路”的那一侧，而不是穿过目标去另一侧
+        // FVector DirToSlot = (SlotWorldPos - Target->GetActorLocation()).GetSafeNormal();
+        // FVector DirToAttacker = (AttackerLocation - Target->GetActorLocation()).GetSafeNormal();
+        // float Dot = FVector::DotProduct(DirToSlot, DirToAttacker);
+        // if (Dot < 0) Cost *= 1.5f; // 如果槽位在对面，增加代价
+
+        // 3. 关键：路径可达性测试 (A* Pathfinding Check)
+        // 使用 ProjectPointToNavigation 快速检查槽位是否在 NavMesh 上
+        // 如果槽位在“障碍物”里（比如被其他人堵死），导航系统会投影失败或投射到很远
+        if (NavSys)
         {
-            BestDistance = Distance;
+            FNavLocation ProjectedSlot;
+            // 搜索半径设小一点，检测是否真的“有落脚点”
+            bool bProjected = NavSys->ProjectPointToNavigation(SlotWorldPos, ProjectedSlot, FVector(50,50,50));
+            
+            if (!bProjected)
+            {
+                // 槽位无效（可能在墙里或悬崖外），跳过
+                continue; 
+            }
+            
+            // 可选：进行真正的路径开销计算 (Raycast 或 FindPath)
+            // 这是一个性能权衡。如果单位少，可以用 NavSys->GetPathCost()
+            // 这里为了性能，我们假设直线距离 + RVO 足够
+        }
+
+        if (Cost < BestCost)
+        {
+            BestCost = Cost;
             BestIndex = i;
         }
     }

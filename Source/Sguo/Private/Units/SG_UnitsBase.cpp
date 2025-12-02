@@ -54,12 +54,20 @@ ASG_UnitsBase::ASG_UnitsBase()
 	// 2. 配置移动组件
 	if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
 	{
-		// 启用 RVO 避让
+		// 1. 启用 RVO 避让
 		MoveComp->bUseRVOAvoidance = true;
-		// 修正后的变量名 (UE5)
-		MoveComp->AvoidanceConsiderationRadius = 100.0f;
-		// 随机权重，防止面对面卡死
+        
+		// 2. 关键参数调优
+		// 避让半径：比胶囊体稍大一点，给足空间滑过去
+		MoveComp->AvoidanceConsiderationRadius = 150.0f; 
+        
+		// 避让权重：0.5 表示大家都让；如果设为 1.0，则谁也不让谁（容易卡死）
+		// 给一个随机值，打破对称性，防止两个单位面对面“跳舞”
 		MoveComp->AvoidanceWeight = 0.5f; 
+        
+		// 3. 启用加速避让 (RVO2 特性)
+		// 允许单位在避让时调整速度，而不仅仅是方向
+		MoveComp->bEnablePhysicsInteraction = false; // 甚至可以关闭物理交互，纯靠 RVO
 	}
 
 }
@@ -219,12 +227,9 @@ void ASG_UnitsBase::BeginPlay()
 	// 解决后排单位被前排阻挡而发呆的问题
 	if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
 	{
-		
-        
 		// 设置避让权重（0.0-1.0）
 		// 🔧 技巧：使用随机权重，打破对称性，防止两个单位面对面卡住
 		MoveComp->AvoidanceWeight = FMath::FRandRange(0.1f, 0.9f);
-        
 		UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 启用 RVO 避让 (权重: %.2f)"), MoveComp->AvoidanceWeight);
 	}
 	

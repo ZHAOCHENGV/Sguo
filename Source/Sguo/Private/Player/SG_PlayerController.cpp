@@ -779,56 +779,71 @@ void ASG_PlayerController::OnCardSelectionChanged(const FGuid& SelectedId)
 void ASG_PlayerController::SpawnUnitFromCard(USG_CardDataBase* CardData, const FVector& UnitSpawnLocation, const FRotator& UnitSpawnRotation)
 {
 	
-	if (!CardData)
-	{
-		UE_LOG(LogTemp, Error, TEXT("SpawnUnitFromCard 失败：CardData 为空"));
-		return;
-	}
+	if (!CardData) return;
 
-	UE_LOG(LogTemp, Log, TEXT("========== 生成单位：%s =========="), *CardData->CardName.ToString());
+    UE_LOG(LogTemp, Log, TEXT("========== 生成单位：%s =========="), *CardData->CardName.ToString());
 
-	if (USG_CharacterCardData* CharacterCard = Cast<USG_CharacterCardData>(CardData))
-	{
-		if (!CharacterCard->CharacterClass)
-		{
-			UE_LOG(LogTemp, Error, TEXT("❌ 角色卡没有设置 CharacterClass"));
-			return;
-		}
+    if (USG_CharacterCardData* CharacterCard = Cast<USG_CharacterCardData>(CardData))
+    {
+        if (!CharacterCard->CharacterClass) return;
 
-		UE_LOG(LogSGGameplay, Log, TEXT("卡牌倍率配置："));
-		UE_LOG(LogSGGameplay, Log, TEXT("  生命值倍率：%.2f"), CharacterCard->HealthMultiplier);
-		UE_LOG(LogSGGameplay, Log, TEXT("  伤害倍率：%.2f"), CharacterCard->DamageMultiplier);
-		UE_LOG(LogSGGameplay, Log, TEXT("  速度倍率：%.2f"), CharacterCard->SpeedMultiplier);
+        // 🔧 关键修改 1：获取 CDO 以读取胶囊体尺寸
+        float CapsuleHalfHeight = 88.0f; // 默认值（UE小白人标准）
+        ACharacter* CharCDO = Cast<ACharacter>(CharacterCard->CharacterClass->GetDefaultObject());
+        if (CharCDO && CharCDO->GetCapsuleComponent())
+        {
+            CapsuleHalfHeight = CharCDO->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+        }
+        
+        // 稍微抬高一点点，防止浮点误差导致刚生成就碰撞
+        float SpawnZOffset = CapsuleHalfHeight + 2.0f; 
 
-		if (CharacterCard->bIsTroopCard)
-		{
-			UE_LOG(LogTemp, Log, TEXT("生成兵团 - 阵型: %dx%d, 间距: %.0f"), 
-				CharacterCard->TroopFormation.X, 
-				CharacterCard->TroopFormation.Y,
-				CharacterCard->TroopSpacing);
+        if (CharacterCard->bIsTroopCard)
+        {
+            int32 Rows = CharacterCard->TroopFormation.Y;
+            int32 Cols = CharacterCard->TroopFormation.X;
+            float Spacing = CharacterCard->TroopSpacing;
 
-			int32 Rows = CharacterCard->TroopFormation.Y;
-			int32 Cols = CharacterCard->TroopFormation.X;
-			float Spacing = CharacterCard->TroopSpacing;
+            FVector StartOffset = FVector(
+                -(Cols - 1) * Spacing / 2.0f,
+                -(Rows - 1) * Spacing / 2.0f,
+                0.0f
+            );
 
-			FVector StartOffset = FVector(
-				-(Cols - 1) * Spacing / 2.0f,
-				-(Rows - 1) * Spacing / 2.0f,
-				0.0f
-			);
+            // 准备射线检测参数
+            FCollisionQueryParams QueryParams;
+            QueryParams.AddIgnoredActor(GetPawn()); // 忽略玩家自己
 
-			for (int32 Row = 0; Row < Rows; ++Row)
+            for (int32 Row = 0; Row < Rows; ++Row)
             {
                 for (int32 Col = 0; Col < Cols; ++Col)
                 {
                     FVector UnitOffset = FVector(Col * Spacing, Row * Spacing, 0.0f);
-                    FVector FinalUnitLocation = UnitSpawnLocation + StartOffset + UnitOffset;
+                    
+                    // 计算水平位置 (X, Y)
+                    FVector TargetLocationXY = UnitSpawnLocation + StartOffset + UnitOffset;
+                    FVector FinalUnitLocation = TargetLocationXY;
+
+                    // 🔧 关键修改 2：为每个单位单独做地面吸附检测
+                    FHitResult HitResult;
+                    FVector TraceStart = TargetLocationXY + FVector(0, 0, 500.0f); // 从上方 500cm 处开始
+                    FVector TraceEnd = TargetLocationXY - FVector(0, 0, 1000.0f);  // 向下探测
+
+                    if (GetWorld()->LineTraceSingleByChannel(HitResult, TraceStart, TraceEnd, ECC_WorldStatic, QueryParams))
+                    {
+                        // 地面高度 + 胶囊体半高 + 缓冲
+                        FinalUnitLocation.Z = HitResult.Location.Z + SpawnZOffset;
+                    }
+                    else
+                    {
+                        // 如果没检测到地面（比如悬崖外），使用基准高度
+                        FinalUnitLocation.Z = UnitSpawnLocation.Z + SpawnZOffset;
+                    }
 
                     FActorSpawnParameters SpawnParams;
                     SpawnParams.Owner = this;
                     SpawnParams.Instigator = GetPawn();
                     SpawnParams.bDeferConstruction = true;
-                    // 🔧 核心修复：强制生成，有碰撞则调整位置
                     SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
 
                     AActor* SpawnedUnit = GetWorld()->SpawnActor<AActor>(
@@ -850,28 +865,41 @@ void ASG_PlayerController::SpawnUnitFromCard(USG_CardDataBase* CardData, const F
                             SpawnedUnit->FinishSpawning(FTransform(UnitSpawnRotation, FinalUnitLocation));
                         }
                     }
-                    else
-                    {
-                        UE_LOG(LogTemp, Warning, TEXT("❌ 兵团单位生成失败 (Row:%d, Col:%d)"), Row, Col);
-                    }
                 }
             }
-            UE_LOG(LogTemp, Log, TEXT("✓ 兵团生成尝试完成，共 %d 个单位"), Rows * Cols);
+            UE_LOG(LogTemp, Log, TEXT("✓ 兵团生成完成"));
         }
         else
         {
-            UE_LOG(LogTemp, Log, TEXT("生成英雄"));
+            // 生成英雄（单个单位）
+            // 🔧 关键修改 3：英雄也需要地面吸附
+            FVector FinalUnitLocation = UnitSpawnLocation;
+            
+            FHitResult HitResult;
+            FCollisionQueryParams QueryParams;
+            QueryParams.AddIgnoredActor(GetPawn());
+            
+            FVector TraceStart = UnitSpawnLocation + FVector(0, 0, 500.0f);
+            FVector TraceEnd = UnitSpawnLocation - FVector(0, 0, 1000.0f);
+
+            if (GetWorld()->LineTraceSingleByChannel(HitResult, TraceStart, TraceEnd, ECC_WorldStatic, QueryParams))
+            {
+                FinalUnitLocation.Z = HitResult.Location.Z + SpawnZOffset;
+            }
+            else
+            {
+                FinalUnitLocation.Z = UnitSpawnLocation.Z + SpawnZOffset;
+            }
 
             FActorSpawnParameters SpawnParams;
             SpawnParams.Owner = this;
             SpawnParams.Instigator = GetPawn();
             SpawnParams.bDeferConstruction = true;
-            // 🔧 核心修复：强制生成，有碰撞则调整位置
             SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
 
             AActor* SpawnedUnit = GetWorld()->SpawnActor<AActor>(
                 CharacterCard->CharacterClass,
-                UnitSpawnLocation,
+                FinalUnitLocation,
                 UnitSpawnRotation,
                 SpawnParams
             );
@@ -881,21 +909,15 @@ void ASG_PlayerController::SpawnUnitFromCard(USG_CardDataBase* CardData, const F
                 if (ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(SpawnedUnit))
                 {
                     Unit->SourceCardData = CharacterCard;
-                    Unit->FinishSpawning(FTransform(UnitSpawnRotation, UnitSpawnLocation));
+                    Unit->FinishSpawning(FTransform(UnitSpawnRotation, FinalUnitLocation));
                 }
                 else
                 {
-                    SpawnedUnit->FinishSpawning(FTransform(UnitSpawnRotation, UnitSpawnLocation));
+                    SpawnedUnit->FinishSpawning(FTransform(UnitSpawnRotation, FinalUnitLocation));
                 }
-            }
-            else
-            {
-                UE_LOG(LogTemp, Error, TEXT("❌ 英雄生成失败"));
             }
         }
     }
-
-    UE_LOG(LogTemp, Log, TEXT("========================================"));
 }
 
 ASG_MainCityBase* ASG_PlayerController::FindEnemyMainCity()

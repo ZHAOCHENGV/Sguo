@@ -310,12 +310,17 @@ float ASG_EnemySpawner::GetNextSpawnInterval() const
 
 void ASG_EnemySpawner::SpawnUnit(USG_CardDataBase* CardData, const FVector& CenterLocation)
 {
-   USG_CharacterCardData* CharCard = Cast<USG_CharacterCardData>(CardData);
-    if (!CharCard || !CharCard->CharacterClass)
+  USG_CharacterCardData* CharCard = Cast<USG_CharacterCardData>(CardData);
+    if (!CharCard || !CharCard->CharacterClass) return;
+
+    // 🔧 关键修改：获取胶囊体半高
+    float CapsuleHalfHeight = 88.0f;
+    ACharacter* CharCDO = Cast<ACharacter>(CharCard->CharacterClass->GetDefaultObject());
+    if (CharCDO && CharCDO->GetCapsuleComponent())
     {
-        UE_LOG(LogSGGameplay, Warning, TEXT("Spawner: 选中了非角色卡或无效卡牌，跳过生成"));
-        return;
+        CapsuleHalfHeight = CharCDO->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
     }
+    float SpawnZOffset = CapsuleHalfHeight + 2.0f;
 
     // 检查是否是兵团
     if (CharCard->bIsTroopCard)
@@ -324,20 +329,17 @@ void ASG_EnemySpawner::SpawnUnit(USG_CardDataBase* CardData, const FVector& Cent
         int32 Cols = CharCard->TroopFormation.X;
         float Spacing = CharCard->TroopSpacing;
 
-        // 计算起始偏移（中心对齐）
         FVector StartOffset = FVector(
             -(Cols - 1) * Spacing / 2.0f,
             -(Rows - 1) * Spacing / 2.0f,
             0.0f
         );
 
-        // 生成兵团
         for (int32 Row = 0; Row < Rows; ++Row)
         {
             for (int32 Col = 0; Col < Cols; ++Col)
             {
                 FVector UnitOffset = FVector(Col * Spacing, Row * Spacing, 0.0f);
-                // 应用旋转
                 FVector RotatedOffset = SpawnRotation.RotateVector(StartOffset + UnitOffset);
                 FVector FinalLoc = CenterLocation + RotatedOffset;
 
@@ -350,13 +352,11 @@ void ASG_EnemySpawner::SpawnUnit(USG_CardDataBase* CardData, const FVector& Cent
 
                 if (GetWorld()->LineTraceSingleByChannel(HitResult, TraceStart, TraceEnd, ECC_WorldStatic, QueryParams))
                 {
-                    FinalLoc = HitResult.Location + FVector(0.0f, 0.0f, 50.0f);
+                    // 🔧 使用动态计算的高度
+                    FinalLoc = HitResult.Location + FVector(0.0f, 0.0f, SpawnZOffset);
                 }
 
-                // 延迟生成
                 FTransform SpawnTransform(SpawnRotation, FinalLoc);
-                
-                // 🔧 核心修复：使用 AdjustIfPossibleButAlwaysSpawn 确保生成
                 ASG_UnitsBase* NewUnit = GetWorld()->SpawnActorDeferred<ASG_UnitsBase>(
                     CharCard->CharacterClass,
                     SpawnTransform,
@@ -367,24 +367,19 @@ void ASG_EnemySpawner::SpawnUnit(USG_CardDataBase* CardData, const FVector& Cent
 
                 if (NewUnit)
                 {
-                    // 设置关键数据
                     NewUnit->SetSourceCardData(CharCard);
-                    NewUnit->FactionTag = FactionTag; // 设置为敌方阵营
-                    
-                    // 完成生成
+                    NewUnit->FactionTag = FactionTag;
                     NewUnit->FinishSpawning(SpawnTransform);
                     CurrentSpawnCount++;
                 }
             }
         }
-        UE_LOG(LogSGGameplay, Log, TEXT("Spawner: 生成兵团 [%s] 共 %d 个单位"), *CharCard->CardName.ToString(), Rows * Cols);
     }
     else
     {
         // 生成单个英雄
         FVector FinalLoc = CenterLocation;
 
-        // 地面吸附
         FHitResult HitResult;
         FVector TraceStart = FinalLoc + FVector(0, 0, 500.0f);
         FVector TraceEnd = FinalLoc - FVector(0, 0, 1000.0f);
@@ -393,12 +388,11 @@ void ASG_EnemySpawner::SpawnUnit(USG_CardDataBase* CardData, const FVector& Cent
 
         if (GetWorld()->LineTraceSingleByChannel(HitResult, TraceStart, TraceEnd, ECC_WorldStatic, QueryParams))
         {
-            FinalLoc = HitResult.Location + FVector(0.0f, 0.0f, 50.0f);
+            // 🔧 使用动态计算的高度
+            FinalLoc = HitResult.Location + FVector(0.0f, 0.0f, SpawnZOffset);
         }
 
         FTransform SpawnTransform(SpawnRotation, FinalLoc);
-        
-        // 🔧 核心修复：使用 AdjustIfPossibleButAlwaysSpawn 确保生成
         ASG_UnitsBase* NewUnit = GetWorld()->SpawnActorDeferred<ASG_UnitsBase>(
             CharCard->CharacterClass,
             SpawnTransform,
@@ -411,10 +405,8 @@ void ASG_EnemySpawner::SpawnUnit(USG_CardDataBase* CardData, const FVector& Cent
         {
             NewUnit->SetSourceCardData(CharCard);
             NewUnit->FactionTag = FactionTag;
-            
             NewUnit->FinishSpawning(SpawnTransform);
             CurrentSpawnCount++;
-            UE_LOG(LogSGGameplay, Log, TEXT("Spawner: 生成英雄 [%s]"), *CharCard->CardName.ToString());
         }
     }
 }

@@ -312,6 +312,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Visuals", meta = (DisplayName = "死亡动画"))
     TObjectPtr<UAnimMontage> DeathMontage;
 
+    // ✨ 新增 - 死亡时启用布娃娃开关
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Visuals", meta = (DisplayName = "死亡时启用布娃娃"))
+    bool bEnableRagdollOnDeath = false;
+
     // ========== 寻敌逻辑配置 ==========
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Search", meta = (DisplayName = "寻敌形状"))

@@ -1262,11 +1262,11 @@ void ASG_Projectile::HandleTargetLost()
 
 /**
  * @brief 处理投射物落地
- * 
- * @details 
+ * * @details 
  * **功能说明：**
  * - 标记已落地
- * - 禁用碰撞
+ * - 禁用碰撞（防止后续物理检测消耗）
+ * - 禁用 Tick（防止后续逻辑消耗，重大性能优化）
  * - 执行落地特效
  * - 广播落地事件
  * - 设置延迟销毁
@@ -1288,6 +1288,10 @@ void ASG_Projectile::HandleGroundImpact()
         CollisionCapsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     }
 
+
+    // 落地后投射物不再移动，完全不需要 Tick，节省 CPU
+    SetActorTickEnabled(false);
+    
     // 清零速度
     CurrentVelocity = FVector::ZeroVector;
     

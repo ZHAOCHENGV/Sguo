@@ -425,14 +425,14 @@ void ASG_UnitsBase::OnHealthChanged(const FOnAttributeChangeData& Data)
  * @brief 死亡处理
  * @details
  * 功能说明：
- * - 🔧 修改 - 完善死亡逻辑，确保停止所有行为
+ * - 🔧 修改 - 完善死亡逻辑，根据配置决定表现（布娃娃 vs 蒙太奇）
  * - 停止移动、攻击、AI 逻辑
- * - 播放死亡动画
+ * - 播放死亡动画或启用物理模拟
  * - 广播死亡事件
  */
 void ASG_UnitsBase::OnDeath_Implementation()
 {
-	// 防止重复死亡
+// 防止重复死亡
     if (bIsDead) return;
     
     // 设置死亡标记
@@ -440,14 +440,14 @@ void ASG_UnitsBase::OnDeath_Implementation()
     
     UE_LOG(LogSGGameplay, Log, TEXT("========== %s 执行死亡逻辑 =========="), *GetName());
     
-    // ✨ 新增 - 步骤0：立即强制停止所有行为
+    // 步骤0：立即强制停止所有行为
     ForceStopAllActions();
     
-    // 步骤1：禁用碰撞（防止继续被攻击或阻挡其他单位）
+    // 步骤1：禁用胶囊体碰撞（防止继续被攻击或阻挡其他单位）
     if (UCapsuleComponent* Capsule = GetCapsuleComponent())
     {
         Capsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-        UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 禁用碰撞"));
+        UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 禁用胶囊体碰撞"));
     }
 
     // 步骤2：停止移动并禁用移动组件
@@ -462,62 +462,71 @@ void ASG_UnitsBase::OnDeath_Implementation()
     // 步骤3：停止 AI 逻辑
     if (AController* Ctrl = GetController())
     {
-        // 🔧 修改 - 使用专门的冻结函数
         if (ASG_AIControllerBase* AICon = Cast<ASG_AIControllerBase>(Ctrl))
         {
             AICon->FreezeAI();
-            UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 冻结 AI 控制器"));
         }
-        
-        // 解除控制
         Ctrl->UnPossess();
         UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 解除控制器"));
     }
 
-    // ✨ 新增 - 步骤4：广播死亡事件（在播放动画之前，让其他单位有机会切换目标）
+    // 步骤4：广播死亡事件
     UE_LOG(LogSGGameplay, Log, TEXT("📢 广播单位死亡事件：%s"), *GetName());
     OnUnitDeathEvent.Broadcast(this);
 
-    // 步骤5：播放死亡动画
+    // 🔧 修改 - 步骤5：根据配置处理死亡表现（布娃娃 vs 动画）
     float DeathAnimDuration = 2.0f; // 默认销毁延迟
-    
-    if (DeathMontage)
+    bool bVisualsHandled = false;
+
+    USkeletalMeshComponent* MeshComp = GetMesh();
+
+    // 🟢 分支 A：启用布娃娃（优先级最高）
+    if (bEnableRagdollOnDeath && MeshComp)
     {
-        // 🔧 修改 - 确保动画实例有效
-        if (USkeletalMeshComponent* MeshComp = GetMesh())
+        // 停止所有正在播放的蒙太奇（防止动画与物理冲突）
+        if (UAnimInstance* AnimInstance = MeshComp->GetAnimInstance())
         {
-            if (UAnimInstance* AnimInstance = MeshComp->GetAnimInstance())
+            AnimInstance->StopAllMontages(0.1f);
+        }
+
+        // 设置碰撞预设为 Ragdoll（确保能与物理环境交互）
+        MeshComp->SetCollisionProfileName(TEXT("Ragdoll"));
+        // 启用物理模拟和查询
+        MeshComp->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+        MeshComp->SetAllBodiesSimulatePhysics(true);
+        MeshComp->SetSimulatePhysics(true);
+        
+        // 布娃娃通常需要更长时间来沉降，延长销毁时间
+        DeathAnimDuration = 5.0f;
+        bVisualsHandled = true;
+        
+        UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 启用布娃娃物理（配置开启）"));
+    }
+    // 🔵 分支 B：播放死亡动画（如果未开启布娃娃且有蒙太奇）
+    else if (DeathMontage && MeshComp)
+    {
+        if (UAnimInstance* AnimInstance = MeshComp->GetAnimInstance())
+        {
+            AnimInstance->StopAllMontages(0.1f);
+            float Duration = AnimInstance->Montage_Play(DeathMontage, 1.0f);
+            
+            if (Duration > 0.0f)
             {
-                // 停止所有正在播放的蒙太奇
-                AnimInstance->StopAllMontages(0.1f);
-                
-                // 播放死亡蒙太奇
-                float Duration = AnimInstance->Montage_Play(DeathMontage, 1.0f);
-                
-                if (Duration > 0.0f)
-                {
-                    DeathAnimDuration = Duration + 0.5f;
-                    UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 播放死亡动画，时长：%.2f"), Duration);
-                }
-                else
-                {
-                    UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 死亡动画播放失败"));
-                }
+                DeathAnimDuration = Duration + 0.5f; // 稍微多留一点时间
+                bVisualsHandled = true;
+                UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 播放死亡动画，时长：%.2f"), Duration);
             }
         }
     }
-    else
+
+    // 🔴 分支 C：兜底逻辑（既没布娃娃也没动画）
+    if (!bVisualsHandled && MeshComp)
     {
-        UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 未配置死亡动画"));
-        
-        // 如果没有动画，可以开启物理模拟（布娃娃）
-        if (USkeletalMeshComponent* MeshComp = GetMesh())
-        {
-            MeshComp->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-            MeshComp->SetSimulatePhysics(true);
-            DeathAnimDuration = 5.0f;
-            UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 启用布娃娃物理"));
-        }
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 未配置死亡动画且未开启布娃娃，启用布娃娃作为兜底"));
+        MeshComp->SetCollisionProfileName(TEXT("Ragdoll"));
+        MeshComp->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+        MeshComp->SetSimulatePhysics(true);
+        DeathAnimDuration = 3.0f;
     }
 
     // 步骤6：延迟销毁
@@ -525,6 +534,7 @@ void ASG_UnitsBase::OnDeath_Implementation()
     UE_LOG(LogSGGameplay, Log, TEXT("  将在 %.1f 秒后销毁"), DeathAnimDuration);
     UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 }
+
 
 // 查找最近的目标
 AActor* ASG_UnitsBase::FindNearestTarget()

@@ -1,11 +1,12 @@
 ﻿// 📄 文件：Source/Sguo/Private/AbilitySystem/Abilities/SG_GameplayAbility_SkyBarrage.cpp
-// 🔧 修改 - 增加蒙太奇播放失败的安全检查，防止技能卡死
+// 🔧 修改 - 修复蒙太奇播放和动画状态同步问题
 
 #include "AbilitySystem/Abilities/SG_GameplayAbility_SkyBarrage.h"
 #include "Actors/SG_Projectile.h"
 #include "Units/SG_UnitsBase.h"
+#include "AbilitySystem/SG_AttributeSet.h"  // ✨ 新增
 #include "GameFramework/Character.h"
-#include "Abilities/Tasks/AbilityTask_PlayMontageAndWait.h" // ✨ 必须包含
+#include "Abilities/Tasks/AbilityTask_PlayMontageAndWait.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Abilities/Tasks/AbilityTask_WaitGameplayEvent.h"
 #include "Data/Type/SG_UnitDataTable.h"
@@ -16,7 +17,19 @@ USG_GameplayAbility_SkyBarrage::USG_GameplayAbility_SkyBarrage()
     TriggerEventTag = FGameplayTag::RequestGameplayTag(FName("Ability.Event.Spawn"));
 }
 
-void USG_GameplayAbility_SkyBarrage::ActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData)
+/**
+ * @brief 激活能力
+ * @details
+ * 🔧 修改说明：
+ * - 修复蒙太奇播放逻辑
+ * - 添加动画状态同步（调用 StartAttackAnimation）
+ * - 添加攻击速度倍率支持
+ */
+void USG_GameplayAbility_SkyBarrage::ActivateAbility(
+    const FGameplayAbilitySpecHandle Handle, 
+    const FGameplayAbilityActorInfo* ActorInfo, 
+    const FGameplayAbilityActivationInfo ActivationInfo, 
+    const FGameplayEventData* TriggerEventData)
 {
     Super::ActivateAbility(Handle, ActorInfo, ActivationInfo, TriggerEventData);
 
@@ -26,14 +39,29 @@ void USG_GameplayAbility_SkyBarrage::ActivateAbility(const FGameplayAbilitySpecH
         return;
     }
 
+    // 🔧 修改 - 获取施放者单位引用
+    ASG_UnitsBase* OwnerUnit = Cast<ASG_UnitsBase>(ActorInfo->AvatarActor.Get());
+
     // 1. 获取蒙太奇
     UAnimMontage* MontageToPlay = FindMontageFromUnitData();
+    
+    // 🔧 修改 - 如果没有蒙太奇，直接开始剑雨（不再强制结束）
     if (!MontageToPlay)
     {
-        UE_LOG(LogTemp, Error, TEXT("SkyBarrage: 未找到蒙太奇，技能结束"));
-        EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
+        UE_LOG(LogTemp, Warning, TEXT("SkyBarrage: 未找到蒙太奇，直接开始剑雨"));
+        
+        // ✨ 新增 - 设置动画状态
+        if (OwnerUnit)
+        {
+            OwnerUnit->StartAttackAnimation(Duration);
+        }
+        
+        // 直接开始剑雨
+        StartBarrageLoop();
         return;
     }
+
+    // ========== 有蒙太奇的正常流程 ==========
 
     // 2.【先】监听事件
     UAbilityTask_WaitGameplayEvent* WaitEventTask = UAbilityTask_WaitGameplayEvent::WaitGameplayEvent(
@@ -44,21 +72,26 @@ void USG_GameplayAbility_SkyBarrage::ActivateAbility(const FGameplayAbilitySpecH
         true
     );
 
-    if (!WaitEventTask)
+    if (WaitEventTask)
     {
-        EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
-        return;
+        WaitEventTask->EventReceived.AddDynamic(this, &USG_GameplayAbility_SkyBarrage::OnStartBarrageEvent);
+        WaitEventTask->ReadyForActivation();
     }
 
-    WaitEventTask->EventReceived.AddDynamic(this, &USG_GameplayAbility_SkyBarrage::OnStartBarrageEvent);
-    WaitEventTask->ReadyForActivation();
-
     // 3.【后】播放动画
+    // 🔧 修改 - 获取攻击速度倍率
+    float PlayRate = 1.0f;
+    if (OwnerUnit && OwnerUnit->AttributeSet)
+    {
+        PlayRate = OwnerUnit->AttributeSet->GetAttackSpeed();
+        if (PlayRate <= 0.0f) PlayRate = 1.0f;
+    }
+    
     UAbilityTask_PlayMontageAndWait* PlayMontageTask = UAbilityTask_PlayMontageAndWait::CreatePlayMontageAndWaitProxy(
         this,
         NAME_None,
         MontageToPlay,
-        1.0f,
+        PlayRate,  // 🔧 修改 - 使用攻击速度倍率
         NAME_None,
         false,
         1.0f
@@ -66,6 +99,7 @@ void USG_GameplayAbility_SkyBarrage::ActivateAbility(const FGameplayAbilitySpecH
 
     if (!PlayMontageTask)
     {
+        UE_LOG(LogTemp, Error, TEXT("SkyBarrage: 创建蒙太奇任务失败"));
         EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
         return;
     }
@@ -76,56 +110,115 @@ void USG_GameplayAbility_SkyBarrage::ActivateAbility(const FGameplayAbilitySpecH
     PlayMontageTask->OnCancelled.AddDynamic(this, &USG_GameplayAbility_SkyBarrage::OnMontageCancelled);
 
     PlayMontageTask->ReadyForActivation();
+
+    // ✨ 新增 - 计算实际动画时长并通知单位
+    float MontageLength = MontageToPlay->GetPlayLength();
+    float ActualDuration = (PlayRate > 0.0f) ? (MontageLength / PlayRate) : MontageLength;
+    
+    // 剑雨技能：动画时长可能比剑雨持续时间短，取较大值
+    float TotalAbilityDuration = FMath::Max(ActualDuration, Duration);
+    
+    if (OwnerUnit)
+    {
+        OwnerUnit->StartAttackAnimation(TotalAbilityDuration);
+        UE_LOG(LogTemp, Log, TEXT("SkyBarrage: 开始播放蒙太奇 %s，动画时长：%.2f秒，技能总时长：%.2f秒"), 
+            *MontageToPlay->GetName(), ActualDuration, TotalAbilityDuration);
+    }
 }
-
-
 
 void USG_GameplayAbility_SkyBarrage::OnStartBarrageEvent(FGameplayEventData Payload)
 {
     StartBarrageLoop();
 }
 
-// ✨ 新增 - 处理动画正常结束
+// 🔧 修改 - 处理动画正常结束
 void USG_GameplayAbility_SkyBarrage::OnMontageCompleted()
 {
-    // 剑雨比较特殊：如果剑雨还在下（Timer还在跑），蒙太奇结束了，是否要结束技能？
-    // 通常我们希望技能保持 Active 直到剑雨下完。
-    // 所以这里我们需要判断一下
-    
-    // 如果 Timer 已经跑完了（BarrageTimerHandle 无效），则结束技能
+    // 如果 Timer 已经跑完了，则结束技能
     if (!GetWorld() || !GetWorld()->GetTimerManager().IsTimerActive(BarrageTimerHandle))
     {
+        // 🔧 修改 - 通知单位动画结束
+        if (AActor* AvatarActor = GetAvatarActorFromActorInfo())
+        {
+            if (ASG_UnitsBase* OwnerUnit = Cast<ASG_UnitsBase>(AvatarActor))
+            {
+                OwnerUnit->OnAttackAnimationFinished();
+            }
+        }
+        
         EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, false);
     }
-    // 如果 Timer 还在跑，我们不在这里结束技能，而是等 SpawnProjectileLoop 里的 Timer 结束时调用 EndAbility
+    // 如果 Timer 还在跑，等 SpawnProjectileLoop 里的 Timer 结束时调用 EndAbility
 }
 
-// ✨ 新增 - 处理动画被取消/打断
+// 🔧 修改 - 处理动画被取消/打断
 void USG_GameplayAbility_SkyBarrage::OnMontageCancelled()
 {
-    // 如果动作被打断（比如被晕了），通常逻辑是停止施法，剑雨也应该停
+    // 停止剑雨
     if (GetWorld())
     {
         GetWorld()->GetTimerManager().ClearTimer(BarrageTimerHandle);
     }
+    
+    // 🔧 修改 - 通知单位动画结束
+    if (AActor* AvatarActor = GetAvatarActorFromActorInfo())
+    {
+        if (ASG_UnitsBase* OwnerUnit = Cast<ASG_UnitsBase>(AvatarActor))
+        {
+            OwnerUnit->OnAttackAnimationFinished();
+        }
+    }
+    
     EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, true);
 }
 
+/**
+ * @brief 从单位数据中查找蒙太奇
+ * @return 找到的蒙太奇，失败返回 nullptr
+ * @details
+ * 🔧 修改说明：
+ * - 简化逻辑，直接信任 CurrentAttackIndex
+ * - 添加更详细的日志输出
+ */
 UAnimMontage* USG_GameplayAbility_SkyBarrage::FindMontageFromUnitData() const
 {
     ASG_UnitsBase* OwnerUnit = Cast<ASG_UnitsBase>(GetAvatarActorFromActorInfo());
-    if (!OwnerUnit || !OwnerUnit->UnitDataTable) return nullptr;
-
-    const FSGUnitDataRow* Row = OwnerUnit->UnitDataTable->FindRow<FSGUnitDataRow>(OwnerUnit->UnitDataRowName, TEXT("FindMontage"));
-    if (!Row) return nullptr;
-
-    for (const FSGUnitAttackDefinition& AbilityDef : Row->Abilities)
+    if (!OwnerUnit)
     {
-        if (AbilityDef.SpecificAbilityClass == GetClass())
-        {
-            return AbilityDef.Montage;
-        }
+        UE_LOG(LogTemp, Error, TEXT("SkyBarrage::FindMontageFromUnitData - OwnerUnit 为空"));
+        return nullptr;
     }
+
+    // 🔧 修改 - 检查攻击配置列表是否有效
+    if (OwnerUnit->CachedAttackAbilities.Num() == 0)
+    {
+        UE_LOG(LogTemp, Error, TEXT("SkyBarrage::FindMontageFromUnitData - CachedAttackAbilities 为空"));
+        return nullptr;
+    }
+    
+    // 🔧 修改 - 检查索引有效性
+    if (!OwnerUnit->CachedAttackAbilities.IsValidIndex(OwnerUnit->CurrentAttackIndex))
+    {
+        UE_LOG(LogTemp, Error, TEXT("SkyBarrage::FindMontageFromUnitData - CurrentAttackIndex(%d) 无效，列表大小：%d"), 
+            OwnerUnit->CurrentAttackIndex, 
+            OwnerUnit->CachedAttackAbilities.Num());
+        return nullptr;
+    }
+
+    // 直接获取当前攻击配置
+    FSGUnitAttackDefinition AttackDef = OwnerUnit->GetCurrentAttackDefinition();
+    
+    if (AttackDef.Montage)
+    {
+        UE_LOG(LogTemp, Log, TEXT("[SkyBarrage] 成功获取蒙太奇: %s (Index: %d)"), 
+            *AttackDef.Montage->GetName(), 
+            OwnerUnit->CurrentAttackIndex);
+        return AttackDef.Montage;
+    }
+
+    UE_LOG(LogTemp, Warning, TEXT("[SkyBarrage] 警告：当前攻击配置 (Index: %d) 未设置蒙太奇！"), 
+        OwnerUnit->CurrentAttackIndex);
+    
     return nullptr;
 }
 
@@ -170,6 +263,16 @@ void USG_GameplayAbility_SkyBarrage::SpawnProjectileLoop()
     if (ProjectilesSpawned >= TotalProjectiles || !GetAvatarActorFromActorInfo())
     {
         GetWorld()->GetTimerManager().ClearTimer(BarrageTimerHandle);
+        
+        // 🔧 修改 - 通知单位动画结束
+        if (AActor* AvatarActor = GetAvatarActorFromActorInfo())
+        {
+            if (ASG_UnitsBase* OwnerUnit = Cast<ASG_UnitsBase>(AvatarActor))
+            {
+                OwnerUnit->OnAttackAnimationFinished();
+            }
+        }
+        
         EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, false);
         return;
     }
@@ -177,7 +280,7 @@ void USG_GameplayAbility_SkyBarrage::SpawnProjectileLoop()
     ProjectilesSpawned++;
     if (!ProjectileClass) return;
 
-    // 1. 计算生成位置：基于中心点 + 偏移配置 + 随机抖动
+    // 1. 计算生成位置
     FVector SpawnLoc = CachedTargetCenter + SpawnOriginOffset;
     SpawnLoc.X += FMath::FRandRange(-SpawnSourceSpread, SpawnSourceSpread);
     SpawnLoc.Y += FMath::FRandRange(-SpawnSourceSpread, SpawnSourceSpread);
@@ -225,11 +328,17 @@ void USG_GameplayAbility_SkyBarrage::SpawnProjectileLoop()
     }
 }
 
-void USG_GameplayAbility_SkyBarrage::EndAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo, bool bReplicateEndAbility, bool bWasCancelled)
+void USG_GameplayAbility_SkyBarrage::EndAbility(
+    const FGameplayAbilitySpecHandle Handle, 
+    const FGameplayAbilityActorInfo* ActorInfo, 
+    const FGameplayAbilityActivationInfo ActivationInfo, 
+    bool bReplicateEndAbility, 
+    bool bWasCancelled)
 {
     if (GetWorld())
     {
         GetWorld()->GetTimerManager().ClearTimer(BarrageTimerHandle);
     }
+    
     Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
 }

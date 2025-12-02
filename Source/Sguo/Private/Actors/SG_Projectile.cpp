@@ -87,7 +87,7 @@ ASG_Projectile::ASG_Projectile()
     // ========== 创建网格体组件 ==========
     MeshComponent = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MeshComponent"));
     // 附加到根组件
-    MeshComponent->SetupAttachment(RootComponent);
+    MeshComponent->SetupAttachment(CollisionCapsule);
     // 网格体不参与碰撞
     MeshComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 

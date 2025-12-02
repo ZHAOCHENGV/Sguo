@@ -1,5 +1,5 @@
 ﻿// 📄 文件：Source/Sguo/Private/AbilitySystem/Abilities/SG_GameplayAbility_SummonGroup.cpp
-// 🔧 修改 - 增加蒙太奇播放失败的安全检查，防止技能卡死
+// 🔧 修改 - 修复蒙太奇播放和动画状态同步问题
 
 #include "AbilitySystem/Abilities/SG_GameplayAbility_SummonGroup.h"
 #include "Units/SG_UnitsBase.h"
@@ -7,6 +7,7 @@
 #include "Kismet/KismetMathLibrary.h"
 #include "Abilities/Tasks/AbilityTask_PlayMontageAndWait.h"
 #include "Abilities/Tasks/AbilityTask_WaitGameplayEvent.h"
+#include "AbilitySystem/SG_AttributeSet.h"
 #include "Data/Type/SG_UnitDataTable.h"
 
 USG_GameplayAbility_SummonGroup::USG_GameplayAbility_SummonGroup()
@@ -15,9 +16,21 @@ USG_GameplayAbility_SummonGroup::USG_GameplayAbility_SummonGroup()
     TriggerEventTag = FGameplayTag::RequestGameplayTag(FName("Ability.Event.Spawn")); 
 }
 
-void USG_GameplayAbility_SummonGroup::ActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData)
+/**
+ * @brief 激活能力
+ * @details
+ * 🔧 修改说明：
+ * - 修复蒙太奇播放逻辑
+ * - 添加动画状态同步（调用 StartAttackAnimation）
+ * - 确保即使没有蒙太奇也能正常执行召唤逻辑
+ */
+void USG_GameplayAbility_SummonGroup::ActivateAbility(
+    const FGameplayAbilitySpecHandle Handle, 
+    const FGameplayAbilityActorInfo* ActorInfo, 
+    const FGameplayAbilityActivationInfo ActivationInfo, 
+    const FGameplayEventData* TriggerEventData)
 {
-   Super::ActivateAbility(Handle, ActorInfo, ActivationInfo, TriggerEventData);
+    Super::ActivateAbility(Handle, ActorInfo, ActivationInfo, TriggerEventData);
 
     if (!CommitAbility(Handle, ActorInfo, ActivationInfo))
     {
@@ -25,18 +38,40 @@ void USG_GameplayAbility_SummonGroup::ActivateAbility(const FGameplayAbilitySpec
         return;
     }
 
+    // 🔧 修改 - 获取施放者单位引用
+    ASG_UnitsBase* OwnerUnit = Cast<ASG_UnitsBase>(ActorInfo->AvatarActor.Get());
+    
     // 1. 获取蒙太奇
     UAnimMontage* MontageToPlay = FindMontageFromUnitData();
+    
+    // 🔧 修改 - 如果没有蒙太奇，直接执行召唤（不再强制结束）
     if (!MontageToPlay)
     {
-        UE_LOG(LogTemp, Error, TEXT("SummonGroup: 未找到蒙太奇，技能结束"));
-        EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
+        UE_LOG(LogTemp, Warning, TEXT("SummonGroup: 未找到蒙太奇，直接执行召唤"));
+        
+        // ✨ 新增 - 即使没有蒙太奇，也设置一个短暂的动画状态
+        if (OwnerUnit)
+        {
+            OwnerUnit->StartAttackAnimation(0.5f);
+        }
+        
+        // 直接执行召唤
+        ExecuteSpawn();
+        
+        // 延迟结束能力
+        FTimerHandle TimerHandle;
+        FTimerDelegate TimerDelegate;
+        TimerDelegate.BindLambda([this, Handle, ActorInfo, ActivationInfo]()
+        {
+            EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
+        });
+        ActorInfo->AvatarActor->GetWorldTimerManager().SetTimer(TimerHandle, TimerDelegate, 0.5f, false);
         return;
     }
 
-    // ========== 关键修改：调整顺序与 Task 管理 ==========
+    // ========== 有蒙太奇的正常流程 ==========
 
-    // 2.【先】创建事件监听 Task (确保不会错过第0帧的 Notify)
+    // 2.【先】创建事件监听 Task
     UAbilityTask_WaitGameplayEvent* WaitEventTask = UAbilityTask_WaitGameplayEvent::WaitGameplayEvent(
         this,
         TriggerEventTag,
@@ -45,23 +80,26 @@ void USG_GameplayAbility_SummonGroup::ActivateAbility(const FGameplayAbilitySpec
         true     
     );
 
-    if (!WaitEventTask)
+    if (WaitEventTask)
     {
-        EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
-        return;
+        WaitEventTask->EventReceived.AddDynamic(this, &USG_GameplayAbility_SummonGroup::OnSpawnEventReceived);
+        WaitEventTask->ReadyForActivation();
     }
 
-    // 绑定事件触发逻辑
-    WaitEventTask->EventReceived.AddDynamic(this, &USG_GameplayAbility_SummonGroup::OnSpawnEventReceived);
-    // 激活监听
-    WaitEventTask->ReadyForActivation();
-
-    // 3.【后】创建播放蒙太奇 Task (管理动画生命周期)
+    // 3.【后】创建播放蒙太奇 Task
+    // 🔧 修改 - 获取攻击速度倍率
+    float PlayRate = 1.0f;
+    if (OwnerUnit && OwnerUnit->AttributeSet)
+    {
+        PlayRate = OwnerUnit->AttributeSet->GetAttackSpeed();
+        if (PlayRate <= 0.0f) PlayRate = 1.0f;
+    }
+    
     UAbilityTask_PlayMontageAndWait* PlayMontageTask = UAbilityTask_PlayMontageAndWait::CreatePlayMontageAndWaitProxy(
         this,
         NAME_None,
         MontageToPlay,
-        1.0f,
+        PlayRate,  // 🔧 修改 - 使用攻击速度倍率
         NAME_None,
         false,
         1.0f
@@ -69,29 +107,58 @@ void USG_GameplayAbility_SummonGroup::ActivateAbility(const FGameplayAbilitySpec
 
     if (!PlayMontageTask)
     {
+        UE_LOG(LogTemp, Error, TEXT("SummonGroup: 创建蒙太奇任务失败"));
         EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
         return;
     }
 
-    // 绑定动画结束/取消/中断的回调 -> 确保技能会正常结束
+    // 绑定回调
     PlayMontageTask->OnBlendOut.AddDynamic(this, &USG_GameplayAbility_SummonGroup::OnMontageCompleted);
     PlayMontageTask->OnCompleted.AddDynamic(this, &USG_GameplayAbility_SummonGroup::OnMontageCompleted);
     PlayMontageTask->OnInterrupted.AddDynamic(this, &USG_GameplayAbility_SummonGroup::OnMontageCancelled);
     PlayMontageTask->OnCancelled.AddDynamic(this, &USG_GameplayAbility_SummonGroup::OnMontageCancelled);
 
-    // 激活播放
     PlayMontageTask->ReadyForActivation();
+
+    // ✨ 新增 - 计算实际动画时长并通知单位
+    float MontageLength = MontageToPlay->GetPlayLength();
+    float ActualDuration = (PlayRate > 0.0f) ? (MontageLength / PlayRate) : MontageLength;
+    
+    if (OwnerUnit)
+    {
+        OwnerUnit->StartAttackAnimation(ActualDuration);
+        UE_LOG(LogTemp, Log, TEXT("SummonGroup: 开始播放蒙太奇 %s，时长：%.2f秒"), 
+            *MontageToPlay->GetName(), ActualDuration);
+    }
 }
 
 // ✨ 新增 - 处理动画正常结束
 void USG_GameplayAbility_SummonGroup::OnMontageCompleted()
 {
+    // 🔧 修改 - 通知单位动画结束
+    if (AActor* AvatarActor = GetAvatarActorFromActorInfo())
+    {
+        if (ASG_UnitsBase* OwnerUnit = Cast<ASG_UnitsBase>(AvatarActor))
+        {
+            OwnerUnit->OnAttackAnimationFinished();
+        }
+    }
+    
     EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, false);
 }
 
 // ✨ 新增 - 处理动画被取消/打断
 void USG_GameplayAbility_SummonGroup::OnMontageCancelled()
 {
+    // 🔧 修改 - 通知单位动画结束
+    if (AActor* AvatarActor = GetAvatarActorFromActorInfo())
+    {
+        if (ASG_UnitsBase* OwnerUnit = Cast<ASG_UnitsBase>(AvatarActor))
+        {
+            OwnerUnit->OnAttackAnimationFinished();
+        }
+    }
+    
     EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, true);
 }
 
@@ -101,21 +168,53 @@ void USG_GameplayAbility_SummonGroup::OnSpawnEventReceived(FGameplayEventData Pa
     ExecuteSpawn();
 }
 
+/**
+ * @brief 从单位数据中查找蒙太奇
+ * @return 找到的蒙太奇，失败返回 nullptr
+ * @details
+ * 🔧 修改说明：
+ * - 简化逻辑，直接信任 CurrentAttackIndex
+ * - 添加更详细的日志输出
+ */
 UAnimMontage* USG_GameplayAbility_SummonGroup::FindMontageFromUnitData() const
 {
     ASG_UnitsBase* OwnerUnit = Cast<ASG_UnitsBase>(GetAvatarActorFromActorInfo());
-    if (!OwnerUnit || !OwnerUnit->UnitDataTable) return nullptr;
-
-    const FSGUnitDataRow* Row = OwnerUnit->UnitDataTable->FindRow<FSGUnitDataRow>(OwnerUnit->UnitDataRowName, TEXT("FindMontage"));
-    if (!Row) return nullptr;
-
-    for (const FSGUnitAttackDefinition& AbilityDef : Row->Abilities)
+    if (!OwnerUnit)
     {
-        if (AbilityDef.SpecificAbilityClass == GetClass())
-        {
-            return AbilityDef.Montage;
-        }
+        UE_LOG(LogTemp, Error, TEXT("SummonGroup::FindMontageFromUnitData - OwnerUnit 为空"));
+        return nullptr;
     }
+
+    // 🔧 修改 - 检查攻击配置列表是否有效
+    if (OwnerUnit->CachedAttackAbilities.Num() == 0)
+    {
+        UE_LOG(LogTemp, Error, TEXT("SummonGroup::FindMontageFromUnitData - CachedAttackAbilities 为空"));
+        return nullptr;
+    }
+    
+    // 🔧 修改 - 检查索引有效性
+    if (!OwnerUnit->CachedAttackAbilities.IsValidIndex(OwnerUnit->CurrentAttackIndex))
+    {
+        UE_LOG(LogTemp, Error, TEXT("SummonGroup::FindMontageFromUnitData - CurrentAttackIndex(%d) 无效，列表大小：%d"), 
+            OwnerUnit->CurrentAttackIndex, 
+            OwnerUnit->CachedAttackAbilities.Num());
+        return nullptr;
+    }
+
+    // 直接获取当前攻击配置
+    FSGUnitAttackDefinition AttackDef = OwnerUnit->GetCurrentAttackDefinition();
+    
+    if (AttackDef.Montage)
+    {
+        UE_LOG(LogTemp, Log, TEXT("[SummonGroup] 成功获取蒙太奇: %s (Index: %d)"), 
+            *AttackDef.Montage->GetName(), 
+            OwnerUnit->CurrentAttackIndex);
+        return AttackDef.Montage;
+    }
+
+    UE_LOG(LogTemp, Warning, TEXT("[SummonGroup] 警告：当前攻击配置 (Index: %d) 未设置蒙太奇！"), 
+        OwnerUnit->CurrentAttackIndex);
+    
     return nullptr;
 }
 

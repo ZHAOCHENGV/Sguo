@@ -42,12 +42,22 @@ void USG_BTService_UpdateTarget::TickNode(UBehaviorTreeComponent& OwnerComp, uin
     {
         return;
     }
-    
+
+    // ✨✨✨ 核心修复：如果正在攻击僵直中，不要尝试更新或清除目标 ✨✨✨
+    // 让它把当前的攻击打完
     ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
     if (!ControlledUnit)
     {
         return;
     }
+    
+    if (ControlledUnit->IsAttackLocked())
+    {
+        UE_LOG(LogSGGameplay, Verbose, TEXT("🔒 [UpdateTarget] %s 攻击锁定中，跳过目标更新"), 
+          *ControlledUnit->GetName());
+        return; 
+    }
+    
     
     UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
     if (!BlackboardComp)

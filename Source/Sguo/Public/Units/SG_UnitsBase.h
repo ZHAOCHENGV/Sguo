@@ -42,6 +42,65 @@ class SGUO_API ASG_UnitsBase : public ACharacter, public IAbilitySystemInterface
 
 public:
     ASG_UnitsBase();
+
+    /**
+     * @brief 设置战斗旋转/移动锁定状态
+     * @param bLock 是否锁定（True=无法移动旋转，False=恢复正常）
+     * @details 在播放攻击蒙太奇时调用，防止滑步和自动转向
+     */
+    UFUNCTION(BlueprintCallable, Category = "Combat")
+    virtual void SetCombatRotationLock(bool bLock);
+
+    // ✨ 新增 - 攻击锁定期间的目标缓存
+    /**
+     * @brief 攻击锁定期间缓存的目标
+     * @details
+     * 功能说明：
+     * - 当开始攻击动画时，缓存当前目标
+     * - 即使目标死亡，也保持这个缓存直到动画结束
+     * - 用于确保攻击动画期间不会因目标死亡而转向
+     */
+    UPROPERTY(BlueprintReadOnly, Category = "Attack State", meta = (DisplayName = "攻击锁定目标"))
+    TWeakObjectPtr<AActor> AttackLockedTarget;
+
+    // ✨ 新增 - 检查是否处于攻击锁定状态
+    /**
+     * @brief 检查是否处于攻击锁定状态（不能移动、转向、切换目标）
+     * @return 是否锁定
+     * @details
+     * 功能说明：
+     * - 当 bIsAttacking = true 时，单位处于锁定状态
+     * - 锁定期间不允许移动、转向、切换目标
+     */
+    UFUNCTION(BlueprintPure, Category = "Attack State", meta = (DisplayName = "是否攻击锁定中"))
+    bool IsAttackLocked() const { return bIsAttacking; }
+
+    // ✨ 新增 - 获取攻击锁定的目标位置（用于保持朝向）
+    /**
+     * @brief 获取攻击锁定目标的位置
+     * @return 锁定目标的位置，如果无效则返回自身位置
+     */
+    UFUNCTION(BlueprintPure, Category = "Attack State", meta = (DisplayName = "获取攻击锁定目标位置"))
+    FVector GetAttackLockedTargetLocation() const;
+
+    // ✨ 新增 - 攻击结束后检查目标状态
+    /**
+     * @brief 攻击动画结束后检查目标状态
+     * @details
+     * 功能说明：
+     * - 攻击动画结束时调用
+     * - 如果当前目标已死亡，通知 AI 立即寻找新目标
+     * - 如果目标存活，继续正常攻击流程
+     */
+    UFUNCTION(BlueprintCallable, Category = "Attack State", meta = (DisplayName = "攻击后检查目标"))
+    void CheckAndFindNewTargetAfterAttack();
+
+    // ✨ 新增 - 通知 AI 寻找新目标
+    /**
+     * @brief 通知 AI Controller 立即寻找新目标
+     * @details 清空黑板数据并调用 AI 的目标查找
+     */
+    void NotifyAIToFindNewTarget();
     
     // 单位死亡事件
     UPROPERTY(BlueprintAssignable, Category = "Unit Events")

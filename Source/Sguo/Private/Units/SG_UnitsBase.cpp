@@ -20,6 +20,8 @@
 #include "AI/SG_AIControllerBase.h"
 #include "AI/SG_CombatTargetManager.h"
 #include "AI/SG_TargetingSubsystem.h"
+#include "BehaviorTree/BlackboardComponent.h"
+#include "Buildings/SG_MainCityBase.h"
 
 #include "Data/SG_CharacterCardData.h"
 
@@ -52,6 +54,194 @@ ASG_UnitsBase::ASG_UnitsBase()
 
 }
 
+/**
+ * @brief 设置战斗旋转/移动锁定状态
+ * @details
+ * 核心原理：
+ * 直接修改 CharacterMovement 组件的标志位，从物理层禁止旋转和移动。
+ * 比修改 MaxWalkSpeed 或 AI 状态更底层、更可靠。
+ */
+void ASG_UnitsBase::SetCombatRotationLock(bool bLock)
+{
+	UCharacterMovementComponent* MoveComp = GetCharacterMovement();
+	if (!MoveComp) return;
+
+	if (bLock)
+	{
+		// ========== 🔒 锁定状态 (攻击中) ==========
+        
+		// 1. 立即刹车，清除当前速度
+		MoveComp->StopMovementImmediately();
+        
+		// 2. 禁止跟随速度方向旋转 (防止移动导致的转向)
+		MoveComp->bOrientRotationToMovement = false;
+        
+		// 3. 禁止跟随控制器旋转 (防止 AI SetFocus 导致的转向)
+		MoveComp->bUseControllerDesiredRotation = false;
+        
+		// 4. 处理 AI 控制器
+		if (AAIController* AICon = Cast<AAIController>(GetController()))
+		{
+			// 清除焦点，防止 AI 在这一帧强行扭头
+			AICon->ClearFocus(EAIFocusPriority::Gameplay);
+			// 停止 AI 的移动请求
+			AICon->StopMovement();
+		}
+        
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  🔒 战斗锁定：禁止移动和旋转"));
+	}
+	else
+	{
+		// ========== 🔓 解锁状态 (攻击结束) ==========
+        
+		// 1. 恢复跟随移动旋转
+		MoveComp->bOrientRotationToMovement = true;
+        
+		// 2. 恢复跟随控制器旋转 (根据你的项目需求，通常 AI 需要这个为 true)
+		MoveComp->bUseControllerDesiredRotation = true;
+        
+		// 3. 恢复移动速度 (从 AttributeSet 读取最新值)
+		if (AttributeSet)
+		{
+			MoveComp->MaxWalkSpeed = AttributeSet->GetMoveSpeed();
+		}
+        
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  🔓 战斗解锁：恢复移动和旋转"));
+	}
+}
+
+// ✨ 新增 - 获取攻击锁定目标位置
+/**
+ * @brief 获取攻击锁定目标的位置
+ * @return 锁定目标的位置，如果无效则返回自身位置
+ */
+FVector ASG_UnitsBase::GetAttackLockedTargetLocation() const
+{
+	if (AttackLockedTarget.IsValid())
+	{
+		return AttackLockedTarget->GetActorLocation();
+	}
+	return GetActorLocation();
+}
+
+/**
+ * @brief 攻击动画结束后检查目标状态
+ * @details
+ * 功能说明：
+ * - 攻击动画结束时调用
+ * - 如果当前目标已死亡，清空缓存并通知 AI 立即寻找新目标
+ * - 如果目标存活，不做任何处理，继续正常攻击流程
+ * 详细流程：
+ * 1. 检查当前目标是否存在
+ * 2. 检查目标是否死亡（单位或主城）
+ * 3. 如果死亡，清空 CurrentTarget 并通知 AI Controller 寻找新目标
+ */
+void ASG_UnitsBase::CheckAndFindNewTargetAfterAttack()
+{
+	// ========== 步骤1：检查当前目标是否存在 ==========
+	if (!CurrentTarget)
+	{
+		UE_LOG(LogSGGameplay, Log, TEXT("  🔍 %s 攻击结束，当前无目标，通知 AI 寻找目标"), *GetName());
+		NotifyAIToFindNewTarget();
+		return;
+	}
+    
+	// ========== 步骤2：检查目标是否死亡 ==========
+	bool bTargetDead = false;
+    
+	// 检查是否是单位
+	ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(CurrentTarget);
+	if (TargetUnit)
+	{
+		if (TargetUnit->bIsDead)
+		{
+			bTargetDead = true;
+		}
+		else if (TargetUnit->AttributeSet && TargetUnit->AttributeSet->GetHealth() <= 0.0f)
+		{
+			bTargetDead = true;
+		}
+	}
+    
+	// 检查是否是主城
+	ASG_MainCityBase* TargetCity = Cast<ASG_MainCityBase>(CurrentTarget);
+	if (TargetCity)
+	{
+		if (!TargetCity->IsAlive())
+		{
+			bTargetDead = true;
+		}
+	}
+    
+	// ========== 步骤3：如果目标死亡，清空并寻找新目标 ==========
+	if (bTargetDead)
+	{
+		UE_LOG(LogSGGameplay, Log, TEXT("  💀 %s 攻击结束，目标 %s 已死亡，清空并寻找新目标"), 
+			*GetName(), *CurrentTarget->GetName());
+        
+		// 停止攻击旧目标（注销攻击者等）
+		OnStopAttackingTarget(CurrentTarget);
+        
+		// 清空当前目标
+		CurrentTarget = nullptr;
+        
+		// 通知 AI 立即寻找新目标
+		NotifyAIToFindNewTarget();
+	}
+	else
+	{
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ %s 攻击结束，目标 %s 存活，继续攻击"), 
+			*GetName(), *CurrentTarget->GetName());
+	}
+}
+
+
+// ✨ 新增 - 通知 AI 寻找新目标
+/**
+ * @brief 通知 AI Controller 立即寻找新目标
+ * @details
+ * 功能说明：
+ * - 获取 AI Controller
+ * - 清空黑板中的目标数据
+ * - 调用 FindNearestTarget 寻找新目标
+ * - 设置新目标
+ */
+void ASG_UnitsBase::NotifyAIToFindNewTarget()
+{
+	// 获取 AI Controller
+	ASG_AIControllerBase* AIController = Cast<ASG_AIControllerBase>(GetController());
+	if (!AIController)
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ %s 无法获取 AI Controller"), *GetName());
+		return;
+	}
+    
+	// 清空黑板中的目标
+	UBlackboardComponent* BlackboardComp = AIController->GetBlackboardComponent();
+	if (BlackboardComp)
+	{
+		BlackboardComp->SetValueAsObject(ASG_AIControllerBase::BB_CurrentTarget, nullptr);
+		BlackboardComp->SetValueAsBool(ASG_AIControllerBase::BB_IsTargetLocked, false);
+		BlackboardComp->SetValueAsBool(ASG_AIControllerBase::BB_IsInAttackRange, false);
+		BlackboardComp->SetValueAsBool(ASG_AIControllerBase::BB_IsTargetMainCity, false);
+	}
+    
+	// 重置 AI 状态
+	AIController->SetTargetEngagementState(ESGTargetEngagementState::Searching);
+	AIController->ResetMovementTimer();
+    
+	// 立即寻找新目标
+	AActor* NewTarget = AIController->FindNearestTarget();
+	if (NewTarget)
+	{
+		AIController->SetCurrentTarget(NewTarget);
+		UE_LOG(LogSGGameplay, Log, TEXT("  ✓ %s 找到新目标：%s"), *GetName(), *NewTarget->GetName());
+	}
+	else
+	{
+		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ %s 未找到新目标"), *GetName());
+	}
+}
 /**
  * @brief 设置源卡牌数据
  * @param CardData 卡牌数据
@@ -639,9 +829,22 @@ AActor* ASG_UnitsBase::FindNearestTarget()
 	return nullptr;
 }
 
-// 设置目标
+/**
+ * @brief 设置目标
+ * @param NewTarget 新目标
+ * @details
+ * 功能说明：
+ * - ✨ 新增：攻击锁定期间不允许切换目标
+ */
 void ASG_UnitsBase::SetTarget(AActor* NewTarget)
 {
+	// ✨ 新增 - 攻击锁定期间不允许切换目标
+	if (bIsAttacking)
+	{
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  🔒 %s 攻击锁定中，拒绝切换目标"), *GetName());
+		return;
+		
+	}
 	if (NewTarget != CurrentTarget)
 	{
 		// ✨ 新增 - 停止攻击旧目标
@@ -1006,12 +1209,25 @@ FSGUnitAttackDefinition ASG_UnitsBase::GetCurrentAttackDefinition() const
  */
 bool ASG_UnitsBase::IsTargetValid() const
 {
+	// ✨ 核心修复：攻击锁定期间，始终认为目标有效
+	// 这样可以防止攻击动画期间因目标死亡而转向或切换目标
+	if (bIsAttacking)
+	{
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  🔒 %s 攻击锁定中，目标视为有效"), *GetName());
+		return true;
+	}
+	
 	// ========== 步骤1：检查目标是否为空 ==========
 	if (!CurrentTarget)
 	{
 		return false;
 	}
-	
+	// ✨✨✨ 核心修复：如果正在攻击动作中，强制视为目标有效 ✨✨✨
+	// 即使目标死了，也要把当前的攻击动画播完（对着尸体打完），防止鬼畜转向或中途切目标
+	if (bIsAttacking)
+	{
+		return true;
+	}
 	// ========== 步骤2：检查目标是否已死亡 ==========
 	// 尝试转换为 ASG_UnitsBase
 	const ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(CurrentTarget);
@@ -1340,6 +1556,10 @@ void ASG_UnitsBase::ForceStopAllActions()
 	// 🔧 修改 - 重置动画状态
 	bIsAttacking = false;
 	AttackAnimationRemainingTime = 0.0f;
+
+	// ✨✨✨ 核心修改：必须强制解锁 ✨✨✨
+	// 否则单位如果在攻击时死亡，尸体可能会保持锁定状态，或者复活后动不了
+	SetCombatRotationLock(false);
     
 	// ✨ 新增 - 重置所有技能冷却（可选，根据需求决定是否需要）
 	// 如果希望死亡后技能冷却重置，取消下面的注释
@@ -1665,6 +1885,7 @@ bool ASG_UnitsBase::HasAvailableAbility() const
 	return false;
 }
 
+// 🔧 修改 - StartAttackAnimation 函数
 /**
  * @brief 开始攻击动画僵直
  * @param AnimDuration 动画时长
@@ -1672,29 +1893,70 @@ bool ASG_UnitsBase::HasAvailableAbility() const
  * 功能说明：
  * - 设置 bIsAttacking = true，阻止新攻击
  * - 设置 AttackAnimationRemainingTime，在 Tick 中倒计时
- * - 动画僵直与技能冷却是独立的概念
+ * - ✨ 新增：缓存当前目标，确保攻击期间不会因目标变化而转向
+ * - 锁定旋转和移动
  */
 void ASG_UnitsBase::StartAttackAnimation(float AnimDuration)
 {
 	bIsAttacking = true;
 	AttackAnimationRemainingTime = AnimDuration;
+
+	// ✨ 新增 - 缓存当前目标作为攻击锁定目标
+	AttackLockedTarget = CurrentTarget;
+    
+	UE_LOG(LogSGGameplay, Log, TEXT("  🔒 %s 开始攻击锁定，时长：%.2f秒，锁定目标：%s"), 
+		*GetName(), 
+		AnimDuration,
+		AttackLockedTarget.IsValid() ? *AttackLockedTarget->GetName() : TEXT("None"));
+
+	// 锁定旋转和移动
+	SetCombatRotationLock(true);
     
 	UE_LOG(LogSGGameplay, Verbose, TEXT("  🎬 开始攻击动画，时长：%.2f秒"), AnimDuration);
 }
 
+
+// 🔧 修改 - OnAttackAnimationFinished 函数
+/**
+ * @brief 攻击动画结束回调（由 GA 调用）
+ * @details
+ * 功能说明：
+ * - 重置攻击状态
+ * - ✨ 新增：清除攻击锁定目标
+ * - 解除移动和旋转锁定
+ */
 void ASG_UnitsBase::OnAttackAnimationFinished()
 {
 	if (bIsAttacking)
 	{
+		UE_LOG(LogSGGameplay, Log, TEXT("  🔓 %s 攻击锁定结束"), *GetName());
+        
 		bIsAttacking = false;
 		AttackAnimationRemainingTime = 0.0f;
-		UE_LOG(LogSGGameplay, Verbose, TEXT("  ✅ 攻击动画结束（手动调用）"));
+        
+		// ✨ 新增 - 清除攻击锁定目标
+		AttackLockedTarget = nullptr;
+
+		// 解除锁定
+		SetCombatRotationLock(false);
+
+		// ✨ 新增 - 检查当前目标是否死亡，死亡则立即寻找新目标
+		CheckAndFindNewTargetAfterAttack();
 	}
+		
+		UE_LOG(LogSGGameplay, Verbose, TEXT("  ✅ 攻击动画结束（手动调用）"));
 }
 
+
+// 🔧 修改 - UpdateAttackAnimationState 函数
 /**
  * @brief 更新攻击动画僵直状态
  * @param DeltaTime 帧间隔
+ * @details
+ * 功能说明：
+ * - 倒计时动画剩余时间
+ * - 超时时自动结束攻击状态
+ * - ✨ 新增：清除攻击锁定目标
  */
 void ASG_UnitsBase::UpdateAttackAnimationState(float DeltaTime)
 {
@@ -1707,7 +1969,15 @@ void ASG_UnitsBase::UpdateAttackAnimationState(float DeltaTime)
 			AttackAnimationRemainingTime = 0.0f;
 			bIsAttacking = false;
             
-			UE_LOG(LogSGGameplay, Verbose, TEXT("  ✅ 攻击动画结束"));
+			// ✨ 新增 - 清除攻击锁定目标
+			AttackLockedTarget = nullptr;
+            
+			// 超时自动解锁
+			SetCombatRotationLock(false);
+			
+			// ✨ 新增 - 检查当前目标是否死亡
+			CheckAndFindNewTargetAfterAttack();
+			UE_LOG(LogSGGameplay, Log, TEXT("  🔓 %s 攻击锁定超时结束"), *GetName());
 		}
 	}
 }

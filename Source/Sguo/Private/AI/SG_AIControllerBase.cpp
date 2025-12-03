@@ -262,11 +262,20 @@ void ASG_AIControllerBase::SetTargetEngagementState(ESGTargetEngagementState New
  * @return 是否允许切换
  * @details
  * 功能说明：
- * - 🔧 修改：攻击主城时允许切换到敌方单位
- * - 攻击敌方单位时不允许切换（除非目标死亡）
+ * - ✨ 新增：攻击锁定期间不允许切换目标
+ * - Engaged 状态下攻击敌方单位时不允许切换（除非目标死亡且动画结束）
+ * - 攻击主城时允许切换到敌方单位
  */
 bool ASG_AIControllerBase::CanSwitchTarget() const
 {
+    // ✨ 新增 - 检查单位是否处于攻击锁定状态
+    ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
+    if (ControlledUnit && ControlledUnit->IsAttackLocked())
+    {
+        // 攻击锁定期间绝对不允许切换目标
+        return false;
+        
+    }
     // Searching、Moving、Blocked 状态都允许切换
     if (TargetEngagementState != ESGTargetEngagementState::Engaged)
     {
@@ -295,6 +304,13 @@ bool ASG_AIControllerBase::CanSwitchTarget() const
  */
 void ASG_AIControllerBase::CheckForEnemyUnitsWhileAttackingMainCity()
 {
+    // ✨ 新增 - 攻击锁定检查
+    ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
+    if (ControlledUnit && ControlledUnit->IsAttackLocked())
+    {
+        return;
+    }
+    
     AActor* CurrentTarget = GetCurrentTarget();
     if (!CurrentTarget)
     {
@@ -307,11 +323,7 @@ void ASG_AIControllerBase::CheckForEnemyUnitsWhileAttackingMainCity()
         return;
     }
     
-    ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
-    if (!ControlledUnit)
-    {
-        return;
-    }
+   
     
     UWorld* World = GetWorld();
     if (!World)
@@ -348,19 +360,25 @@ void ASG_AIControllerBase::CheckForEnemyUnitsWhileAttackingMainCity()
 
 /**
  * @brief 在移动状态下检测是否有更好的目标
+ * @details
+ * 功能说明：
+ * - ✨ 新增：攻击锁定期间不检测
  */
 void ASG_AIControllerBase::CheckForBetterTargetWhileMoving()
 {
+    // ✨ 新增 - 攻击锁定检查
+    ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
+    if (ControlledUnit && ControlledUnit->IsAttackLocked())
+    {
+        return;
+    }
+    
     if (TargetEngagementState != ESGTargetEngagementState::Moving)
     {
         return;
     }
 
-    ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
-    if (!ControlledUnit)
-    {
-        return;
-    }
+  
 
     AActor* CurrentTarget = GetCurrentTarget();
     if (!CurrentTarget)
@@ -724,19 +742,32 @@ bool ASG_AIControllerBase::DetectNearbyThreats(float DetectionRadius)
     return false;
 }
 
+// 🔧 修改 - SetCurrentTarget 函数（在开头添加锁定检查）
 /**
  * @brief 设置当前目标
  * @param NewTarget 新目标
+ * @details
+ * 功能说明：
+ * - ✨ 新增：攻击锁定期间不允许切换目标
  */
 void ASG_AIControllerBase::SetCurrentTarget(AActor* NewTarget)
 {
+    // ✨ 新增 - 攻击锁定检查
+    ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
+    if (ControlledUnit && ControlledUnit->IsAttackLocked())
+    {
+        UE_LOG(LogSGGameplay, Verbose, TEXT("🔒 AI: %s 攻击锁定中，拒绝切换目标"), 
+            *ControlledUnit->GetName());
+        return;
+    }
+    
+    
     UBlackboardComponent* BlackboardComp = GetBlackboardComponent();
     if (!BlackboardComp)
     {
         return;
     }
-    
-    ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
+
     AActor* OldTarget = GetCurrentTarget();
     
     if (OldTarget == NewTarget)
@@ -989,12 +1020,30 @@ void ASG_AIControllerBase::ResumeAttack()
     }
 }
 
-// ========== OnTargetDeath ==========
+/**
+ * @brief 目标死亡回调
+ * @param DeadUnit 死亡的单位
+ * @details
+ * 功能说明：
+ * - ✨ 新增：如果攻击锁定中，不立即处理，等攻击动画结束后由 CheckAndFindNewTargetAfterAttack 处理
+ */
 void ASG_AIControllerBase::OnTargetDeath(ASG_UnitsBase* DeadUnit)
 {
     AActor* CurrentTarget = GetCurrentTarget();
     if (CurrentTarget != DeadUnit)
     {
+        return;
+    }
+
+
+    // ✨ Test --- 新增 - 攻击锁定检查
+    ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
+    if (ControlledUnit && ControlledUnit->IsAttackLocked())
+    {
+        // 攻击锁定期间，只记录日志，不立即切换目标
+        // 目标切换会在攻击动画结束后由 UpdateTarget 服务处理
+        UE_LOG(LogSGGameplay, Log, TEXT("🔒 AI: %s 的目标 %s 死亡，但攻击锁定中，延迟处理"),
+            *ControlledUnit->GetName(), *DeadUnit->GetName());
         return;
     }
     
@@ -1010,9 +1059,9 @@ void ASG_AIControllerBase::OnTargetDeath(ASG_UnitsBase* DeadUnit)
         BlackboardComp->SetValueAsBool(BB_IsTargetMainCity, false);
     }
     
-    if (ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn()))
+    if (ASG_UnitsBase* AControlledUnit = Cast<ASG_UnitsBase>(GetPawn()))
     {
-        ControlledUnit->SetTarget(nullptr);
+        AControlledUnit->SetTarget(nullptr);
     }
     
     UnreachableTargets.Remove(DeadUnit);

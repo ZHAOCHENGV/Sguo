@@ -178,7 +178,7 @@ void USG_BTTask_AttackTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
         return;
     }
 
-    // 检查目标存活
+    /*// 检查目标存活
     UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
     if (BlackboardComp)
     {
@@ -190,6 +190,21 @@ void USG_BTTask_AttackTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
                 FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
                 return;
             }
+        }
+    }*/
+
+    // 🔧 修改 - 攻击锁定期间不检查目标存活状态
+    // 让攻击动画正常播放完毕
+    UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
+    if (BlackboardComp && !ControlledUnit->IsAttackLocked())
+    {
+        // 只有在非锁定状态下才检查目标存活
+        AActor* Target = Cast<AActor>(BlackboardComp->GetValueAsObject(FName("CurrentTarget")));
+        if (!IsTargetAlive(Target))
+        {
+            // 目标死亡且不在攻击锁定中，结束任务
+            FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
+            return;
         }
     }
 

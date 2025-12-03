@@ -117,6 +117,7 @@ EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent&
         return EBTNodeResult::Failed;
     }
     
+    
     FString UnitName = ControlledUnit->GetName();
     
     // 获取黑板组件
@@ -357,6 +358,8 @@ void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
         FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
         return;
     }
+
+    
 
     // 检测是否卡住
     if (SGAIController && SGAIController->IsStuck())

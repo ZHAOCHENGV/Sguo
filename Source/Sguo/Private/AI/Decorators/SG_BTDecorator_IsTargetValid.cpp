@@ -48,6 +48,16 @@ bool USG_BTDecorator_IsTargetValid::CalculateRawConditionValue(UBehaviorTreeComp
         UE_LOG(LogSGGameplay, Warning, TEXT("❌ 目标有效性检查失败：AIController 为空"));
         return false;
     }
+    // ✨ 新增 - 攻击锁定检查
+    ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
+    if (ControlledUnit && ControlledUnit->IsAttackLocked())
+    {
+        // 攻击锁定期间，始终认为目标有效
+        // 这样可以防止行为树因目标死亡而中断攻击节点
+        UE_LOG(LogSGGameplay, Verbose, TEXT("🔒 [IsTargetValid] %s 攻击锁定中，目标视为有效"), 
+            *ControlledUnit->GetName());
+        return true;
+    }
     
     // 🔧 调试 - 获取控制的单位名称
     FString UnitName = AIController->GetPawn() ? AIController->GetPawn()->GetName() : TEXT("Unknown");
@@ -164,6 +174,18 @@ bool USG_BTDecorator_IsTargetValid::CalculateRawConditionValue(UBehaviorTreeComp
 void USG_BTDecorator_IsTargetValid::TickNode(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds)
 {
     Super::TickNode(OwnerComp, NodeMemory, DeltaSeconds);
+
+    // ✨ 新增 - 攻击锁定检查
+    AAIController* AIController = OwnerComp.GetAIOwner();
+    if (AIController)
+    {
+        ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
+        if (ControlledUnit && ControlledUnit->IsAttackLocked())
+        {
+            // 攻击锁定期间不触发条件变化
+            return;
+        }
+    }
     
     bool bCurrentCondition = CalculateRawConditionValue(OwnerComp, NodeMemory);
     

@@ -34,16 +34,13 @@ ASG_UnitsBase::ASG_UnitsBase()
 	// 创建 Ability System Component
 	// 为什么在构造函数创建：组件必须在构造时创建
 	AbilitySystemComponent = CreateDefaultSubobject<USG_AbilitySystemComponent>(TEXT("AbilitySystemComponent"));
-	// 设置复制模式（单人游戏可以不设置，但为了扩展性还是设置）
-	AbilitySystemComponent->SetIsReplicated(true);
 	// 设置复制模式为 Mixed（适合大多数情况）
 	AbilitySystemComponent->SetReplicationMode(EGameplayEffectReplicationMode::Mixed);
-
 	// 创建 Attribute Set
 	// 为什么用 CreateDefaultSubobject：确保在构造时创建，支持网络复制
 	AttributeSet = CreateDefaultSubobject<USG_AttributeSet>(TEXT("AttributeSet"));
 
-	// ========== ✨ 新增 - 导航与避让设置 ==========
+
 	// 1. 关键：禁止单位动态修改导航网格
 	// 如果为 true，前排单位会在地上"挖洞"，导致后排单位认为路断了而停止移动
 	if (GetCapsuleComponent())
@@ -51,24 +48,7 @@ ASG_UnitsBase::ASG_UnitsBase()
 		GetCapsuleComponent()->SetCanEverAffectNavigation(false);
 	}
 
-	// 2. 配置移动组件
-	if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
-	{
-		// 1. 启用 RVO 避让
-		MoveComp->bUseRVOAvoidance = true;
-        
-		// 2. 关键参数调优
-		// 避让半径：比胶囊体稍大一点，给足空间滑过去
-		MoveComp->AvoidanceConsiderationRadius = 150.0f; 
-        
-		// 避让权重：0.5 表示大家都让；如果设为 1.0，则谁也不让谁（容易卡死）
-		// 给一个随机值，打破对称性，防止两个单位面对面“跳舞”
-		MoveComp->AvoidanceWeight = 0.5f; 
-        
-		// 3. 启用加速避让 (RVO2 特性)
-		// 允许单位在避让时调整速度，而不仅仅是方向
-		MoveComp->bEnablePhysicsInteraction = false; // 甚至可以关闭物理交互，纯靠 RVO
-	}
+	
 
 }
 
@@ -225,11 +205,11 @@ void ASG_UnitsBase::BeginPlay()
     }
 
 	// 解决后排单位被前排阻挡而发呆的问题
-	if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
+	if (UCharacterMovementComponent* MoveComp = GetCharacterMovement() && GetCharacterMovement()->bUseRVOAvoidance)
 	{
-		// 设置避让权重（0.0-1.0）
+		// 设置避让权重（0.1-1.0）
 		// 🔧 技巧：使用随机权重，打破对称性，防止两个单位面对面卡住
-		MoveComp->AvoidanceWeight = FMath::FRandRange(0.1f, 0.9f);
+		MoveComp->AvoidanceWeight = FMath::FRandRange(0.1f, 1.0f);
 		UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 启用 RVO 避让 (权重: %.2f)"), MoveComp->AvoidanceWeight);
 	}
 	

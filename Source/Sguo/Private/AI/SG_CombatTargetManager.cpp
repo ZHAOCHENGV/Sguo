@@ -9,6 +9,7 @@
 #include "NavigationSystem.h"
 #include "Engine/OverlapResult.h"
 #include "TimerManager.h"
+#include "Components/BoxComponent.h"
 
 void USG_CombatTargetManager::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -50,7 +51,7 @@ void USG_CombatTargetManager::Deinitialize()
  */
 AActor* USG_CombatTargetManager::FindBestTargetWithSlot(ASG_UnitsBase* Querier)
 {
-   if (!Querier) return nullptr;
+ if (!Querier) return nullptr;
 
     FVector QuerierLocation = Querier->GetActorLocation();
     FGameplayTag QuerierFaction = Querier->FactionTag;
@@ -73,10 +74,14 @@ AActor* USG_CombatTargetManager::FindBestTargetWithSlot(ASG_UnitsBase* Querier)
     };
     TArray<FCandidateInfo> Candidates;
 
-    // 3. 初步筛选：只看阵营和槽位（性能消耗低）
+    // 3. 初步筛选单位：只看阵营和槽位（性能消耗低）
     for (AActor* Enemy : NearbyEnemies)
     {
-        if (!HasAvailableSlot(Enemy)) continue;
+        // 🔧 修改 - 只有非主城单位才检查槽位
+        if (!Enemy->IsA(ASG_MainCityBase::StaticClass()))
+        {
+            if (!HasAvailableSlot(Enemy)) continue;
+        }
 
         float DistSq = FVector::DistSquared(QuerierLocation, Enemy->GetActorLocation());
         int32 Slots = GetOccupiedSlotCount(Enemy);
@@ -92,21 +97,21 @@ AActor* USG_CombatTargetManager::FindBestTargetWithSlot(ASG_UnitsBase* Querier)
         {
             ASG_MainCityBase* City = Cast<ASG_MainCityBase>(Actor);
             if (!City || !City->IsAlive() || City->FactionTag == QuerierFaction) continue;
-            if (!HasAvailableSlot(City)) continue;
+            
+            // 🔧 修改 - 主城不再检查 HasAvailableSlot，总是可以攻击
+            // if (!HasAvailableSlot(City)) continue; 
 
             float DistSq = FVector::DistSquared(QuerierLocation, City->GetActorLocation());
             Candidates.Add({City, DistSq, 0});
         }
     }
 
-    // 4. 排序：距离优先（平方距离排序更快）
-    // 我们希望优先检查最近的目标，因为如果最近的能走到，它就是最优解
+    // 4. 排序：距离优先
     Candidates.Sort([](const FCandidateInfo& A, const FCandidateInfo& B) {
         return A.DistSq < B.DistSq;
     });
 
-    // 5. 精确筛选：路径可达性检测 (性能消耗高，所以只查 Top N)
-    // 限制检查数量，防止如果全图都被堵死时造成卡顿
+    // 5. 精确筛选：路径可达性检测
     int32 CheckLimit = 5; 
     int32 CheckedCount = 0;
 
@@ -115,9 +120,17 @@ AActor* USG_CombatTargetManager::FindBestTargetWithSlot(ASG_UnitsBase* Querier)
         if (CheckedCount >= CheckLimit) break;
         CheckedCount++;
 
-        // ✨ 核心修改：检查路径是否存在
+        // 🔧 修改 - 如果是主城，只要直线距离够近或者能通过 NavMesh，基本都可达
+        // 主城体积大，NavMesh 测试可能会因为检测点在建筑中心而失败，所以对主城放宽检测
         bool bIsReachable = true;
-        if (NavSys)
+        
+        if (Candidate.Actor->IsA(ASG_MainCityBase::StaticClass()))
+        {
+            // 对于主城，我们假设总是可达的（或者只做简单的射线检测）
+            // 因为主城通常是静态的大型目标，寻路系统会自动处理边缘
+            bIsReachable = true; 
+        }
+        else if (NavSys)
         {
             FPathFindingQuery Query;
             Query.StartLocation = QuerierLocation;
@@ -125,23 +138,17 @@ AActor* USG_CombatTargetManager::FindBestTargetWithSlot(ASG_UnitsBase* Querier)
             Query.NavData = NavSys->GetDefaultNavDataInstance();
             Query.Owner = Querier;
             
-            // TestPathSync 比 FindPathSync 快，只检查连通性，不计算完整路径
             bIsReachable = NavSys->TestPathSync(Query);
         }
 
         if (bIsReachable)
         {
-            UE_LOG(LogSGGameplay, Log, TEXT("🎯 %s 选中最佳目标：%s (距离: %.0f, 可达: 是)"),
+            UE_LOG(LogSGGameplay, Log, TEXT("🎯 %s 选中最佳目标：%s (距离: %.0f)"),
                 *Querier->GetName(), *Candidate.Actor->GetName(), FMath::Sqrt(Candidate.DistSq));
             return Candidate.Actor;
         }
-        else
-        {
-            UE_LOG(LogSGGameplay, Verbose, TEXT("  🚫 跳过不可达目标：%s"), *Candidate.Actor->GetName());
-        }
     }
 
-    UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s 未找到可达目标 (检查了 %d 个最近候选)"), *Querier->GetName(), CheckedCount);
     return nullptr;
 }
 
@@ -150,10 +157,43 @@ AActor* USG_CombatTargetManager::FindBestTargetWithSlot(ASG_UnitsBase* Querier)
  */
 bool USG_CombatTargetManager::TryReserveAttackSlot(ASG_UnitsBase* Attacker, AActor* Target, FVector& OutSlotPosition)
 {
-    if (!Attacker || !Target)
+  if (!Attacker || !Target)
     {
         return false;
     }
+
+    // 🔧 MODIFIED - 特殊处理主城逻辑
+    if (ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(Target))
+    {
+        // 计算攻击方向（从主城指向攻击者）
+        FVector CityLocation = MainCity->GetActorLocation();
+        FVector AttackerLocation = Attacker->GetActorLocation();
+        FVector Direction = (AttackerLocation - CityLocation).GetSafeNormal();
+
+        // 获取主城的碰撞盒大小（如果没有碰撞盒，给一个默认半径）
+        float CityRadius = 800.0f; 
+        if (MainCity->GetAttackDetectionBox())
+        {
+            CityRadius = MainCity->GetAttackDetectionBox()->GetScaledBoxExtent().X; 
+        }
+
+        // 攻击者的攻击范围
+        float AttackRange = Attacker->GetAttackRangeForAI();
+        
+        // 计算理想站位：主城边缘 + 攻击范围的 80% (留点余量)
+        // 这样攻击者会围成一个圈
+        float StandDistance = CityRadius + (AttackRange * 0.8f);
+        
+        OutSlotPosition = CityLocation + (Direction * StandDistance);
+        
+        // 确保 Z 轴高度正确 (与攻击者一致)
+        OutSlotPosition.Z = AttackerLocation.Z;
+
+        // 主城不需要记录在 TargetCombatInfoMap 中，因为它没有槽位上限
+        return true; 
+    }
+
+    // ========== 以下是普通单位的槽位逻辑（保持不变） ==========
 
     FSGTargetCombatInfo& CombatInfo = GetOrCreateCombatInfo(Target);
 
@@ -171,6 +211,7 @@ bool USG_CombatTargetManager::TryReserveAttackSlot(ASG_UnitsBase* Attacker, AAct
     int32 SlotIndex = FindNearestAvailableSlot(Target, Attacker->GetActorLocation());
     if (SlotIndex == INDEX_NONE)
     {
+        // 只有非主城单位才会因为槽位已满而失败
         UE_LOG(LogSGGameplay, Warning, TEXT("❌ %s 无法预约 %s 的槽位：已满"),
             *Attacker->GetName(), *Target->GetName());
         return false;
@@ -180,8 +221,8 @@ bool USG_CombatTargetManager::TryReserveAttackSlot(ASG_UnitsBase* Attacker, AAct
     CombatInfo.AttackSlots[SlotIndex].OccupyingUnit = Attacker;
     OutSlotPosition = CombatInfo.AttackSlots[SlotIndex].GetWorldPosition(Target);
 
-    UE_LOG(LogSGGameplay, Log, TEXT("✅ %s 预约了 %s 的槽位 #%d (位置: %s)"),
-        *Attacker->GetName(), *Target->GetName(), SlotIndex, *OutSlotPosition.ToString());
+    UE_LOG(LogSGGameplay, Verbose, TEXT("✅ %s 预约了 %s 的槽位 #%d"),
+        *Attacker->GetName(), *Target->GetName(), SlotIndex);
 
     return true;
 }
@@ -192,6 +233,12 @@ bool USG_CombatTargetManager::TryReserveAttackSlot(ASG_UnitsBase* Attacker, AAct
 void USG_CombatTargetManager::ReleaseAttackSlot(ASG_UnitsBase* Attacker, AActor* Target)
 {
     if (!Attacker || !Target)
+    {
+        return;
+    }
+
+    // 🔧 MODIFIED - 主城不需要释放槽位
+    if (Target->IsA(ASG_MainCityBase::StaticClass()))
     {
         return;
     }
@@ -207,7 +254,7 @@ void USG_CombatTargetManager::ReleaseAttackSlot(ASG_UnitsBase* Attacker, AActor*
         if (Slot.OccupyingUnit.Get() == Attacker)
         {
             Slot.OccupyingUnit = nullptr;
-            UE_LOG(LogSGGameplay, Log, TEXT("🔓 %s 释放了 %s 的槽位"),
+            UE_LOG(LogSGGameplay, Verbose, TEXT("🔓 %s 释放了 %s 的槽位"),
                 *Attacker->GetName(), *Target->GetName());
             return;
         }
@@ -224,8 +271,15 @@ void USG_CombatTargetManager::ReleaseAllSlots(ASG_UnitsBase* Attacker)
         return;
     }
 
+    // 遍历所有被攻击目标的槽位信息
     for (auto& Pair : TargetCombatInfoMap)
     {
+        // 🔧 MODIFIED - 如果 Key 是主城（虽然我们现在不往 Map 里加主城了，但为了健壮性检查一下）
+        if (AActor* TargetActor = Pair.Key.Get())
+        {
+            if (TargetActor->IsA(ASG_MainCityBase::StaticClass())) continue;
+        }
+
         for (FSGAttackSlot& Slot : Pair.Value.AttackSlots)
         {
             if (Slot.OccupyingUnit.Get() == Attacker)
@@ -234,8 +288,6 @@ void USG_CombatTargetManager::ReleaseAllSlots(ASG_UnitsBase* Attacker)
             }
         }
     }
-
-    UE_LOG(LogSGGameplay, Verbose, TEXT("🔓 %s 释放了所有槽位"), *Attacker->GetName());
 }
 
 /**
@@ -243,6 +295,12 @@ void USG_CombatTargetManager::ReleaseAllSlots(ASG_UnitsBase* Attacker)
  */
 bool USG_CombatTargetManager::HasAvailableSlot(AActor* Target) const
 {
+    // 🔧 MODIFIED - 主城永远有空位
+    if (Target && Target->IsA(ASG_MainCityBase::StaticClass()))
+    {
+        return true;
+    }
+
     const FSGTargetCombatInfo* CombatInfo = TargetCombatInfoMap.Find(Target);
     if (!CombatInfo)
     {
@@ -256,6 +314,12 @@ bool USG_CombatTargetManager::HasAvailableSlot(AActor* Target) const
  */
 int32 USG_CombatTargetManager::GetOccupiedSlotCount(AActor* Target) const
 {
+    // 🔧 MODIFIED - 主城不统计占用数（或者返回0避免排序逻辑出错）
+    if (Target && Target->IsA(ASG_MainCityBase::StaticClass()))
+    {
+        return 0;
+    }
+
     const FSGTargetCombatInfo* CombatInfo = TargetCombatInfoMap.Find(Target);
     if (!CombatInfo)
     {
@@ -272,6 +336,29 @@ bool USG_CombatTargetManager::GetReservedSlotPosition(ASG_UnitsBase* Attacker, A
     if (!Attacker || !Target)
     {
         return false;
+    }
+
+    // 🔧 MODIFIED - 主城逻辑：实时计算位置，而不是从 Map 获取
+    if (ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(Target))
+    {
+        // 复用 TryReserveAttackSlot 中的计算逻辑，确保一致性
+        // 计算攻击方向
+        FVector CityLocation = MainCity->GetActorLocation();
+        FVector AttackerLocation = Attacker->GetActorLocation();
+        FVector Direction = (AttackerLocation - CityLocation).GetSafeNormal();
+
+        float CityRadius = 800.0f; 
+        if (MainCity->GetAttackDetectionBox())
+        {
+            CityRadius = MainCity->GetAttackDetectionBox()->GetScaledBoxExtent().X; 
+        }
+        
+        float AttackRange = Attacker->GetAttackRangeForAI();
+        float StandDistance = CityRadius + (AttackRange * 0.8f);
+        
+        OutPosition = CityLocation + (Direction * StandDistance);
+        OutPosition.Z = AttackerLocation.Z;
+        return true;
     }
 
     const FSGTargetCombatInfo* CombatInfo = TargetCombatInfoMap.Find(Target);
@@ -302,32 +389,14 @@ void USG_CombatTargetManager::InitializeSlotsForTarget(AActor* Target)
     {
         return;
     }
-
-    FSGTargetCombatInfo& CombatInfo = TargetCombatInfoMap.FindOrAdd(Target);
+    // 🔧 MODIFIED - 主城不需要初始化槽位
+    if (Target->IsA(ASG_MainCityBase::StaticClass())) return;
     
-    // 如果已经初始化，跳过
-    if (CombatInfo.AttackSlots.Num() > 0)
-    {
-        return;
-    }
+    FSGTargetCombatInfo& CombatInfo = TargetCombatInfoMap.FindOrAdd(Target);
+    if (CombatInfo.AttackSlots.Num() > 0) return;
 
-    // 确定槽位数量
     int32 NumSlots = UnitSlotCount;
     float Distance = SlotDistance;
-
-    // 主城使用更多槽位和更大距离
-    if (Target->IsA(ASG_MainCityBase::StaticClass()))
-    {
-        NumSlots = MainCitySlotCount;
-        Distance = SlotDistance * 2.0f;
-    }
-
-    // 获取目标的攻击范围（如果是单位）
-    if (ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(Target))
-    {
-        // 槽位距离应该在攻击者的攻击范围内
-        // 这里使用固定值，实际攻击时会根据攻击者调整
-    }
 
     // 在目标周围均匀分布槽位
     CombatInfo.AttackSlots.SetNum(NumSlots);

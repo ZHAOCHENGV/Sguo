@@ -17,6 +17,7 @@
 #include "Buildings/SG_MainCityBase.h"
 #include "Kismet/GameplayStatics.h"
 // ✨ 新增 - 计谋效果基类
+#include "Components/CapsuleComponent.h"
 #include "Strategies/SG_StrategyEffectBase.h"
 #include "Strategies/SG_StrategyEffect_RollingLog.h"  // ✨ 新增
 

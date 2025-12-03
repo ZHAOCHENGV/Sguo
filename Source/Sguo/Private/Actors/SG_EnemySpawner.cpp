@@ -11,6 +11,7 @@
 #include "Kismet/KismetMathLibrary.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
+#include "Components/CapsuleComponent.h"
 #include "Debug/SG_LogCategories.h"
 #include "Kismet/GameplayStatics.h"
 
@@ -68,7 +69,7 @@ void ASG_EnemySpawner::StartSpawning()
     // 检查配置
     if (!DeckConfig)
     {
-        UE_LOG(LogSGGameplay, Error, TEXT("Spawner %s: DeckConfig 未设置!"), *GetName());
+        UE_LOG(LogSGGameplay, Error, TEXT("❌ Spawner %s: DeckConfig 未设置!"), *GetName());
         return;
     }
 
@@ -77,17 +78,23 @@ void ASG_EnemySpawner::StartSpawning()
 
     if (SpawnPool.Num() == 0)
     {
-        UE_LOG(LogSGGameplay, Error, TEXT("Spawner %s: 生成池为空!"), *GetName());
+        UE_LOG(LogSGGameplay, Error, TEXT("❌ Spawner %s: 生成池为空!"), *GetName());
         return;
     }
 
     bIsSpawning = true;
     CurrentSpawnCount = 0;
 
-    UE_LOG(LogSGGameplay, Log, TEXT("Spawner %s: 开始生成流程，延迟 %.2f 秒"), *GetName(), StartDelay);
+    // 🔧 修改 - 更详细的日志
+    UE_LOG(LogSGGameplay, Log, TEXT("========== Spawner %s 开始生成流程 =========="), *GetName());
+    UE_LOG(LogSGGameplay, Log, TEXT("  卡组配置：%s"), *DeckConfig->GetName());
+    UE_LOG(LogSGGameplay, Log, TEXT("  生成池数量：%d"), SpawnPool.Num());
+    UE_LOG(LogSGGameplay, Log, TEXT("  阵营：%s"), *FactionTag.ToString());
+    UE_LOG(LogSGGameplay, Log, TEXT("  开始延迟：%.2f 秒"), StartDelay);
+    UE_LOG(LogSGGameplay, Log, TEXT("  间隔模式：%d"), (int32)IntervalMethod);
+    UE_LOG(LogSGGameplay, Log, TEXT("========================================="));
 
     // 设置首次生成定时器
-    // 如果 StartDelay <= 0，稍微延迟一帧执行，避免初始化顺序问题
     float InitialDelay = FMath::Max(StartDelay, 0.1f);
     
     GetWorld()->GetTimerManager().SetTimer(
@@ -97,6 +104,8 @@ void ASG_EnemySpawner::StartSpawning()
         InitialDelay,
         false
     );
+    
+    UE_LOG(LogSGGameplay, Log, TEXT("  ⏱️ 定时器已设置，%.2f 秒后执行第一次生成"), InitialDelay);
 }
 
 void ASG_EnemySpawner::StopSpawning()
@@ -139,35 +148,50 @@ void ASG_EnemySpawner::InitializeSpawnPool()
 
 void ASG_EnemySpawner::HandleSpawnTimer()
 {
-    if (!bIsSpawning) return;
-    // ✨ 检查主城是否存活
+    UE_LOG(LogSGGameplay, Log, TEXT("========== Spawner %s 定时器触发 =========="), *GetName());
+    
+    if (!bIsSpawning)
+    {
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 生成已停止，跳过"));
+        return;
+    }
+    
+    // 检查主城是否存活
     if (RelatedMainCity.IsValid())
     {
         if (!RelatedMainCity->IsAlive())
         {
-            UE_LOG(LogSGGameplay, Log, TEXT("Spawner %s: 主城已摧毁，停止生成"), *GetName());
+            UE_LOG(LogSGGameplay, Log, TEXT("  🏰 主城已摧毁，停止生成"));
             StopSpawning();
             return;
         }
     }
     
     // 执行生成
+    UE_LOG(LogSGGameplay, Log, TEXT("  🎲 开始抽卡并生成..."));
     bool bSpawnSuccess = SpawnNextWave();
+    
+    if (bSpawnSuccess)
+    {
+        UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 生成成功！当前已生成：%d"), CurrentSpawnCount);
+    }
+    else
+    {
+        UE_LOG(LogSGGameplay, Warning, TEXT("  ❌ 生成失败"));
+    }
 
     // 检查总数量限制
     if (MaxSpawnCount > 0 && CurrentSpawnCount >= MaxSpawnCount)
     {
-        UE_LOG(LogSGGameplay, Log, TEXT("Spawner %s: 达到最大生成数量 %d，停止"), *GetName(), MaxSpawnCount);
+        UE_LOG(LogSGGameplay, Log, TEXT("  达到最大生成数量 %d，停止"), MaxSpawnCount);
         StopSpawning();
         return;
     }
 
-    // 如果生成失败（比如卡池空了），尝试停止或等待
-    // 这里选择继续尝试，也许是等待唯一卡重置（虽然唯一卡一般不重置）
-    // 如果 SpawnPool 为空，强制停止
+    // 如果卡池空了，停止
     if (SpawnPool.Num() == 0)
     {
-        UE_LOG(LogSGGameplay, Warning, TEXT("Spawner %s: 卡池耗尽，停止"), *GetName());
+        UE_LOG(LogSGGameplay, Warning, TEXT("  卡池耗尽，停止"));
         StopSpawning();
         return;
     }
@@ -175,7 +199,8 @@ void ASG_EnemySpawner::HandleSpawnTimer()
     // 计算下一次间隔
     float NextInterval = GetNextSpawnInterval();
     
-    UE_LOG(LogSGGameplay, Verbose, TEXT("Spawner %s: 下一次生成在 %.2f 秒后"), *GetName(), NextInterval);
+    UE_LOG(LogSGGameplay, Log, TEXT("  ⏱️ 下一次生成在 %.2f 秒后"), NextInterval);
+    UE_LOG(LogSGGameplay, Log, TEXT("========================================="));
 
     GetWorld()->GetTimerManager().SetTimer(
         SpawnTimerHandle,
@@ -188,12 +213,17 @@ void ASG_EnemySpawner::HandleSpawnTimer()
 
 bool ASG_EnemySpawner::SpawnNextWave()
 {
+    UE_LOG(LogSGGameplay, Verbose, TEXT("  SpawnNextWave: 开始抽卡"));
+    
     USG_CardDataBase* SelectedCard = DrawCardFromPool();
     
     if (!SelectedCard)
     {
+        UE_LOG(LogSGGameplay, Warning, TEXT("  SpawnNextWave: 抽卡失败，卡池可能为空"));
         return false;
     }
+    
+    UE_LOG(LogSGGameplay, Log, TEXT("  SpawnNextWave: 抽到卡牌 %s"), *SelectedCard->GetName());
 
     // 确定生成位置中心点
     FVector SpawnLocation;
@@ -205,6 +235,8 @@ bool ASG_EnemySpawner::SpawnNextWave()
     {
         SpawnLocation = GetRandomSpawnLocation();
     }
+    
+    UE_LOG(LogSGGameplay, Log, TEXT("  SpawnNextWave: 生成位置 %s"), *SpawnLocation.ToString());
 
     // 生成单位（处理兵团逻辑）
     SpawnUnit(SelectedCard, SpawnLocation);

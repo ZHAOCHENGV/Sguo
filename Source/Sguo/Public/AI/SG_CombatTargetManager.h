@@ -1,5 +1,5 @@
 ﻿// 📄 文件：Source/Sguo/Public/AI/SG_CombatTargetManager.h
-// ✨ 新增 - 战斗目标管理器（带攻击槽位系统）
+// 🔧 修改 - 添加调试可视化和标签过滤功能
 
 #pragma once
 
@@ -11,6 +11,22 @@
 
 class ASG_UnitsBase;
 class ASG_MainCityBase;
+
+// ✨ 新增 - 槽位状态枚举（用于可视化）
+/**
+ * @brief 攻击槽位状态
+ * @details
+ * - Free: 空闲状态（绿色）
+ * - Reserved: 已预约但未到达（蓝色）
+ * - Occupied: 已到达正在攻击（红色）
+ */
+UENUM(BlueprintType)
+enum class ESGSlotStatus : uint8
+{
+    Free        UMETA(DisplayName = "空闲"),
+    Reserved    UMETA(DisplayName = "已预约"),
+    Occupied    UMETA(DisplayName = "已占用")
+};
 
 /**
  * @brief 攻击槽位信息
@@ -28,10 +44,24 @@ struct FSGAttackSlot
     UPROPERTY()
     TWeakObjectPtr<ASG_UnitsBase> OccupyingUnit;
 
+    // ✨ 新增 - 槽位状态
+    UPROPERTY()
+    ESGSlotStatus Status = ESGSlotStatus::Free;
+
     // 槽位是否被占据
     bool IsOccupied() const
     {
         return OccupyingUnit.IsValid() && !OccupyingUnit->bIsDead;
+    }
+
+    // ✨ 新增 - 获取槽位状态
+    ESGSlotStatus GetStatus() const
+    {
+        if (!OccupyingUnit.IsValid() || OccupyingUnit->bIsDead)
+        {
+            return ESGSlotStatus::Free;
+        }
+        return Status;
     }
 
     // 获取世界坐标
@@ -85,6 +115,8 @@ struct FSGTargetCombatInfo
  * - 管理每个目标的攻击槽位
  * - 单位必须预约槽位才能攻击
  * - 槽位满了，单位必须选择其他目标
+ * - ✨ 新增：调试可视化系统
+ * - ✨ 新增：基于标签的槽位占用控制
  */
 UCLASS()
 class SGUO_API USG_CombatTargetManager : public UWorldSubsystem
@@ -95,6 +127,10 @@ public:
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
     virtual bool ShouldCreateSubsystem(UObject* Outer) const override { return true; }
+
+    // ✨ 新增 - Tick 用于调试绘制
+    virtual void Tick(float DeltaTime) override;
+    virtual TStatId GetStatId() const override;
 
     // ========== 核心接口 ==========
 
@@ -155,19 +191,96 @@ public:
     UFUNCTION(BlueprintPure, Category = "Combat")
     bool GetReservedSlotPosition(ASG_UnitsBase* Attacker, AActor* Target, FVector& OutPosition) const;
 
+    // ✨ 新增 - 更新槽位状态（单位到达槽位时调用）
+    /**
+     * @brief 更新槽位状态为已占用
+     * @param Attacker 攻击者
+     * @param Target 目标
+     * @details 当单位到达攻击位置时调用，将状态从 Reserved 改为 Occupied
+     */
+    UFUNCTION(BlueprintCallable, Category = "Combat", meta = (DisplayName = "标记槽位已占用"))
+    void MarkSlotAsOccupied(ASG_UnitsBase* Attacker, AActor* Target);
+
+    // ✨ 新增 - 检查单位是否需要占用槽位
+    /**
+     * @brief 检查单位是否需要占用攻击槽位
+     * @param Unit 单位
+     * @return 是否需要占用槽位
+     * @details
+     * 功能说明：
+     * - 检查单位的 UnitTypeTag 是否在 SlotRequiredTags 中
+     * - 远程单位通常不需要占用槽位
+     */
+    UFUNCTION(BlueprintPure, Category = "Combat", meta = (DisplayName = "是否需要占用槽位"))
+    bool DoesUnitRequireSlot(ASG_UnitsBase* Unit) const;
+
     // ========== 配置 ==========
 
     /** 普通单位的攻击槽位数量 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Config", meta = (DisplayName = "单位槽位数量"))
     int32 UnitSlotCount = 8;
 
-    /** 主城的攻击槽位数量 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Config", meta = (DisplayName = "主城槽位数量"))
-    int32 MainCitySlotCount = 20;
-
     /** 槽位距离目标的距离（攻击范围内） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Config", meta = (DisplayName = "槽位距离"))
     float SlotDistance = 120.0f;
+
+    // ✨ 新增 - 需要占用槽位的单位类型标签
+    /**
+     * @brief 需要占用攻击槽位的单位类型标签
+     * @details
+     * 功能说明：
+     * - 只有拥有这些标签的单位才需要占用攻击槽位
+     * - 远程单位（如弓箭手）不在此列表中，则不占用槽位
+     * 使用示例：
+     * - Unit.Type.Infantry（步兵）
+     * - Unit.Type.Cavalry（骑兵）
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Config", meta = (DisplayName = "需要槽位的单位标签"))
+    FGameplayTagContainer SlotRequiredTags;
+
+    // ========== ✨ 新增 - 调试可视化配置 ==========
+
+    /** 是否启用槽位调试可视化 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug", meta = (DisplayName = "显示攻击槽位"))
+    bool bShowAttackSlots = false;
+
+    /** 空闲槽位颜色（绿色） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug", meta = (DisplayName = "空闲槽位颜色"))
+    FColor SlotFreeColor = FColor::Green;
+
+    /** 已预约槽位颜色（蓝色） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug", meta = (DisplayName = "预约槽位颜色"))
+    FColor SlotReservedColor = FColor::Blue;
+
+    /** 已占用槽位颜色（红色） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug", meta = (DisplayName = "占用槽位颜色"))
+    FColor SlotOccupiedColor = FColor::Red;
+
+    /** 槽位调试球体半径 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug", meta = (DisplayName = "槽位显示半径"))
+    float SlotDebugRadius = 30.0f;
+
+    /** 是否显示槽位连线（从单位到槽位） */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug", meta = (DisplayName = "显示槽位连线"))
+    bool bShowSlotConnections = true;
+
+    /** 是否显示槽位文字信息 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Debug", meta = (DisplayName = "显示槽位文字"))
+    bool bShowSlotText = true;
+
+    // ✨ 新增 - 调试开关函数
+    /**
+     * @brief 切换槽位可视化显示
+     */
+    UFUNCTION(BlueprintCallable, Category = "Debug", meta = (DisplayName = "切换槽位显示"))
+    void ToggleSlotVisualization();
+
+    /**
+     * @brief 设置槽位可视化显示
+     * @param bEnable 是否启用
+     */
+    UFUNCTION(BlueprintCallable, Category = "Debug", meta = (DisplayName = "设置槽位显示"))
+    void SetSlotVisualization(bool bEnable);
 
 protected:
     /**
@@ -194,6 +307,19 @@ protected:
      * @brief 定期清理无效数据
      */
     void CleanupInvalidData();
+
+    // ✨ 新增 - 绘制调试信息
+    /**
+     * @brief 绘制所有槽位的调试可视化
+     */
+    void DrawDebugSlots();
+
+    /**
+     * @brief 绘制单个目标的槽位
+     * @param Target 目标
+     * @param CombatInfo 战斗信息
+     */
+    void DrawDebugSlotsForTarget(AActor* Target, const FSGTargetCombatInfo& CombatInfo);
 
 private:
     // 目标 -> 战斗信息 映射

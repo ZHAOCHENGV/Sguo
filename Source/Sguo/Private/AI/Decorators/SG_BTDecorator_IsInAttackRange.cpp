@@ -41,11 +41,10 @@ USG_BTDecorator_IsInAttackRange::USG_BTDecorator_IsInAttackRange()
 bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) const
 {
 	
-  // ========== 步骤1-5：获取基础信息 ==========
+ // ========== 步骤1-5：获取基础信息 ==========
     AAIController* AIController = OwnerComp.GetAIOwner();
     if (!AIController) return false;
     
-    // ✨ 新增 - 转换为我们的 AI 控制器
     ASG_AIControllerBase* SGAIController = Cast<ASG_AIControllerBase>(AIController);
     
     ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
@@ -126,7 +125,7 @@ bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeCo
     // ========== 步骤8：判断是否在攻击范围内 ==========
     bool bInRange = ActualDistance <= (AttackRange + DistanceTolerance);
     
-    // ========== ✨ 新增 - 步骤9：更新战斗锁定状态 ==========
+    // ========== ✨ 新增 - 步骤9：更新战斗锁定状态和槽位状态 ==========
     static TMap<ASG_UnitsBase*, bool> LastInRangeStatus;
     bool bWasInRange = LastInRangeStatus.FindOrAdd(ControlledUnit, false);
     
@@ -135,19 +134,26 @@ bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeCo
         // 刚进入攻击范围
         AIController->StopMovement();
         
-        // ✨ 关键：设置为战斗锁定状态
+        // 设置为战斗锁定状态
         if (SGAIController)
         {
             SGAIController->SetTargetEngagementState(ESGTargetEngagementState::Engaged);
         }
         
-        UE_LOG(LogSGGameplay, Warning, TEXT("🔒 %s 进入攻击范围，锁定目标 %s"),
+        // ✨ 新增 - 标记槽位为已占用
+        if (UWorld* World = ControlledUnit->GetWorld())
+        {
+            if (USG_CombatTargetManager* CombatManager = World->GetSubsystem<USG_CombatTargetManager>())
+            {
+                CombatManager->MarkSlotAsOccupied(ControlledUnit, Target);
+            }
+        }
+        
+        UE_LOG(LogSGGameplay, Warning, TEXT("🔒 %s 进入攻击范围，锁定目标 %s，槽位状态: 已占用"),
             *ControlledUnit->GetName(), *Target->GetName());
     }
     else if (!bInRange && bWasInRange)
     {
-        // 离开攻击范围（通常是目标移动了）
-        // 注意：不改变锁定状态，继续追击当前目标
         UE_LOG(LogSGGameplay, Verbose, TEXT("  %s 离开攻击范围，继续追击"), *ControlledUnit->GetName());
     }
     
@@ -160,30 +166,26 @@ bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeCo
     UE_LOG(LogSGGameplay, Log, TEXT("  距离：%.2f, 攻击范围：%.2f"), ActualDistance, AttackRange);
     UE_LOG(LogSGGameplay, Log, TEXT("  结果：%s"), bInRange ? TEXT("✅ 在范围内") : TEXT("❌ 不在范围内"));
     
-   
-	
-	if (bIsMainCity)
-	{
-		UBoxComponent* DetectionBox = MainCity->GetAttackDetectionBox();
-		FVector BoxCenter = DetectionBox->GetComponentLocation();
-		FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
-		float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
-		float DistanceToCenter = FVector::Dist(UnitLocation, BoxCenter);
-		
-		UE_LOG(LogSGGameplay, Log, TEXT("  检测盒中心：%s"), *BoxCenter.ToString());
-		UE_LOG(LogSGGameplay, Log, TEXT("  检测盒半径：%.2f"), BoxRadius);
-		UE_LOG(LogSGGameplay, Log, TEXT("  到中心距离：%.2f"), DistanceToCenter);
-		UE_LOG(LogSGGameplay, Log, TEXT("  到表面距离：%.2f"), ActualDistance);
-	}
-	else
-	{
-		UE_LOG(LogSGGameplay, Log, TEXT("  目标位置：%s"), *Target->GetActorLocation().ToString());
-		UE_LOG(LogSGGameplay, Log, TEXT("  距离：%.2f"), ActualDistance);
-	}
-	
-	
-	
-	return bInRange;
+    if (bIsMainCity)
+    {
+        UBoxComponent* DetectionBox = MainCity->GetAttackDetectionBox();
+        FVector BoxCenter = DetectionBox->GetComponentLocation();
+        FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
+        float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
+        float DistanceToCenter = FVector::Dist(UnitLocation, BoxCenter);
+        
+        UE_LOG(LogSGGameplay, Log, TEXT("  检测盒中心：%s"), *BoxCenter.ToString());
+        UE_LOG(LogSGGameplay, Log, TEXT("  检测盒半径：%.2f"), BoxRadius);
+        UE_LOG(LogSGGameplay, Log, TEXT("  到中心距离：%.2f"), DistanceToCenter);
+        UE_LOG(LogSGGameplay, Log, TEXT("  到表面距离：%.2f"), ActualDistance);
+    }
+    else
+    {
+        UE_LOG(LogSGGameplay, Log, TEXT("  目标位置：%s"), *Target->GetActorLocation().ToString());
+        UE_LOG(LogSGGameplay, Log, TEXT("  距离：%.2f"), ActualDistance);
+    }
+    
+    return bInRange;
 }
 
 /**

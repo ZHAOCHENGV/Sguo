@@ -1,5 +1,6 @@
 // 📄 文件：Source/Sguo/Private/AI/SG_AIControllerBase.cpp
-// 🔧 修改 - 完整文件
+// 🔧 修改 - 修复目标管理和性能优化
+// ✅ 这是完整文件
 
 #include "AI/SG_AIControllerBase.h"
 #include "AbilitySystem/SG_AttributeSet.h"
@@ -35,10 +36,10 @@ ASG_AIControllerBase::ASG_AIControllerBase()
 void ASG_AIControllerBase::BeginPlay()
 {
     Super::BeginPlay();
-    UE_LOG(LogSGGameplay, Log, TEXT("✓ AI 控制器 BeginPlay 完成"));
+    // 🔧 修改 - 减少日志输出
+    UE_LOG(LogSGGameplay, Verbose, TEXT("✓ AI 控制器 BeginPlay 完成"));
 }
 
-// ✨ 新增 - Tick 函数
 /**
  * @brief Tick 更新
  * @param DeltaTime 帧间隔
@@ -46,6 +47,7 @@ void ASG_AIControllerBase::BeginPlay()
  * 功能说明：
  * - 更新移动计时器
  * - 周期性清理不可达列表
+ * - ✨ 新增：移动中检测更好目标
  */
 void ASG_AIControllerBase::Tick(float DeltaTime)
 {
@@ -61,6 +63,21 @@ void ASG_AIControllerBase::Tick(float DeltaTime)
         UnreachableClearTimer = 0.0f;
         ClearUnreachableTargets();
     }
+
+    // ✨ 新增 - 移动中检测更好目标
+    if (TargetEngagementState == ESGTargetEngagementState::Moving)
+    {
+        TargetSwitchCheckTimer += DeltaTime;
+        if (TargetSwitchCheckTimer >= TargetSwitchCheckInterval)
+        {
+            TargetSwitchCheckTimer = 0.0f;
+            CheckForBetterTargetWhileMoving();
+        }
+    }
+    else
+    {
+        TargetSwitchCheckTimer = 0.0f;
+    }
 }
 
 // ========== OnPossess ==========
@@ -68,10 +85,10 @@ void ASG_AIControllerBase::OnPossess(APawn* InPawn)
 {
     Super::OnPossess(InPawn);
     
-    UE_LOG(LogSGGameplay, Log, TEXT("========== AI 控制器 OnPossess =========="));
-    UE_LOG(LogSGGameplay, Log, TEXT("  控制的 Pawn：%s"), *InPawn->GetName());
+    // 🔧 修改 - 减少日志输出
+    UE_LOG(LogSGGameplay, Verbose, TEXT("AI 控制器 OnPossess: %s"), *InPawn->GetName());
     
-    // ✨ 新增 - 初始化位置记录
+    // 初始化位置记录
     LastPosition = InPawn->GetActorLocation();
     
     // 步骤1：确定要使用的行为树
@@ -81,38 +98,26 @@ void ASG_AIControllerBase::OnPossess(APawn* InPawn)
     if (ControlledUnit)
     {
         BehaviorTreeToUse = ControlledUnit->GetUnitBehaviorTree();
-        
-        if (BehaviorTreeToUse)
-        {
-            UE_LOG(LogSGGameplay, Log, TEXT("  📋 使用单位自定义行为树：%s"), *BehaviorTreeToUse->GetName());
-        }
     }
     
     if (!BehaviorTreeToUse && DefaultBehaviorTree)
     {
         BehaviorTreeToUse = DefaultBehaviorTree;
-        UE_LOG(LogSGGameplay, Log, TEXT("  📋 使用控制器默认行为树：%s"), *BehaviorTreeToUse->GetName());
     }
     
     if (!BehaviorTreeToUse)
     {
-        UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 没有可用的行为树！"));
+        UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ %s 没有可用的行为树"), *InPawn->GetName());
         return;
     }
     
     // 步骤2：启动行为树
     bool bSuccess = StartBehaviorTree(BehaviorTreeToUse);
     
-    if (bSuccess)
+    if (!bSuccess)
     {
-        UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 行为树启动成功"));
+        UE_LOG(LogSGGameplay, Error, TEXT("❌ %s 行为树启动失败"), *InPawn->GetName());
     }
-    else
-    {
-        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 行为树启动失败"));
-    }
-    
-    UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 }
 
 // ========== SetupBehaviorTree ==========
@@ -126,7 +131,7 @@ bool ASG_AIControllerBase::SetupBehaviorTree(UBehaviorTree* BehaviorTreeToUse)
     UBlackboardData* BlackboardAsset = BehaviorTreeToUse->BlackboardAsset;
     if (!BlackboardAsset)
     {
-        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 行为树没有关联的黑板资产"));
+        UE_LOG(LogSGGameplay, Error, TEXT("❌ 行为树没有关联的黑板资产"));
         return false;
     }
     
@@ -139,14 +144,10 @@ bool ASG_AIControllerBase::SetupBehaviorTree(UBehaviorTree* BehaviorTreeToUse)
         BlackboardComp->SetValueAsBool(BB_IsTargetLocked, false);
         BlackboardComp->SetValueAsBool(BB_IsInAttackRange, false);
         BlackboardComp->SetValueAsBool(BB_IsTargetMainCity, false);
-        // ❌ 删除这行
-        // BlackboardComp->SetValueAsEnum(BB_TargetEngagementState, ...);
-        
-        UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 黑板初始化成功"));
         return true;
     }
     
-    UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 黑板初始化失败"));
+    UE_LOG(LogSGGameplay, Error, TEXT("❌ 黑板初始化失败"));
     return false;
 }
 
@@ -155,7 +156,6 @@ bool ASG_AIControllerBase::StartBehaviorTree(UBehaviorTree* BehaviorTreeToRun)
 {
     if (!BehaviorTreeToRun)
     {
-        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ StartBehaviorTree：行为树为空"));
         return false;
     }
     
@@ -164,12 +164,10 @@ bool ASG_AIControllerBase::StartBehaviorTree(UBehaviorTree* BehaviorTreeToRun)
     if (BTComp && BTComp->IsRunning())
     {
         BTComp->StopTree(EBTStopMode::Safe);
-        UE_LOG(LogSGGameplay, Verbose, TEXT("  🛑 停止当前行为树"));
     }
     
     if (!SetupBehaviorTree(BehaviorTreeToRun))
     {
-        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ 黑板初始化失败，无法启动行为树"));
         return false;
     }
     
@@ -178,29 +176,36 @@ bool ASG_AIControllerBase::StartBehaviorTree(UBehaviorTree* BehaviorTreeToRun)
     if (bSuccess)
     {
         CurrentBehaviorTree = BehaviorTreeToRun;
-        UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 行为树启动成功：%s"), *BehaviorTreeToRun->GetName());
-    }
-    else
-    {
-        UE_LOG(LogSGGameplay, Error, TEXT("  ❌ RunBehaviorTree 失败：%s"), *BehaviorTreeToRun->GetName());
     }
     
     return bSuccess;
 }
 
-// ========== OnUnPossess ==========
+/**
+ * @brief 取消控制时调用
+ */
 void ASG_AIControllerBase::OnUnPossess()
 {
-    // ✨ 新增 - 确保注销当前的攻击记录，防止单位死亡/回收后仍占据攻击名额
+    // 确保注销当前的攻击记录
     if (AActor* CurrentTarget = GetCurrentTarget())
     {
         if (ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn()))
         {
             if (UWorld* World = GetWorld())
             {
+                // 注销攻击者身份
                 if (USG_TargetingSubsystem* TargetingSys = World->GetSubsystem<USG_TargetingSubsystem>())
                 {
                     TargetingSys->UnregisterAttacker(ControlledUnit, CurrentTarget);
+                }
+
+                // 只有需要占用槽位的单位才释放槽位
+                if (ShouldOccupyAttackSlot())
+                {
+                    if (USG_CombatTargetManager* CombatManager = World->GetSubsystem<USG_CombatTargetManager>())
+                    {
+                        CombatManager->ReleaseAttackSlot(ControlledUnit, CurrentTarget);
+                    }
                 }
             }
         }
@@ -247,21 +252,15 @@ void ASG_AIControllerBase::FreezeAI()
     SetCurrentTarget(nullptr);
     SetActorTickEnabled(false);
     
-    // ✨ 新增 - 重置状态
     TargetEngagementState = ESGTargetEngagementState::Searching;
     
-    UE_LOG(LogSGGameplay, Log, TEXT("🥶 AI 已冻结：%s"), 
+    UE_LOG(LogSGGameplay, Verbose, TEXT("🥶 AI 已冻结：%s"), 
         GetPawn() ? *GetPawn()->GetName() : TEXT("None"));
 }
 
 /**
  * @brief 设置目标锁定状态
  * @param NewState 新状态
- * @details
- * 功能说明：
- * - 更新内部状态
- * - 同步到黑板（使用 Enum 类型）
- * - 输出日志
  */
 void ASG_AIControllerBase::SetTargetEngagementState(ESGTargetEngagementState NewState)
 {
@@ -273,25 +272,121 @@ void ASG_AIControllerBase::SetTargetEngagementState(ESGTargetEngagementState New
     ESGTargetEngagementState OldState = TargetEngagementState;
     TargetEngagementState = NewState;
     
-    // ✨ 简化 - 只更新内部状态，不同步到黑板
-    // 行为树通过调用 IsEngagedInCombat() 等函数来判断状态
-    
-    // 输出状态变化日志
+    // 🔧 修改 - 只在状态变化时输出日志，减少日志量
+    #if !UE_BUILD_SHIPPING
     static const TCHAR* StateNames[] = { TEXT("搜索中"), TEXT("移动中"), TEXT("战斗中"), TEXT("被阻挡") };
-    UE_LOG(LogSGGameplay, Log, TEXT("🎯 %s 目标状态变化：%s → %s"),
+    UE_LOG(LogSGGameplay, Verbose, TEXT("🎯 %s 目标状态：%s → %s"),
         GetPawn() ? *GetPawn()->GetName() : TEXT("Unknown"),
         StateNames[static_cast<uint8>(OldState)],
         StateNames[static_cast<uint8>(NewState)]);
+    #endif
 }
 
-// ✨ 新增 - 标记当前目标为不可达
+// ✨ 新增 - 检查是否允许切换目标
 /**
- * @brief 标记当前目标为不可达
+ * @brief 检查是否允许切换目标
+ * @return 是否允许切换
  * @details
  * 功能说明：
- * - 将当前目标加入不可达列表
- * - 下次寻敌时会跳过这些目标
- * - 列表会周期性清理
+ * - Engaged 状态（正在攻击）时不允许切换
+ * - 其他状态都允许切换
+ */
+bool ASG_AIControllerBase::CanSwitchTarget() const
+{
+    // 只有在 Engaged 状态时不允许切换
+    return TargetEngagementState != ESGTargetEngagementState::Engaged;
+}
+
+// ✨ 新增 - 移动中检测更好目标
+/**
+ * @brief 在移动状态下检测是否有更好的目标
+ * @details
+ * 功能说明：
+ * - 仅在 Moving 状态下调用
+ * - 检测是否有更近的敌方单位
+ * - 如果新目标比当前目标近超过阈值，则切换
+ */
+void ASG_AIControllerBase::CheckForBetterTargetWhileMoving()
+{
+    // 只在移动状态下检测
+    if (TargetEngagementState != ESGTargetEngagementState::Moving)
+    {
+        return;
+    }
+
+    ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
+    if (!ControlledUnit)
+    {
+        return;
+    }
+
+    AActor* CurrentTarget = GetCurrentTarget();
+    if (!CurrentTarget)
+    {
+        return;
+    }
+
+    // 如果当前目标是主城，检测是否有敌方单位出现
+    bool bCurrentTargetIsMainCity = CurrentTarget->IsA(ASG_MainCityBase::StaticClass());
+
+    UWorld* World = GetWorld();
+    if (!World)
+    {
+        return;
+    }
+
+    USG_TargetingSubsystem* TargetingSys = World->GetSubsystem<USG_TargetingSubsystem>();
+    if (!TargetingSys)
+    {
+        return;
+    }
+
+    FVector MyLocation = ControlledUnit->GetActorLocation();
+    float CurrentDistance = FVector::Dist(MyLocation, CurrentTarget->GetActorLocation());
+
+    // 查找敌方单位（不包括主城）
+    TArray<FSGTargetCandidate> Candidates;
+    TSet<TWeakObjectPtr<AActor>> IgnoreList = UnreachableTargets;
+    
+    AActor* BetterTarget = TargetingSys->FindEnemyUnitsOnly(
+        ControlledUnit,
+        ControlledUnit->GetDetectionRange(),
+        Candidates,
+        IgnoreList
+    );
+
+    if (BetterTarget && BetterTarget != CurrentTarget)
+    {
+        float NewDistance = FVector::Dist(MyLocation, BetterTarget->GetActorLocation());
+
+        // 如果当前目标是主城，任何敌方单位都优先
+        // 否则新目标必须比当前目标近超过阈值
+        bool bShouldSwitch = false;
+        
+        if (bCurrentTargetIsMainCity)
+        {
+            // 当前攻击主城，发现敌方单位就切换
+            bShouldSwitch = true;
+            UE_LOG(LogSGGameplay, Log, TEXT("🔄 %s 发现敌方单位，从主城切换到 %s"),
+                *ControlledUnit->GetName(), *BetterTarget->GetName());
+        }
+        else if (CurrentDistance - NewDistance > TargetSwitchDistanceThreshold)
+        {
+            // 新目标明显更近
+            bShouldSwitch = true;
+            UE_LOG(LogSGGameplay, Log, TEXT("🔄 %s 发现更近目标：%s (距离差: %.0f)"),
+                *ControlledUnit->GetName(), *BetterTarget->GetName(), CurrentDistance - NewDistance);
+        }
+
+        if (bShouldSwitch)
+        {
+            SetCurrentTarget(BetterTarget);
+        }
+    }
+}
+
+/**
+ * @brief 标记当前目标为不可达
  */
 void ASG_AIControllerBase::MarkCurrentTargetUnreachable()
 {
@@ -303,21 +398,15 @@ void ASG_AIControllerBase::MarkCurrentTargetUnreachable()
     
     UnreachableTargets.Add(CurrentTarget);
     
-    UE_LOG(LogSGGameplay, Log, TEXT("🚫 %s 标记目标 %s 为不可达"),
+    UE_LOG(LogSGGameplay, Verbose, TEXT("🚫 %s 标记目标 %s 为不可达"),
         GetPawn() ? *GetPawn()->GetName() : TEXT("Unknown"),
         *CurrentTarget->GetName());
     
-    // 设置状态为被阻挡
     SetTargetEngagementState(ESGTargetEngagementState::Blocked);
 }
 
-// ✨ 新增 - 清除不可达目标列表
 /**
  * @brief 清除不可达目标列表
- * @details
- * 功能说明：
- * - 周期性调用，给目标第二次机会
- * - 清理无效的弱引用
  */
 void ASG_AIControllerBase::ClearUnreachableTargets()
 {
@@ -330,21 +419,15 @@ void ASG_AIControllerBase::ClearUnreachableTargets()
         }
     }
     
-    // 如果列表不为空，清空并输出日志
+    // 如果列表不为空，清空
     if (UnreachableTargets.Num() > 0)
     {
-        UE_LOG(LogSGGameplay, Verbose, TEXT("🔄 %s 清除不可达列表（共 %d 个目标）"),
-            GetPawn() ? *GetPawn()->GetName() : TEXT("Unknown"),
-            UnreachableTargets.Num());
         UnreachableTargets.Empty();
     }
 }
 
-// ✨ 新增 - 检查目标是否在不可达列表中
 /**
  * @brief 检查目标是否在不可达列表中
- * @param Target 要检查的目标
- * @return 是否不可达
  */
 bool ASG_AIControllerBase::IsTargetUnreachable(AActor* Target) const
 {
@@ -356,24 +439,16 @@ bool ASG_AIControllerBase::IsTargetUnreachable(AActor* Target) const
     return UnreachableTargets.Contains(Target);
 }
 
-// ✨ 新增 - 检查是否卡住
 /**
- * @brief 检查是否卡住（移动超时）
- * @return 是否被判定为卡住
- * @details
- * 功能说明：
- * - 如果移动超过 StuckThresholdTime 但位移小于 MinMovementDistance
- * - 则判定为卡住
+ * @brief 检查是否卡住
  */
 bool ASG_AIControllerBase::IsStuck() const
 {
     return MovementTimer >= StuckThresholdTime;
 }
 
-// ✨ 新增 - 重置移动计时器
 /**
  * @brief 重置移动计时器
- * @details 开始新的移动时调用
  */
 void ASG_AIControllerBase::ResetMovementTimer()
 {
@@ -384,15 +459,8 @@ void ASG_AIControllerBase::ResetMovementTimer()
     }
 }
 
-// ✨ 新增 - 更新移动计时器
 /**
  * @brief 更新移动计时器
- * @param DeltaTime 帧间隔
- * @details
- * 功能说明：
- * - 仅在移动状态下更新
- * - 检测实际移动距离
- * - 如果移动了足够距离则重置计时器
  */
 void ASG_AIControllerBase::UpdateMovementTimer(float DeltaTime)
 {
@@ -406,37 +474,28 @@ void ASG_AIControllerBase::UpdateMovementTimer(float DeltaTime)
     APawn* ControlledPawn = GetPawn();
     if (!ControlledPawn) return;
 
-    // 1. 获取当前速度
     float Speed = ControlledPawn->GetVelocity().Size();
     
-    // 2. 速度极低（被挡住）
     if (Speed < 10.0f)
     {
         MovementTimer += DeltaTime;
     }
     else
     {
-        // 只要动起来了，就重置，说明 RVO 正在起作用
         MovementTimer = 0.0f; 
     }
 
-    // 3. 判定为卡住（例如超过 0.5 秒没动）
-    // 阈值要短，反应才快
     if (MovementTimer > 0.5f)
     {
-        // 🚨 触发侧面绕行逻辑 🚨
-        UE_LOG(LogSGGameplay, Warning, TEXT("🚧 %s 被人墙阻挡，尝试重新规划侧面路线..."), *ControlledPawn->GetName());
-        
-        // 重置计时器，防止连续触发
         MovementTimer = 0.0f;
-        
         TryFlankingMove();
     }
 }
 
 
-// ✨ 新增函数 - TryFlankingMove (尝试侧面绕行)
-// 需要在 .h 文件中声明: void TryFlankingMove();
+/**
+ * @brief 尝试侧面绕行
+ */
 void ASG_AIControllerBase::TryFlankingMove()
 {
     ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(GetPawn());
@@ -444,85 +503,71 @@ void ASG_AIControllerBase::TryFlankingMove()
     
     if (!Unit || !CurrentTarget) return;
 
+    // 远程单位不需要绕行
+    if (!ShouldOccupyAttackSlot())
+    {
+        return;
+    }
+
     if (UWorld* World = GetWorld())
     {
         USG_CombatTargetManager* CombatManager = World->GetSubsystem<USG_CombatTargetManager>();
         if (CombatManager)
         {
-            // 1. 释放当前死磕的槽位
             CombatManager->ReleaseAttackSlot(Unit, CurrentTarget);
             
-            // 2. 重新预约一个槽位
-            // 注意：由于我们修改了 FindNearestAvailableSlot，
-            // 它现在会根据 Unit 的当前位置重新计算。
-            // 既然当前位置被堵住了，Unit 会稍微被挤偏一点，这会导致算出不同的最优槽位。
             FVector NewSlotPos;
             if (CombatManager->TryReserveAttackSlot(Unit, CurrentTarget, NewSlotPos))
             {
-                // 3. 强制移动到新槽位
                 MoveToLocation(NewSlotPos, -1.0f, true, true, true);
-                UE_LOG(LogSGGameplay, Log, TEXT("  ↪️ 切换到侧翼槽位: %s"), *NewSlotPos.ToString());
             }
             else
             {
-                // 4. 真的没位置了（所有侧面都满了）
-                // 这时候才考虑标记为不可达，去打别人
                 MarkCurrentTargetUnreachable();
                 StopMovement();
-                // 行为树会在下一帧自动处理 FindNearestTarget
             }
         }
     }
 }
 
-// ✨ 新增 - 查找最近的可达目标
 /**
  * @brief 查找最近的可达目标
- * @return 可达的目标 Actor
- * @details
- * 功能说明：
- * - 排除不可达列表中的目标
- * - 使用导航系统检查路径可达性
- * - 优先选择可到达的敌人
  */
 AActor* ASG_AIControllerBase::FindNearestReachableTarget()
 {
     ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
-    if (!ControlledUnit) 
+    if (!ControlledUnit)
     {
         return nullptr;
     }
 
-    // ✨ 修改 - 优先使用 TargetingSubsystem
-    if (USG_TargetingSubsystem* TargetingSys = GetWorld()->GetSubsystem<USG_TargetingSubsystem>())
+    UWorld* World = GetWorld();
+    if (!World)
+    {
+        return nullptr;
+    }
+
+    if (USG_TargetingSubsystem* TargetingSys = World->GetSubsystem<USG_TargetingSubsystem>())
     {
         TArray<FSGTargetCandidate> Candidates;
-        
-        // 调用子系统，并传入当前的 UnreachableTargets 集合作为忽略列表
-        // 这样可以确保这次查找会避开之前标记为“不可达”的那些目标
+
         AActor* BestTarget = TargetingSys->FindBestTarget(
-            ControlledUnit, 
-            ControlledUnit->GetDetectionRange(), 
-            Candidates, 
+            ControlledUnit,
+            ControlledUnit->GetDetectionRange(),
+            Candidates,
             UnreachableTargets
         );
 
-        if (BestTarget)
-        {
-            UE_LOG(LogSGGameplay, Log, TEXT("FindNearestReachableTarget: %s 通过子系统找到新目标 %s"),
-                *ControlledUnit->GetName(), *BestTarget->GetName());
-            return BestTarget;
-        }
+        return BestTarget;
     }
 
-    // 如果子系统没找到，或者不存在，回退到简单的查找逻辑（可选，为了稳健性）
-    UE_LOG(LogSGGameplay, Warning, TEXT("FindNearestReachableTarget: 子系统未找到目标，返回空"));
     return nullptr;
-
 }
 
-// ========== FindNearestTarget ==========
-// 保持原有逻辑不变，但新增一个调用 FindNearestReachableTarget 的选项
+/**
+ * @brief 查找最近的目标
+ * @return 最佳目标 Actor
+ */
 AActor* ASG_AIControllerBase::FindNearestTarget()
 {
     ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
@@ -531,156 +576,56 @@ AActor* ASG_AIControllerBase::FindNearestTarget()
         return nullptr;
     }
 
-    // ✨ 使用战斗目标管理器
-    if (UWorld* World = GetWorld())
+    UWorld* World = GetWorld();
+    if (!World)
     {
-        USG_CombatTargetManager* CombatManager = World->GetSubsystem<USG_CombatTargetManager>();
-        if (CombatManager)
-        {
-            return CombatManager->FindBestTargetWithSlot(ControlledUnit);
-        }
-    }
-
-    // 备用：使用原有逻辑
-    UE_LOG(LogSGGameplay, Warning, TEXT("FindNearestTarget: 无法获取目标管理子系统，使用原有逻辑"));
-    
-    // ✨ 修改 - 如果当前处于被阻挡状态，使用可达性检测
-    if (TargetEngagementState == ESGTargetEngagementState::Blocked)
-    {
-        return FindNearestReachableTarget();
-    }
-    
-    // 原有逻辑保持不变
-    ASG_UnitsBase* AControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
-    if (!AControlledUnit) 
-    {
-        UE_LOG(LogSGGameplay, Error, TEXT("FindNearestTarget: 控制的单位为空"));
         return nullptr;
     }
 
-    FGameplayTag MyFaction = ControlledUnit->FactionTag;
-    FVector MyLoc = ControlledUnit->GetActorLocation();
-    
-    float DetectionRadius = ControlledUnit->GetDetectionRange();
-    ESGTargetSearchShape SearchShape = ControlledUnit->TargetSearchShape;
-    bool bPrioritizeFrontmost = ControlledUnit->bPrioritizeFrontmost;
-
-    UE_LOG(LogSGGameplay, Verbose, TEXT("FindNearestTarget: %s 开始寻找目标"), *ControlledUnit->GetName());
-
-    // 准备候选列表
-    TArray<AActor*> AllUnits;
-    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_UnitsBase::StaticClass(), AllUnits);
-    
-    TArray<AActor*> AllMainCities;
-    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASG_MainCityBase::StaticClass(), AllMainCities);
-
-    // 筛选有效的敌方单位
-    TArray<AActor*> ValidEnemyUnits;
-    
-    for (AActor* Actor : AllUnits)
+    // 优先使用 TargetingSubsystem
+    if (USG_TargetingSubsystem* TargetingSys = World->GetSubsystem<USG_TargetingSubsystem>())
     {
-        if (Actor == ControlledUnit) continue;
-
-        ASG_UnitsBase* Unit = Cast<ASG_UnitsBase>(Actor);
-        if (!Unit) continue;
-        if (Unit->bIsDead) continue;
-        if (Unit->FactionTag == MyFaction) continue;
-        if (!Unit->CanBeTargeted()) continue;
-
-        FVector TargetLoc = Unit->GetActorLocation();
-        bool bInRange = false;
+        TArray<FSGTargetCandidate> Candidates;
         
-        if (SearchShape == ESGTargetSearchShape::Square)
-        {
-            float DiffX = FMath::Abs(TargetLoc.X - MyLoc.X);
-            float DiffY = FMath::Abs(TargetLoc.Y - MyLoc.Y);
-            bInRange = (DiffX <= DetectionRadius && DiffY <= DetectionRadius);
-        }
-        else
-        {
-            bInRange = (FVector::DistSquared(TargetLoc, MyLoc) <= (DetectionRadius * DetectionRadius));
-        }
+        AActor* BestTarget = TargetingSys->FindBestTarget(
+            ControlledUnit,
+            ControlledUnit->GetDetectionRange(),
+            Candidates,
+            UnreachableTargets
+        );
 
-        if (bInRange)
-        {
-            ValidEnemyUnits.Add(Unit);
-        }
-    }
-
-    // 如果有敌方单位，选择最佳目标
-    if (ValidEnemyUnits.Num() > 0)
-    {
-        AActor* BestTarget = nullptr;
-        
-        if (bPrioritizeFrontmost)
-        {
-            float BestXDiff = FLT_MAX;
-            for (AActor* Target : ValidEnemyUnits)
-            {
-                float DistX = FMath::Abs(Target->GetActorLocation().X - MyLoc.X);
-                if (DistX < BestXDiff)
-                {
-                    BestXDiff = DistX;
-                    BestTarget = Target;
-                }
-            }
-        }
-        else
-        {
-            float BestDistSq = FLT_MAX;
-            for (AActor* Target : ValidEnemyUnits)
-            {
-                float DistSq = FVector::DistSquared(Target->GetActorLocation(), MyLoc);
-                if (DistSq < BestDistSq)
-                {
-                    BestDistSq = DistSq;
-                    BestTarget = Target;
-                }
-            }
-        }
-        
         if (BestTarget)
         {
-            UE_LOG(LogSGGameplay, Log, TEXT("FindNearestTarget: 选中敌方单位 %s"), *BestTarget->GetName());
+            bool bTargetIsMainCity = BestTarget->IsA(ASG_MainCityBase::StaticClass());
+            if (UBlackboardComponent* BB = GetBlackboardComponent())
+            {
+                BB->SetValueAsBool(BB_IsTargetMainCity, bTargetIsMainCity);
+            }
+
             return BestTarget;
         }
     }
 
-    // 如果没有敌方单位，查找敌方主城
-    AActor* NearestMainCity = nullptr;
-    float NearestMainCityDist = FLT_MAX;
-    
-    for (AActor* Actor : AllMainCities)
+    // 备选：使用 CombatTargetManager
+    if (USG_CombatTargetManager* CombatManager = World->GetSubsystem<USG_CombatTargetManager>())
     {
-        ASG_MainCityBase* City = Cast<ASG_MainCityBase>(Actor);
-        if (!City) continue;
-        if (!City->IsAlive()) continue;
-        if (City->FactionTag == MyFaction) continue;
-        
-        float Dist = FVector::Dist(MyLoc, City->GetActorLocation());
-        
-        if (Dist < NearestMainCityDist)
+        AActor* Target = CombatManager->FindBestTargetWithSlot(ControlledUnit);
+        if (Target)
         {
-            NearestMainCityDist = Dist;
-            NearestMainCity = City;
+            return Target;
         }
     }
-    
-    if (NearestMainCity)
-    {
-        UE_LOG(LogSGGameplay, Log, TEXT("FindNearestTarget: 选中敌方主城 %s"), *NearestMainCity->GetName());
-        return NearestMainCity;
-    }
 
-    UE_LOG(LogSGGameplay, Warning, TEXT("FindNearestTarget: 未找到任何敌方目标"));
     return nullptr;
 }
 
-// ========== DetectNearbyThreats ==========
+/**
+ * @brief 检测周边威胁
+ */
 bool ASG_AIControllerBase::DetectNearbyThreats(float DetectionRadius)
 {
-    // ✨ 修改 - 如果已经处于战斗锁定状态，不切换目标
-    if (IsEngagedInCombat())
+    // ✨ 修改 - 只有在允许切换目标时才检测威胁
+    if (!CanSwitchTarget())
     {
         return false;
     }
@@ -735,9 +680,6 @@ bool ASG_AIControllerBase::DetectNearbyThreats(float DetectionRadius)
             {
                 SetCurrentTarget(Unit);
                 StopMovement();
-
-                UE_LOG(LogSGGameplay, Log, TEXT("🔄 %s 检测到周边威胁，转移目标到：%s"), 
-                    *ControlledUnit->GetName(), *Unit->GetName());
                 return true;
             }
         }
@@ -746,10 +688,17 @@ bool ASG_AIControllerBase::DetectNearbyThreats(float DetectionRadius)
     return false;
 }
 
-// ========== SetCurrentTarget ==========
+/**
+ * @brief 设置当前目标
+ * @param NewTarget 新目标
+ * @details
+ * 🔧 修改：
+ * - 设置目标后立即触发移动
+ * - 优化日志输出
+ */
 void ASG_AIControllerBase::SetCurrentTarget(AActor* NewTarget)
 {
- UBlackboardComponent* BlackboardComp = GetBlackboardComponent();
+    UBlackboardComponent* BlackboardComp = GetBlackboardComponent();
     if (!BlackboardComp)
     {
         return;
@@ -757,20 +706,29 @@ void ASG_AIControllerBase::SetCurrentTarget(AActor* NewTarget)
     
     ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
     AActor* OldTarget = GetCurrentTarget();
+    
+    // 如果目标没变，不处理
+    if (OldTarget == NewTarget)
+    {
+        return;
+    }
+
     USG_TargetingSubsystem* TargetingSys = GetWorld() ? GetWorld()->GetSubsystem<USG_TargetingSubsystem>() : nullptr;
+    bool bShouldOccupySlot = ShouldOccupyAttackSlot();
 
     // 1. 处理旧目标注销
-    if (OldTarget && OldTarget != NewTarget)
+    if (OldTarget)
     {
         if (UWorld* World = GetWorld())
         {
-            // 释放 CombatManager 槽位
-            if (USG_CombatTargetManager* CombatManager = World->GetSubsystem<USG_CombatTargetManager>())
+            if (bShouldOccupySlot)
             {
-                CombatManager->ReleaseAttackSlot(ControlledUnit, OldTarget);
+                if (USG_CombatTargetManager* CombatManager = World->GetSubsystem<USG_CombatTargetManager>())
+                {
+                    CombatManager->ReleaseAttackSlot(ControlledUnit, OldTarget);
+                }
             }
 
-            // ✨ 新增 - 向目标子系统注销攻击者身份
             if (TargetingSys && ControlledUnit)
             {
                 TargetingSys->UnregisterAttacker(ControlledUnit, OldTarget);
@@ -811,28 +769,41 @@ void ASG_AIControllerBase::SetCurrentTarget(AActor* NewTarget)
             CurrentListenedTarget = TargetUnit;
         }
 
-        // ✨ 新增 - 向目标子系统注册攻击者身份
         if (TargetingSys && ControlledUnit)
         {
             TargetingSys->RegisterAttacker(ControlledUnit, NewTarget);
         }
         
-        // 预约槽位
-        if (UWorld* World = GetWorld())
+        // 🔧 修改 - 预约槽位并立即开始移动
+        FVector MoveDestination = NewTarget->GetActorLocation();
+        
+        if (bShouldOccupySlot)
         {
-            if (USG_CombatTargetManager* CombatManager = World->GetSubsystem<USG_CombatTargetManager>())
+            if (UWorld* World = GetWorld())
             {
-                FVector SlotPosition;
-                if (CombatManager->TryReserveAttackSlot(ControlledUnit, NewTarget, SlotPosition))
+                if (USG_CombatTargetManager* CombatManager = World->GetSubsystem<USG_CombatTargetManager>())
                 {
-                    UE_LOG(LogSGGameplay, Log, TEXT("🎯 %s 预约了槽位，位置: %s"),
-                        *ControlledUnit->GetName(), *SlotPosition.ToString());
+                    FVector SlotPosition;
+                    if (CombatManager->TryReserveAttackSlot(ControlledUnit, NewTarget, SlotPosition))
+                    {
+                        MoveDestination = SlotPosition;
+                    }
                 }
             }
         }
         
+        // ✨ 新增 - 设置状态为移动中并立即开始移动
         SetTargetEngagementState(ESGTargetEngagementState::Moving);
         ResetMovementTimer();
+        
+        // 立即开始移动到目标/槽位位置
+        float AttackRange = ControlledUnit ? ControlledUnit->GetAttackRangeForAI() : 150.0f;
+        MoveToLocation(MoveDestination, AttackRange * 0.8f, true, true, true);
+        
+        // 🔧 修改 - 减少日志
+        UE_LOG(LogSGGameplay, Verbose, TEXT("🎯 %s 设置目标：%s"),
+            ControlledUnit ? *ControlledUnit->GetName() : TEXT("Unknown"),
+            *NewTarget->GetName());
     }
     else
     {
@@ -893,6 +864,33 @@ bool ASG_AIControllerBase::IsTargetValid() const
     return true;
 }
 
+/**
+ * @brief 检查当前控制的单位是否需要占用攻击槽位
+ */
+bool ASG_AIControllerBase::ShouldOccupyAttackSlot() const
+{
+    ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(GetPawn());
+    return ShouldUnitOccupyAttackSlot(ControlledUnit);
+}
+
+/**
+ * @brief 检查指定单位是否需要占用攻击槽位
+ */
+bool ASG_AIControllerBase::ShouldUnitOccupyAttackSlot(const ASG_UnitsBase* Unit) const
+{
+    if (!Unit)
+    {
+        return false;
+    }
+
+    if (SlotOccupyingUnitTypes.IsEmpty())
+    {
+        return true;
+    }
+
+    return SlotOccupyingUnitTypes.HasTag(Unit->UnitTypeTag);
+}
+
 // ========== InterruptAttack ==========
 void ASG_AIControllerBase::InterruptAttack()
 {
@@ -908,8 +906,6 @@ void ASG_AIControllerBase::InterruptAttack()
     {
         BlackboardComp->SetValueAsBool(TEXT("AttackInterrupted"), true);
     }
-    
-    UE_LOG(LogSGGameplay, Log, TEXT("🛑 主城攻击被打断"));
 }
 
 // ========== ResumeAttack ==========
@@ -927,8 +923,6 @@ void ASG_AIControllerBase::ResumeAttack()
     {
         BlackboardComp->SetValueAsBool(TEXT("AttackInterrupted"), false);
     }
-    
-    UE_LOG(LogSGGameplay, Log, TEXT("▶️ 主城恢复攻击"));
 }
 
 // ========== OnTargetDeath ==========
@@ -940,11 +934,8 @@ void ASG_AIControllerBase::OnTargetDeath(ASG_UnitsBase* DeadUnit)
         return;
     }
     
-    UE_LOG(LogSGGameplay, Log, TEXT("🎯 目标死亡，需要重新寻找目标"));
-    
     CurrentListenedTarget = nullptr;
     
-    // ✨ 修改 - 重置状态为搜索中
     SetTargetEngagementState(ESGTargetEngagementState::Searching);
     
     UBlackboardComponent* BlackboardComp = GetBlackboardComponent();
@@ -960,18 +951,12 @@ void ASG_AIControllerBase::OnTargetDeath(ASG_UnitsBase* DeadUnit)
         ControlledUnit->SetTarget(nullptr);
     }
     
-    // ✨ 修改 - 从不可达列表中移除死亡的目标
     UnreachableTargets.Remove(DeadUnit);
     
     AActor* NewTarget = FindNearestTarget();
     if (NewTarget)
     {
         SetCurrentTarget(NewTarget);
-        UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 找到新目标：%s"), *NewTarget->GetName());
-    }
-    else
-    {
-        UE_LOG(LogSGGameplay, Log, TEXT("  ⚠️ 未找到新目标"));
     }
 }
 
@@ -984,8 +969,6 @@ void ASG_AIControllerBase::BindTargetDeathEvent(ASG_UnitsBase* Target)
     }
     
     Target->OnUnitDeathEvent.AddDynamic(this, &ASG_AIControllerBase::OnTargetDeath);
-    
-    UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 绑定目标死亡事件：%s"), *Target->GetName());
 }
 
 // ========== UnbindTargetDeathEvent ==========
@@ -997,6 +980,4 @@ void ASG_AIControllerBase::UnbindTargetDeathEvent(ASG_UnitsBase* Target)
     }
     
     Target->OnUnitDeathEvent.RemoveDynamic(this, &ASG_AIControllerBase::OnTargetDeath);
-    
-    UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 解绑目标死亡事件：%s"), *Target->GetName());
 }

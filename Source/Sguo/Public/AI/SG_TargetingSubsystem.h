@@ -1,5 +1,6 @@
 ﻿// 📄 文件：Source/Sguo/Public/AI/SG_TargetingSubsystem.h
-// ✨ 新增 - 目标管理子系统
+// 🔧 修改 - 修复蓝图不支持的参数类型
+// ✅ 这是完整文件
 
 #pragma once
 
@@ -8,7 +9,9 @@
 #include "GameplayTagContainer.h"
 #include "SG_TargetingSubsystem.generated.h"
 
+// 前置声明
 class ASG_UnitsBase;
+class ASG_MainCityBase;
 
 /**
  * @brief 目标攻击者信息
@@ -44,20 +47,35 @@ struct FSGTargetCandidate
 {
     GENERATED_BODY()
 
-    UPROPERTY()
+    UPROPERTY(BlueprintReadOnly, Category = "Target")
     TWeakObjectPtr<AActor> Target;
 
-    UPROPERTY()
+    UPROPERTY(BlueprintReadOnly, Category = "Target")
     float Distance = 0.0f;
 
-    UPROPERTY()
+    UPROPERTY(BlueprintReadOnly, Category = "Target")
     int32 AttackerCount = 0;
 
-    UPROPERTY()
+    UPROPERTY(BlueprintReadOnly, Category = "Target")
     float Score = 0.0f;
 
-    UPROPERTY()
+    UPROPERTY(BlueprintReadOnly, Category = "Target")
     bool bIsReachable = true;
+
+    UPROPERTY(BlueprintReadOnly, Category = "Target")
+    bool bIsMainCity = false;
+};
+
+/**
+ * @brief 目标查找结果类型
+ * @details 用于标识查找到的目标类型
+ */
+UENUM(BlueprintType)
+enum class ESGTargetFindResult : uint8
+{
+    None        UMETA(DisplayName = "未找到目标"),
+    EnemyUnit   UMETA(DisplayName = "敌方单位"),
+    EnemyCity   UMETA(DisplayName = "敌方主城")
 };
 
 /**
@@ -67,6 +85,7 @@ struct FSGTargetCandidate
  * - 使用场景查询高效获取范围内目标
  * - 管理目标的拥挤度（被多少单位攻击）
  * - 提供智能目标选择算法
+ * - 当视野内无敌方单位时自动回退到敌方主城
  * 使用方式：
  * - 通过 GetWorld()->GetSubsystem<USG_TargetingSubsystem>() 获取
  */
@@ -82,22 +101,113 @@ public:
     virtual void Deinitialize() override;
     virtual bool ShouldCreateSubsystem(UObject* Outer) const override { return true; }
 
-    // ========== 目标查询 ==========
+    // ========== 目标查询（C++ 接口） ==========
+    // 🔧 修改 - 这些函数不暴露给蓝图，因为参数类型不被蓝图支持
 
-  
     /**
-     * @brief 查找最佳目标（增加忽略列表支持）
+     * @brief 查找最佳目标（C++ 核心接口）
      * @param Querier 查询者单位
      * @param SearchRadius 搜索半径
      * @param OutCandidates 输出：候选目标列表
-     * @param IgnoredActors (新增) 需要忽略的 Actor 列表（默认为空）
+     * @param IgnoredActors 需要忽略的 Actor 列表
+     * @return 最佳目标 Actor
+     * @details
+     * 功能说明：
+     * - 优先在视野范围内查找敌方单位
+     * - 如果没有敌方单位，自动回退到敌方主城
+     * - 使用高效的球形场景查询
+     * 注意事项：
+     * - 此函数不暴露给蓝图，请使用 FindBestTargetBP
+     */
+    AActor* FindBestTarget(
+        ASG_UnitsBase* Querier,
+        float SearchRadius,
+        TArray<FSGTargetCandidate>& OutCandidates,
+        const TSet<TWeakObjectPtr<AActor>>& IgnoredActors
+    );
+
+    /**
+     * @brief 查找最佳目标（带结果类型，C++ 接口）
+     * @param Querier 查询者单位
+     * @param SearchRadius 搜索半径
+     * @param OutResultType 输出：结果类型（单位/主城/无）
+     * @param IgnoredActors 需要忽略的 Actor 列表
      * @return 最佳目标 Actor
      */
-    // 🔧 修改 - 增加 IgnoredActors 参数
-    UFUNCTION()
-    AActor* FindBestTarget(ASG_UnitsBase* Querier,float SearchRadius,TArray<FSGTargetCandidate>& OutCandidates,const TSet<TWeakObjectPtr<AActor>>& IgnoredActors);
+    AActor* FindBestTargetWithType(
+        ASG_UnitsBase* Querier,
+        float SearchRadius,
+        ESGTargetFindResult& OutResultType,
+        const TSet<TWeakObjectPtr<AActor>>& IgnoredActors
+    );
 
-   
+    /**
+     * @brief 仅查找敌方单位（C++ 接口）
+     * @param Querier 查询者单位
+     * @param SearchRadius 搜索半径
+     * @param OutCandidates 输出：候选单位列表
+     * @param IgnoredActors 需要忽略的 Actor 列表
+     * @return 最佳敌方单位
+     */
+    AActor* FindEnemyUnitsOnly(
+        ASG_UnitsBase* Querier,
+        float SearchRadius,
+        TArray<FSGTargetCandidate>& OutCandidates,
+        const TSet<TWeakObjectPtr<AActor>>& IgnoredActors
+    );
+
+    // ========== 目标查询（蓝图接口） ==========
+    // ✨ 新增 - 蓝图友好的接口，不使用 TSet<TWeakObjectPtr>
+
+    /**
+     * @brief 查找最佳目标（蓝图接口）
+     * @param Querier 查询者单位
+     * @param SearchRadius 搜索半径
+     * @return 最佳目标 Actor
+     * @details
+     * 功能说明：
+     * - 蓝图友好版本，不需要传入忽略列表
+     * - 内部会处理回退到主城的逻辑
+     */
+    UFUNCTION(BlueprintCallable, Category = "Targeting", meta = (DisplayName = "查找最佳目标"))
+    AActor* FindBestTargetBP(ASG_UnitsBase* Querier, float SearchRadius);
+
+    /**
+     * @brief 查找最佳目标带类型（蓝图接口）
+     * @param Querier 查询者单位
+     * @param SearchRadius 搜索半径
+     * @param OutResultType 输出：结果类型
+     * @return 最佳目标 Actor
+     */
+    UFUNCTION(BlueprintCallable, Category = "Targeting", meta = (DisplayName = "查找最佳目标（带类型）"))
+    AActor* FindBestTargetWithTypeBP(
+        ASG_UnitsBase* Querier,
+        float SearchRadius,
+        ESGTargetFindResult& OutResultType
+    );
+
+    /**
+     * @brief 仅查找敌方单位（蓝图接口）
+     * @param Querier 查询者单位
+     * @param SearchRadius 搜索半径
+     * @return 最佳敌方单位
+     */
+    UFUNCTION(BlueprintCallable, Category = "Targeting", meta = (DisplayName = "查找敌方单位"))
+    AActor* FindEnemyUnitsOnlyBP(ASG_UnitsBase* Querier, float SearchRadius);
+
+    /**
+     * @brief 查找敌方主城
+     * @param Querier 查询者单位
+     * @return 最近的敌方主城
+     * @details
+     * 功能说明：
+     * - 查找所有敌方主城
+     * - 返回最近的存活主城
+     * - 用于视野内无敌方单位时的回退目标
+     */
+    UFUNCTION(BlueprintCallable, Category = "Targeting", meta = (DisplayName = "查找敌方主城"))
+    ASG_MainCityBase* FindEnemyMainCity(ASG_UnitsBase* Querier);
+
     // ========== 拥挤度管理 ==========
 
     /**
@@ -140,7 +250,6 @@ public:
     /**
      * @brief 拥挤度惩罚系数
      * @details 每增加一个攻击者，目标评分降低的比例
-     * 评分 = 基础分 / (1 + 攻击者数 * CrowdingPenalty)
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Targeting Config", meta = (DisplayName = "拥挤惩罚系数"))
     float CrowdingPenalty = 0.3f;
@@ -164,6 +273,14 @@ public:
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Targeting Config", meta = (DisplayName = "查询碰撞通道"))
     TEnumAsByte<ECollisionChannel> QueryChannel = ECC_Pawn;
+
+    /**
+     * @brief 主城缓存刷新间隔（秒）
+     * @details 为了避免每次查询都遍历所有主城，使用缓存
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Targeting Config|Performance", 
+        meta = (DisplayName = "主城缓存刷新间隔", ClampMin = "0.5", UIMin = "0.5", UIMax = "5.0"))
+    float MainCityCacheRefreshInterval = 1.0f;
 
 protected:
     /**
@@ -189,6 +306,19 @@ protected:
         int32 AttackerCount
     ) const;
 
+    /**
+     * @brief 刷新主城缓存
+     * @details 定期更新主城列表，避免每次查询都遍历
+     */
+    void RefreshMainCityCache();
+
+    /**
+     * @brief 获取目标的碰撞半径
+     * @param Target 目标 Actor
+     * @return 碰撞半径
+     */
+    float GetTargetCollisionRadius(AActor* Target) const;
+
 private:
     // 目标 -> 攻击者信息 映射
     UPROPERTY()
@@ -199,4 +329,14 @@ private:
 
     // 清理无效数据
     void CleanupInvalidData();
+
+    // 主城缓存
+    UPROPERTY()
+    TArray<TWeakObjectPtr<ASG_MainCityBase>> CachedMainCities;
+
+    // 主城缓存刷新计时器
+    FTimerHandle MainCityCacheTimerHandle;
+
+    // 主城缓存是否有效
+    bool bMainCityCacheValid = false;
 };

@@ -31,6 +31,19 @@ class SGUO_API ASG_StationaryUnit : public ASG_UnitsBase
 public:
     ASG_StationaryUnit();
 
+    // ========== ✨ 新增 - 计谋技能参数缓存 ==========
+
+    UPROPERTY(BlueprintReadOnly, Category = "Stationary Unit|Strategy Skill")
+    float StrategySkillDamageMultiplier = 1.0f;
+
+    UPROPERTY(BlueprintReadOnly, Category = "Stationary Unit|Strategy Skill")
+    float StrategySkillArcHeight = 0.5f;
+
+    UPROPERTY(BlueprintReadOnly, Category = "Stationary Unit|Strategy Skill")
+    float StrategySkillFlightSpeed = 1500.0f;
+
+    
+
 protected:
     virtual void BeginPlay() override;
     virtual void Tick(float DeltaTime) override;
@@ -161,6 +174,7 @@ public:
      * - 打断当前普通攻击
      * - 设置计谋技能参数
      * - 开始持续射击
+     *  🔧 修改：增加了数值参数 (DamageMultiplier, ArcHeight, FlightSpeed)
      */
     UFUNCTION(BlueprintCallable, Category = "Stationary Unit|Strategy Skill", 
         meta = (DisplayName = "开始计谋技能"))
@@ -171,7 +185,11 @@ public:
         float FireInterval,
         int32 ArrowsPerRound,
         TSubclassOf<AActor> ProjectileClass = nullptr,
-        UAnimMontage* AttackMontage = nullptr
+        UAnimMontage* AttackMontage = nullptr,
+        float DamageMultiplier = 1.0f,      // ✨ 新增
+        float ArcHeight = 0.5f,             // ✨ 新增
+        float FlightSpeed = 1500.0f         // ✨ 新增
+   
     );
 
     /**

@@ -30,6 +30,8 @@ ASG_StationaryUnit::ASG_StationaryUnit()
     PrimaryActorTick.bCanEverTick = true;
 }
 
+
+
 void ASG_StationaryUnit::BeginPlay()
 {
     Super::BeginPlay();
@@ -131,7 +133,10 @@ void ASG_StationaryUnit::StartStrategySkill(
     float FireInterval,
     int32 ArrowsPerRound,
     TSubclassOf<AActor> ProjectileClass,
-    UAnimMontage* AttackMontage)
+    UAnimMontage* AttackMontage,
+    float DamageMultiplier,      // ✨ 新增
+    float ArcHeight,             // ✨ 新增
+    float FlightSpeed)
 {
     UE_LOG(LogSGUnit, Log, TEXT("[站桩单位] %s 开始计谋技能"), *GetName());
     UE_LOG(LogSGUnit, Log, TEXT("  目标位置: %s"), *TargetLocation.ToString());
@@ -153,14 +158,19 @@ void ASG_StationaryUnit::StartStrategySkill(
         bIsAttacking = false;
     }
 
-    // 设置计谋技能参数
+    // 设置基础参数
     StrategySkillState = ESGStrategySkillState::Executing;
     StrategySkillRemainingTime = Duration;
-    StrategySkillFireTimer = 0.0f;  // 立即开始第一次射击
+    StrategySkillFireTimer = 0.0f;
     CurrentFireInterval = FireInterval;
     StrategySkillTargetLocation = TargetLocation;
     StrategySkillAreaRadius = AreaRadius;
     StrategySkillArrowsPerRound = ArrowsPerRound;
+
+    // ✨ 保存数值参数
+    StrategySkillDamageMultiplier = DamageMultiplier;
+    StrategySkillArcHeight = ArcHeight;
+    StrategySkillFlightSpeed = FlightSpeed;
 
     // 设置投射物类（优先使用传入的，其次使用 DataTable 配置）
     if (ProjectileClass)
@@ -172,15 +182,21 @@ void ASG_StationaryUnit::StartStrategySkill(
         CurrentProjectileClass = GetDataTableProjectileClass();
     }
 
-    // 设置攻击蒙太奇（优先使用传入的，其次使用 DataTable 配置）
+    // 设置攻击蒙太奇
+    // 🔧 逻辑优化：优先参数 -> 其次自身配置的FireArrowMontage -> 最后DataTable
     if (AttackMontage)
     {
         CurrentAttackMontage = AttackMontage;
+    }
+    else if (FireArrowMontage) // ✨ 优先使用自身配置的火矢蒙太奇
+    {
+        CurrentAttackMontage = FireArrowMontage;
     }
     else
     {
         CurrentAttackMontage = GetDataTableAttackMontage();
     }
+
 
     UE_LOG(LogSGUnit, Log, TEXT("  投射物类: %s"), 
         CurrentProjectileClass ? *CurrentProjectileClass->GetName() : TEXT("默认"));
@@ -252,42 +268,30 @@ void ASG_StationaryUnit::ExecuteStrategyFire()
     UE_LOG(LogSGUnit, Verbose, TEXT("[站桩单位] %s 执行计谋射击 x%d"), 
         *GetName(), StrategySkillArrowsPerRound);
 
-    // ========== 播放攻击蒙太奇 ==========
+    // ========== 播放攻击蒙太奇 (这里就是你想要的核心逻辑) ==========
     if (CurrentAttackMontage)
     {
         if (USkeletalMeshComponent* MeshComp = GetMesh())
         {
             if (UAnimInstance* AnimInstance = MeshComp->GetAnimInstance())
             {
-                // 🔧 核心：根据射击间隔计算播放速率
-                // 播放速率 = 蒙太奇时长 / 射击间隔
-                // 确保蒙太奇在下一次射击前播放完毕
+                // 计算播放速率：确保动画在下次射击前播完
                 float MontageLength = CurrentAttackMontage->GetPlayLength();
                 float PlayRate = 1.0f;
                 
                 if (CurrentFireInterval > 0.0f && MontageLength > 0.0f)
                 {
-                    // 计算需要的播放速率
-                    // 如果蒙太奇时长大于射击间隔，需要加速播放
                     PlayRate = MontageLength / CurrentFireInterval;
+                    PlayRate = FMath::Clamp(PlayRate, 0.2f, 10.0f); // 限制范围
                     
-                    // 限制最大播放速率，避免动画过快
-                    PlayRate = FMath::Clamp(PlayRate, 0.5f, 5.0f);
-                    
-                    // 同时考虑攻击速度属性
                     if (AttributeSet)
                     {
                         PlayRate *= AttributeSet->GetAttackSpeed();
                     }
                 }
 
+                // ✨ 播放动画
                 AnimInstance->Montage_Play(CurrentAttackMontage, PlayRate);
-
-                UE_LOG(LogSGUnit, Verbose, TEXT("  播放蒙太奇: %s (速率: %.2f, 间隔: %.2f, 时长: %.2f)"),
-                    *CurrentAttackMontage->GetName(),
-                    PlayRate,
-                    CurrentFireInterval,
-                    MontageLength);
             }
         }
     }
@@ -295,14 +299,12 @@ void ASG_StationaryUnit::ExecuteStrategyFire()
     // ========== 发射投射物 ==========
     for (int32 i = 0; i < StrategySkillArrowsPerRound; ++i)
     {
-        // 在区域内随机位置
+        // 计算随机位置
         FVector RandomOffset = FVector(
             FMath::FRandRange(-StrategySkillAreaRadius, StrategySkillAreaRadius),
             FMath::FRandRange(-StrategySkillAreaRadius, StrategySkillAreaRadius),
             0.0f
         );
-        
-        // 确保随机点在圆形区域内
         while (RandomOffset.Size2D() > StrategySkillAreaRadius)
         {
             RandomOffset = FVector(
@@ -311,11 +313,18 @@ void ASG_StationaryUnit::ExecuteStrategyFire()
                 0.0f
             );
         }
-
         FVector TargetPos = StrategySkillTargetLocation + RandomOffset;
 
-        // 发射火矢
-        FireArrow(TargetPos, CurrentProjectileClass);
+        // 发射
+        AActor* SpawnedActor = FireArrow(TargetPos, CurrentProjectileClass);
+
+        // ✨ 应用计谋数值到投射物
+        if (ASG_Projectile* Projectile = Cast<ASG_Projectile>(SpawnedActor))
+        {
+            Projectile->DamageMultiplier = StrategySkillDamageMultiplier;
+            Projectile->ArcHeight = StrategySkillArcHeight;
+            Projectile->SetFlightSpeed(StrategySkillFlightSpeed);
+        }
     }
 }
 

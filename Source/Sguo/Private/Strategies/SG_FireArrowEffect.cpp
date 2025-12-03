@@ -1,5 +1,6 @@
 ﻿// 📄 文件：Source/Sguo/Private/Strategies/SG_FireArrowEffect.cpp
-// 🔧 修改 - 完整修复版本
+// 🔧 修复 - 解决 LNK2019 链接错误，补全所有函数实现
+// ✅ 这是完整文件，请直接覆盖
 
 #include "Strategies/SG_FireArrowEffect.h"
 #include "Data/SG_FireArrowCardData.h"
@@ -14,6 +15,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
+#include "GameFramework/PlayerController.h"
 
 ASG_FireArrowEffect::ASG_FireArrowEffect()
 {
@@ -24,7 +26,8 @@ ASG_FireArrowEffect::ASG_FireArrowEffect()
 	RootComponent = PreviewDecal;
 	PreviewDecal->SetRelativeRotation(FRotator(-90.0f, 0.0f, 0.0f));
 	PreviewDecal->SetVisibility(false);
-	// ✨ 默认开启强制贴地，只检测静态物体
+	
+	// 默认开启强制贴地，只检测静态物体
 	bForceGroundTrace = true;
 	GroundTraceChannel = ECC_WorldStatic;
 }
@@ -39,18 +42,13 @@ void ASG_FireArrowEffect::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
+	// 如果正在执行，检查弓手存活状态
 	if (CurrentState == ESGStrategyEffectState::Executing)
 	{
 		ParticipatingArchers.RemoveAll([](const TWeakObjectPtr<ASG_StationaryUnit>& Archer)
 		{
-			if (!Archer.IsValid())
-			{
-				return true;
-			}
-			if (Archer->bIsDead)
-			{
-				return true;
-			}
+			if (!Archer.IsValid()) return true;
+			if (Archer->bIsDead) return true;
 			return false;
 		});
 
@@ -90,18 +88,17 @@ void ASG_FireArrowEffect::InitializeEffect(
 	}
 
 	UE_LOG(LogSGGameplay, Log, TEXT("  初始化火矢计"));
-	UE_LOG(LogSGGameplay, Log, TEXT("    区域半径：%.1f"), FireArrowCardData->AreaRadius);
-	UE_LOG(LogSGGameplay, Log, TEXT("    持续时间：%.1f 秒"), FireArrowCardData->SkillDuration);
-	UE_LOG(LogSGGameplay, Log, TEXT("    射击间隔：%.1f 秒"), FireArrowCardData->FireInterval);
-	UE_LOG(LogSGGameplay, Log, TEXT("    每轮火箭数：%d"), FireArrowCardData->ArrowsPerArcherPerRound);
+	if (FireArrowCardData)
+	{
+		UE_LOG(LogSGGameplay, Log, TEXT("    区域半径：%.1f"), FireArrowCardData->AreaRadius);
+		UE_LOG(LogSGGameplay, Log, TEXT("    持续时间：%.1f 秒"), FireArrowCardData->SkillDuration);
+	}
 
 	FindParticipatingArchers();
 	UE_LOG(LogSGGameplay, Log, TEXT("    可用弓手数：%d"), ParticipatingArchers.Num());
 
 	CreatePreviewDecal();
 	SetActorLocation(InTargetLocation);
-
-	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 }
 
 bool ASG_FireArrowEffect::CanExecute_Implementation() const
@@ -138,11 +135,6 @@ bool ASG_FireArrowEffect::StartTargetSelection_Implementation()
 	}
 
 	bool bResult = Super::StartTargetSelection_Implementation();
-
-	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 火矢计目标选择已开始"));
-	UE_LOG(LogSGGameplay, Log, TEXT("    可用弓手：%d"), ParticipatingArchers.Num());
-	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
-
 	return bResult;
 }
 
@@ -155,8 +147,6 @@ void ASG_FireArrowEffect::UpdateTargetLocation_Implementation(const FVector& New
 
 	FVector FinalLocation = NewLocation;
 
-	// ✨ 如果开启了强制贴地检测，我们需要忽略 PlayerController 传来的 NewLocation（因为它可能包含了 Pawn 碰撞）
-	// 而是自己重新从鼠标位置发射一条只检测 Static 的射线
 	if (bForceGroundTrace)
 	{
 		APlayerController* PC = Cast<APlayerController>(GetOwner());
@@ -171,20 +161,13 @@ void ASG_FireArrowEffect::UpdateTargetLocation_Implementation(const FVector& New
 				FHitResult Hit;
 				FCollisionQueryParams QueryParams;
 				QueryParams.AddIgnoredActor(this);
-				QueryParams.AddIgnoredActor(PC->GetPawn()); // 忽略玩家自己
+				if (PC->GetPawn()) QueryParams.AddIgnoredActor(PC->GetPawn());
 
-				// 🚀 性能优化：使用 LineTraceSingleByObjectType 只检测 WorldStatic
-				// 这样可以物理上完全忽略 Character/Pawn/PhysicsBody 等动态物体
 				FCollisionObjectQueryParams ObjectParams;
 				ObjectParams.AddObjectTypesToQuery(GroundTraceChannel); 
 
 				bool bHit = GetWorld()->LineTraceSingleByObjectType(
-					Hit, 
-					Start, 
-					End, 
-					ObjectParams, 
-					QueryParams
-				);
+					Hit, Start, End, ObjectParams, QueryParams);
 
 				if (bHit)
 				{
@@ -205,7 +188,6 @@ bool ASG_FireArrowEffect::ConfirmTarget_Implementation()
 
 	if (CurrentState != ESGStrategyEffectState::WaitingForTarget)
 	{
-		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 当前不在目标选择状态"));
 		return false;
 	}
 
@@ -213,24 +195,17 @@ bool ASG_FireArrowEffect::ConfirmTarget_Implementation()
 
 	if (!CanExecute())
 	{
-		FText Reason = GetCannotExecuteReason();
-		UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ %s"), *Reason.ToString());
 		return false;
 	}
 
-	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 目标确认：%s"), *TargetLocation.ToString());
-
 	HidePreviewDecal();
 	ExecuteEffect();
-
-	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 
 	return true;
 }
 
 void ASG_FireArrowEffect::CancelEffect_Implementation()
 {
-	UE_LOG(LogSGGameplay, Log, TEXT("  火矢计被取消"));
 	HidePreviewDecal();
 	Super::CancelEffect_Implementation();
 }
@@ -254,9 +229,13 @@ void ASG_FireArrowEffect::InterruptEffect_Implementation()
 	Super::InterruptEffect_Implementation();
 }
 
+/**
+ * @brief 执行效果（委托模式）
+ * 🔧 核心逻辑：遍历弓手，调用 Unit 的 StartStrategySkill 接口
+ */
 void ASG_FireArrowEffect::ExecuteEffect_Implementation()
 {
-	UE_LOG(LogSGGameplay, Log, TEXT("========== 执行火矢计 =========="));
+	UE_LOG(LogSGGameplay, Log, TEXT("========== 执行火矢计 (委托模式) =========="));
 
 	if (ParticipatingArchers.Num() == 0)
 	{
@@ -268,23 +247,46 @@ void ASG_FireArrowEffect::ExecuteEffect_Implementation()
 	SetState(ESGStrategyEffectState::Executing);
 	SkillStartTime = GetWorld()->GetTimeSeconds();
 
-	// ✨ 通知弓手开始火矢技能
-	NotifyArchersStartFireArrow();
-
-	// 立即执行第一轮射击
-	ExecuteFireRound();
-
+	// 获取配置数据
 	float FireInterval = FireArrowCardData ? FireArrowCardData->FireInterval : 0.3f;
 	float SkillDuration = FireArrowCardData ? FireArrowCardData->SkillDuration : 5.0f;
+	int32 ArrowsPerRound = FireArrowCardData ? FireArrowCardData->ArrowsPerArcherPerRound : 1;
+	float AreaRadius = FireArrowCardData ? FireArrowCardData->AreaRadius : 800.0f;
+	
+	// 获取数值参数
+	float DmgMult = FireArrowCardData ? FireArrowCardData->ArrowDamageMultiplier : 1.0f;
+	float Arc = FireArrowCardData ? FireArrowCardData->ArrowArcHeight : 0.5f;
+	float Speed = FireArrowCardData ? FireArrowCardData->ArrowSpeed : 1500.0f;
+	TSubclassOf<AActor> ProjClass = FireArrowCardData ? FireArrowCardData->FireArrowProjectileClass : nullptr;
 
-	GetWorld()->GetTimerManager().SetTimer(
-		FireTimerHandle,
-		this,
-		&ASG_FireArrowEffect::OnFireTimerTick,
-		FireInterval,
-		true
-	);
+	// 遍历所有弓手，启动他们的计谋模式
+	for (const TWeakObjectPtr<ASG_StationaryUnit>& ArcherPtr : ParticipatingArchers)
+	{
+		if (!ArcherPtr.IsValid()) continue;
+		ASG_StationaryUnit* Archer = ArcherPtr.Get();
+		if (Archer->bIsDead) continue;
 
+		// 获取弓手自己的蒙太奇
+		UAnimMontage* MyMontage = Archer->FireArrowMontage;
+
+		// 调用单位的新接口
+		Archer->StartStrategySkill(
+			TargetLocation,
+			AreaRadius,
+			SkillDuration,
+			FireInterval,
+			ArrowsPerRound,
+			ProjClass,
+			MyMontage,
+			DmgMult,
+			Arc,
+			Speed
+		);
+
+		UE_LOG(LogSGGameplay, Verbose, TEXT("    -> 弓手 %s 开始自动射击"), *Archer->GetName());
+	}
+
+	// 设置结束定时器
 	GetWorld()->GetTimerManager().SetTimer(
 		DurationTimerHandle,
 		this,
@@ -293,13 +295,13 @@ void ASG_FireArrowEffect::ExecuteEffect_Implementation()
 		false
 	);
 
-	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 火矢计开始执行"));
-	UE_LOG(LogSGGameplay, Log, TEXT("    参与弓手：%d"), ParticipatingArchers.Num());
-	UE_LOG(LogSGGameplay, Log, TEXT("    持续时间：%.1f 秒"), SkillDuration);
-	UE_LOG(LogSGGameplay, Log, TEXT("    射击间隔：%.1f 秒"), FireInterval);
-	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
+	UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 火矢计指令已下达，等待结束"));
 }
 
+/**
+ * @brief 查找参与的弓手
+ * 🔧 修复：之前版本缺失此实现
+ */
 void ASG_FireArrowEffect::FindParticipatingArchers()
 {
 	ParticipatingArchers.Empty();
@@ -310,126 +312,99 @@ void ASG_FireArrowEffect::FindParticipatingArchers()
 	for (AActor* Actor : AllActors)
 	{
 		ASG_StationaryUnit* StationaryUnit = Cast<ASG_StationaryUnit>(Actor);
-		if (!StationaryUnit)
-		{
-			continue;
-		}
-
-		if (StationaryUnit->bIsDead)
-		{
-			continue;
-		}
-
-		if (StationaryUnit->FactionTag != InstigatorFactionTag)
-		{
-			continue;
-		}
-
-		if (!StationaryUnit->IsHovering())
-		{
-			continue;
-		}
+		if (!StationaryUnit) continue;
+		if (StationaryUnit->bIsDead) continue;
+		if (StationaryUnit->FactionTag != InstigatorFactionTag) continue;
+		if (!StationaryUnit->IsHovering()) continue;
 
 		ParticipatingArchers.Add(StationaryUnit);
-		UE_LOG(LogSGGameplay, Verbose, TEXT("    找到弓手：%s"), *StationaryUnit->GetName());
 	}
 }
 
-void ASG_FireArrowEffect::ExecuteFireRound()
+/**
+ * @brief 技能时间结束
+ */
+void ASG_FireArrowEffect::OnSkillDurationEnd()
 {
-	UE_LOG(LogSGGameplay, Log, TEXT("  🏹 执行火矢计第 %d 轮射击"), FiredRounds + 1);
+	UE_LOG(LogSGGameplay, Log, TEXT("========== 火矢计时间结束 =========="));
 
-	int32 ValidArcherCount = 0;
-	int32 ArrowCount = FireArrowCardData ? FireArrowCardData->ArrowsPerArcherPerRound : 3;
+	// 通知所有弓手停止
+	NotifyArchersEndFireArrow();
 
+	if (GetWorld())
+	{
+		GetWorld()->GetTimerManager().ClearTimer(FireTimerHandle);
+		GetWorld()->GetTimerManager().ClearTimer(DurationTimerHandle);
+	}
+
+	K2_OnFireArrowCompleted(0);
+	EndEffect();
+}
+
+/**
+ * @brief 通知弓手停止
+ */
+void ASG_FireArrowEffect::NotifyArchersEndFireArrow()
+{
 	for (const TWeakObjectPtr<ASG_StationaryUnit>& ArcherPtr : ParticipatingArchers)
 	{
-		if (!ArcherPtr.IsValid())
+		if (ArcherPtr.IsValid())
 		{
-			continue;
+			ArcherPtr.Get()->StopStrategySkill();
 		}
-
-		ASG_StationaryUnit* Archer = ArcherPtr.Get();
-
-		if (Archer->bIsDead)
-		{
-			continue;
-		}
-
-		FireArrowsFromArcher(Archer, ArrowCount);
-		ValidArcherCount++;
 	}
-
-	K2_OnFireRoundStarted(FiredRounds, ValidArcherCount);
-	FiredRounds++;
-
-	UE_LOG(LogSGGameplay, Log, TEXT("    参与弓手：%d，每人发射：%d 支"), ValidArcherCount, ArrowCount);
 }
 
+/**
+ * @brief 通知弓手开始
+ * ⚠️ 空实现：新逻辑直接在 ExecuteEffect 中调用 StartStrategySkill
+ */
+void ASG_FireArrowEffect::NotifyArchersStartFireArrow()
+{
+	// Deprecated in new logic
+}
+
+/**
+ * @brief 执行一轮射击
+ * ⚠️ 空实现：射击逻辑已移交 Unit，此函数仅为满足链接器保留
+ */
+void ASG_FireArrowEffect::ExecuteFireRound()
+{
+	// Deprecated: Firing is handled by ASG_StationaryUnit::ExecuteStrategyFire
+}
+
+/**
+ * @brief 射击定时器 Tick
+ * ⚠️ 空实现：Effect 不再管理射击 Tick
+ */
+void ASG_FireArrowEffect::OnFireTimerTick()
+{
+	// Deprecated
+}
+
+/**
+ * @brief 单个弓手发射
+ * ⚠️ 空实现：链接器占位符
+ */
 void ASG_FireArrowEffect::FireArrowsFromArcher(ASG_StationaryUnit* Archer, int32 ArrowCount)
 {
-	if (!Archer || ArrowCount <= 0)
-	{
-		return;
-	}
-
-	// 获取火箭类
-	TSubclassOf<AActor> ProjectileClass = nullptr;
-	if (FireArrowCardData && FireArrowCardData->FireArrowProjectileClass)
-	{
-		ProjectileClass = FireArrowCardData->FireArrowProjectileClass;
-	}
-	else
-	{
-		ProjectileClass = Archer->GetFireArrowProjectileClass();
-	}
-
-	// 发射多支火箭
-	for (int32 i = 0; i < ArrowCount; ++i)
-	{
-		FVector RandomTarget = GenerateRandomTargetInArea();
-
-		// 使用弓手的 FireArrow 方法
-		AActor* SpawnedProjectile = Archer->FireArrow(RandomTarget, ProjectileClass);
-
-		// 设置额外参数
-		if (ASG_Projectile* Projectile = Cast<ASG_Projectile>(SpawnedProjectile))
-		{
-			if (FireArrowCardData)
-			{
-				Projectile->SetFlightSpeed(FireArrowCardData->ArrowSpeed);
-				Projectile->ArcHeight = FireArrowCardData->ArrowArcHeight;
-				Projectile->DamageMultiplier = FireArrowCardData->ArrowDamageMultiplier;
-			}
-		}
-
-		K2_OnArrowFired(Archer, RandomTarget);
-	}
-
-	UE_LOG(LogSGGameplay, Verbose, TEXT("    弓手 %s 发射了 %d 支火矢"), 
-		*Archer->GetName(), ArrowCount);
+	// Deprecated
 }
 
+/**
+ * @brief 生成随机目标
+ * ⚠️ 空实现：链接器占位符，逻辑已移至 Unit
+ */
 FVector ASG_FireArrowEffect::GenerateRandomTargetInArea() const
 {
-	float Radius = FireArrowCardData ? FireArrowCardData->AreaRadius : 800.0f;
-	float RandomAngle = FMath::FRandRange(0.0f, 360.0f);
-	float RandomRadius = FMath::Sqrt(FMath::FRand()) * Radius;
-
-	FVector Offset;
-	Offset.X = RandomRadius * FMath::Cos(FMath::DegreesToRadians(RandomAngle));
-	Offset.Y = RandomRadius * FMath::Sin(FMath::DegreesToRadians(RandomAngle));
-	Offset.Z = 0.0f;
-
-	return TargetLocation + Offset;
+	return FVector::ZeroVector;
 }
+
+// ========== 辅助函数 ==========
 
 void ASG_FireArrowEffect::CreatePreviewDecal()
 {
-	if (!PreviewDecal)
-	{
-		return;
-	}
+	if (!PreviewDecal) return;
 
 	float Radius = FireArrowCardData ? FireArrowCardData->AreaRadius : 800.0f;
 	PreviewDecal->DecalSize = FVector(1000.0f, Radius, Radius);
@@ -437,9 +412,7 @@ void ASG_FireArrowEffect::CreatePreviewDecal()
 	if (FireArrowCardData && FireArrowCardData->PreviewAreaMaterial)
 	{
 		UMaterialInstanceDynamic* DynamicMaterial = UMaterialInstanceDynamic::Create(
-			FireArrowCardData->PreviewAreaMaterial,
-			this
-		);
+			FireArrowCardData->PreviewAreaMaterial, this);
 
 		if (DynamicMaterial)
 		{
@@ -447,13 +420,12 @@ void ASG_FireArrowEffect::CreatePreviewDecal()
 			PreviewDecal->SetDecalMaterial(DynamicMaterial);
 		}
 	}
-
 	PreviewDecal->SortOrder = 10;
 }
 
 void ASG_FireArrowEffect::UpdatePreviewDecal()
 {
-	// 贴花跟随 Actor 移动
+	// Decal follows actor automatically
 }
 
 void ASG_FireArrowEffect::HidePreviewDecal()
@@ -463,67 +435,4 @@ void ASG_FireArrowEffect::HidePreviewDecal()
 		PreviewDecal->SetVisibility(false);
 		bPreviewVisible = false;
 	}
-}
-
-void ASG_FireArrowEffect::NotifyArchersStartFireArrow()
-{
-	UE_LOG(LogSGGameplay, Log, TEXT("  通知弓手开始火矢技能"));
-	
-	for (const TWeakObjectPtr<ASG_StationaryUnit>& ArcherPtr : ParticipatingArchers)
-	{
-		if (!ArcherPtr.IsValid())
-		{
-			continue;
-		}
-
-		ASG_StationaryUnit* Archer = ArcherPtr.Get();
-		Archer->StartFireArrowSkill();
-
-		UE_LOG(LogSGGameplay, Verbose, TEXT("    ✓ %s 开始火矢技能"), *Archer->GetName());
-	}
-}
-
-void ASG_FireArrowEffect::NotifyArchersEndFireArrow()
-{
-	UE_LOG(LogSGGameplay, Log, TEXT("  通知弓手结束火矢技能"));
-	
-	for (const TWeakObjectPtr<ASG_StationaryUnit>& ArcherPtr : ParticipatingArchers)
-	{
-		if (!ArcherPtr.IsValid())
-		{
-			continue;
-		}
-
-		ASG_StationaryUnit* Archer = ArcherPtr.Get();
-		Archer->EndFireArrowSkill();
-
-		UE_LOG(LogSGGameplay, Verbose, TEXT("    ✓ %s 结束火矢技能"), *Archer->GetName());
-	}
-}
-
-void ASG_FireArrowEffect::OnFireTimerTick()
-{
-	if (CurrentState != ESGStrategyEffectState::Executing)
-	{
-		return;
-	}
-
-	ExecuteFireRound();
-}
-
-void ASG_FireArrowEffect::OnSkillDurationEnd()
-{
-	UE_LOG(LogSGGameplay, Log, TEXT("========== 火矢计完成 =========="));
-	UE_LOG(LogSGGameplay, Log, TEXT("  总轮数：%d"), FiredRounds);
-
-	if (GetWorld())
-	{
-		GetWorld()->GetTimerManager().ClearTimer(FireTimerHandle);
-	}
-
-	NotifyArchersEndFireArrow();
-	K2_OnFireArrowCompleted(FiredRounds);
-	EndEffect();
-
-	UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
 }

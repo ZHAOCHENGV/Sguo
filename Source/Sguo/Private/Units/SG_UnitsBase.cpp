@@ -205,12 +205,17 @@ void ASG_UnitsBase::BeginPlay()
     }
 
 	// 解决后排单位被前排阻挡而发呆的问题
-	if (UCharacterMovementComponent* MoveComp = GetCharacterMovement() && GetCharacterMovement()->bUseRVOAvoidance)
+	if (UCharacterMovementComponent* MoveComp = GetCharacterMovement())
 	{
-		// 设置避让权重（0.1-1.0）
-		// 🔧 技巧：使用随机权重，打破对称性，防止两个单位面对面卡住
-		MoveComp->AvoidanceWeight = FMath::FRandRange(0.1f, 1.0f);
-		UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 启用 RVO 避让 (权重: %.2f)"), MoveComp->AvoidanceWeight);
+		//如果开启了RVO避障
+		if (GetCharacterMovement()->bUseRVOAvoidance)
+		{
+			// 设置避让权重（0.1-1.0）
+			// 🔧 技巧：使用随机权重，打破对称性，防止两个单位面对面卡住
+			MoveComp->AvoidanceWeight = FMath::FRandRange(0.1f, 1.0f);
+			UE_LOG(LogSGGameplay, Verbose, TEXT("  ✓ 启用 RVO 避让 (权重: %.2f)"), MoveComp->AvoidanceWeight);
+		}
+		
 	}
 	
     // ========== 步骤3：加载攻击技能配置 ==========

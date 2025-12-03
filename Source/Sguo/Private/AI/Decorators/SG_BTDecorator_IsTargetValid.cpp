@@ -1,5 +1,5 @@
 ﻿// 📄 文件：Source/Sguo/Private/AI/Decorators/SG_BTDecorator_IsTargetValid.cpp
-// 🔧 修改 - 完整修复主城目标有效性检查
+// 🔧 修改 - 添加详细调试日志定位问题
 // ✅ 这是完整文件
 
 #include "AI/Decorators/SG_BTDecorator_IsTargetValid.h"
@@ -37,8 +37,7 @@ USG_BTDecorator_IsTargetValid::USG_BTDecorator_IsTargetValid()
  * @details
  * 🔧 核心修复：
  * 1. 先检查主城类型（主城不是 ASG_UnitsBase 的子类）
- * 2. 增加 IsValid() 检查确保 Actor 未被销毁
- * 3. 增加详细日志便于调试
+ * 2. 增加详细日志便于调试
  */
 bool USG_BTDecorator_IsTargetValid::CalculateRawConditionValue(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) const
 {
@@ -46,12 +45,17 @@ bool USG_BTDecorator_IsTargetValid::CalculateRawConditionValue(UBehaviorTreeComp
     AAIController* AIController = OwnerComp.GetAIOwner();
     if (!AIController)
     {
+        UE_LOG(LogSGGameplay, Warning, TEXT("❌ 目标有效性检查失败：AIController 为空"));
         return false;
     }
+    
+    // 🔧 调试 - 获取控制的单位名称
+    FString UnitName = AIController->GetPawn() ? AIController->GetPawn()->GetName() : TEXT("Unknown");
     
     UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
     if (!BlackboardComp)
     {
+        UE_LOG(LogSGGameplay, Warning, TEXT("❌ [%s] 目标有效性检查失败：黑板组件为空"), *UnitName);
         return false;
     }
     
@@ -63,74 +67,95 @@ bool USG_BTDecorator_IsTargetValid::CalculateRawConditionValue(UBehaviorTreeComp
     }
     
     UObject* TargetObject = BlackboardComp->GetValueAsObject(KeyName);
+    
+    // 🔧 调试日志
+    UE_LOG(LogSGGameplay, Verbose, TEXT("🔍 [%s] 目标有效性检查：键名=%s, 目标对象=%s"), 
+        *UnitName,
+        *KeyName.ToString(),
+        TargetObject ? *TargetObject->GetName() : TEXT("NULL"));
+    
     if (!TargetObject)
     {
+        UE_LOG(LogSGGameplay, Verbose, TEXT("❌ [%s] 目标有效性检查失败：目标对象为空"), *UnitName);
         return false;
     }
     
     AActor* Target = Cast<AActor>(TargetObject);
     if (!Target)
     {
+        UE_LOG(LogSGGameplay, Warning, TEXT("❌ [%s] 目标有效性检查失败：无法转换为 AActor（类型：%s）"), 
+            *UnitName, *TargetObject->GetClass()->GetName());
         return false;
     }
     
-    // ========== 🔧 修复 - 步骤3：检查 Actor 基础有效性 ==========
-    // 使用 IsValid() 检查 Actor 是否被标记为 PendingKill
+    // ========== 步骤3：检查 Actor 基础有效性 ==========
     if (!IsValid(Target))
     {
-        UE_LOG(LogSGGameplay, Verbose, TEXT("目标有效性检查：Actor 已失效（PendingKill）"));
+        UE_LOG(LogSGGameplay, Warning, TEXT("❌ [%s] 目标有效性检查失败：Actor 已失效（PendingKill）"), *UnitName);
         return false;
     }
     
+    // 🔧 调试 - 输出目标类型
+    UE_LOG(LogSGGameplay, Verbose, TEXT("🔍 [%s] 目标类型：%s"), *UnitName, *Target->GetClass()->GetName());
+    
     // ========== 🔧 修复 - 步骤4：优先检查主城类型 ==========
-    // 主城不是 ASG_UnitsBase 的子类，必须单独检查
-    if (ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(Target))
+    ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(Target);
+    if (TargetMainCity)
     {
+        // 🔧 调试 - 输出主城详细信息
+        UE_LOG(LogSGGameplay, Log, TEXT("🏰 [%s] 检查主城目标：%s"), *UnitName, *TargetMainCity->GetName());
+        UE_LOG(LogSGGameplay, Log, TEXT("    bIsDestroyed: %s"), TargetMainCity->bIsDestroyed ? TEXT("true") : TEXT("false"));
+        UE_LOG(LogSGGameplay, Log, TEXT("    IsAlive(): %s"), TargetMainCity->IsAlive() ? TEXT("true") : TEXT("false"));
+        UE_LOG(LogSGGameplay, Log, TEXT("    CurrentHealth: %.0f"), TargetMainCity->GetCurrentHealth());
+        UE_LOG(LogSGGameplay, Log, TEXT("    MaxHealth: %.0f"), TargetMainCity->GetMaxHealth());
+        
         // 检查主城是否存活
         if (!TargetMainCity->IsAlive())
         {
-            UE_LOG(LogSGGameplay, Log, TEXT("✗ 目标主城已被摧毁：%s"), *TargetMainCity->GetName());
+            UE_LOG(LogSGGameplay, Warning, TEXT("❌ [%s] 目标主城已被摧毁：%s"), *UnitName, *TargetMainCity->GetName());
             return false;
         }
         
         // ✨ 主城有效
-        UE_LOG(LogSGGameplay, Verbose, TEXT("✓ 目标主城有效：%s"), *TargetMainCity->GetName());
+        UE_LOG(LogSGGameplay, Log, TEXT("✓ [%s] 目标主城有效：%s"), *UnitName, *TargetMainCity->GetName());
         return true;
     }
     
     // ========== 步骤5：检查单位类型 ==========
-    if (ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(Target))
+    ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(Target);
+    if (TargetUnit)
     {
         // 检查死亡状态
         if (TargetUnit->bIsDead)
         {
-            UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位已死亡：%s"), *TargetUnit->GetName());
+            UE_LOG(LogSGGameplay, Verbose, TEXT("❌ [%s] 目标单位已死亡：%s"), *UnitName, *TargetUnit->GetName());
             return false;
         }
         
         // 检查生命值
         if (TargetUnit->AttributeSet && TargetUnit->AttributeSet->GetHealth() <= 0.0f)
         {
-            UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位生命值为 0：%s"), *TargetUnit->GetName());
+            UE_LOG(LogSGGameplay, Verbose, TEXT("❌ [%s] 目标单位生命值为 0：%s"), *UnitName, *TargetUnit->GetName());
             return false;
         }
         
         // 检查是否可被选为目标
         if (!TargetUnit->CanBeTargeted())
         {
-            UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位不可被选中：%s"), *TargetUnit->GetName());
+            UE_LOG(LogSGGameplay, Verbose, TEXT("❌ [%s] 目标单位不可被选中：%s"), *UnitName, *TargetUnit->GetName());
             return false;
         }
         
+        UE_LOG(LogSGGameplay, Verbose, TEXT("✓ [%s] 目标单位有效：%s"), *UnitName, *TargetUnit->GetName());
         return true;
     }
     
-    // ========== 步骤6：未知类型，默认有效 ==========
-    // 支持未来扩展的其他目标类型
-    UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ 未知目标类型：%s（%s）"), 
-        *Target->GetName(), *Target->GetClass()->GetName());
+    // ========== 步骤6：未知类型 ==========
+    UE_LOG(LogSGGameplay, Error, TEXT("❌ [%s] 未知目标类型：%s（类：%s）- 既不是单位也不是主城！"), 
+        *UnitName, *Target->GetName(), *Target->GetClass()->GetName());
     
-    return true;
+    // 🔧 修改 - 未知类型返回 false，强制重新查找
+    return false;
 }
 
 /**
@@ -145,6 +170,6 @@ void USG_BTDecorator_IsTargetValid::TickNode(UBehaviorTreeComponent& OwnerComp, 
     if (!bCurrentCondition)
     {
         OwnerComp.RequestExecution(this);
-        UE_LOG(LogSGGameplay, Log, TEXT("🎯 目标无效，请求行为树重新评估"));
+       
     }
 }

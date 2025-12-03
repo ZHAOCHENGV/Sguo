@@ -1,5 +1,5 @@
 ﻿// 📄 文件：Source/Sguo/Private/AI/Tasks/SG_BTTask_MoveToTarget.cpp
-// 🔧 修复 - 主城攻击范围判断和移动逻辑
+// 🔧 修复 - 移除错误的 1.3 倍攻击范围扩大，改为正确的移动和攻击范围判断
 // ✅ 这是完整文件
 
 #include "AI/Tasks/SG_BTTask_MoveToTarget.h"
@@ -30,10 +30,10 @@ USG_BTTask_MoveToTarget::USG_BTTask_MoveToTarget()
 }
 
 /**
- * @brief 计算单位到主城表面的距离
+ * @brief 计算单位到主城检测盒表面的距离
  * @param UnitLocation 单位位置
  * @param MainCity 主城对象
- * @return 到主城表面的距离
+ * @return 到主城表面的距离（2D）
  */
 static float CalculateDistanceToMainCitySurface(const FVector& UnitLocation, ASG_MainCityBase* MainCity)
 {
@@ -42,8 +42,8 @@ static float CalculateDistanceToMainCitySurface(const FVector& UnitLocation, ASG
         return FLT_MAX;
     }
     
-    // 使用检测盒计算
-    if (UBoxComponent* DetectionBox = MainCity->GetAttackDetectionBox())
+    UBoxComponent* DetectionBox = MainCity->GetAttackDetectionBox();
+    if (DetectionBox)
     {
         FVector BoxCenter = DetectionBox->GetComponentLocation();
         FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
@@ -55,24 +55,49 @@ static float CalculateDistanceToMainCitySurface(const FVector& UnitLocation, ASG
         ClosestPoint.Z = UnitLocation.Z;
         
         float Distance = FVector::Dist2D(UnitLocation, ClosestPoint);
-        
-        // 如果单位在盒子内部，距离为 0
         return FMath::Max(0.0f, Distance);
     }
     
-    // 没有检测盒，使用简单的圆形计算
-    float CityRadius = 800.0f;
+    float DefaultRadius = 800.0f;
     float DistanceToCenter = FVector::Dist2D(UnitLocation, MainCity->GetActorLocation());
-    return FMath::Max(0.0f, DistanceToCenter - CityRadius);
+    return FMath::Max(0.0f, DistanceToCenter - DefaultRadius);
+}
+
+/**
+ * @brief 计算单位到主城检测盒表面的最近点
+ */
+static FVector CalculateClosestPointOnMainCitySurface(const FVector& UnitLocation, ASG_MainCityBase* MainCity)
+{
+    if (!MainCity)
+    {
+        return UnitLocation;
+    }
+    
+    UBoxComponent* DetectionBox = MainCity->GetAttackDetectionBox();
+    if (DetectionBox)
+    {
+        FVector BoxCenter = DetectionBox->GetComponentLocation();
+        FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
+        
+        FVector ClosestPoint;
+        ClosestPoint.X = FMath::Clamp(UnitLocation.X, BoxCenter.X - BoxExtent.X, BoxCenter.X + BoxExtent.X);
+        ClosestPoint.Y = FMath::Clamp(UnitLocation.Y, BoxCenter.Y - BoxExtent.Y, BoxCenter.Y + BoxExtent.Y);
+        ClosestPoint.Z = UnitLocation.Z;
+        
+        return ClosestPoint;
+    }
+    
+    FVector CityLocation = MainCity->GetActorLocation();
+    CityLocation.Z = UnitLocation.Z;
+    return CityLocation;
 }
 
 /**
  * @brief 执行任务
  * @details
  * 🔧 核心修复：
- * - 先检查是否已在攻击范围内，是则直接返回成功
- * - 只有不在攻击范围内时才计算移动目标
- * - 移动目标应该让单位更靠近主城，而不是远离
+ * - 使用精确的攻击范围判断（不再扩大 1.3 倍）
+ * - 只有真正在攻击范围内才返回成功
  */
 EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
 {
@@ -112,7 +137,6 @@ EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent&
     ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(Target);
     bool bTargetIsMainCity = (TargetMainCity != nullptr);
     
-    // 检查是否需要占用槽位（只有非主城目标才检查）
     bool bShouldOccupySlot = false;
     if (!bTargetIsMainCity && SGAIController)
     {
@@ -123,77 +147,84 @@ EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent&
     float AttackRange = ControlledUnit->GetAttackRangeForAI();
     FVector UnitLocation = ControlledUnit->GetActorLocation();
 
-    // 初始化移动目标和接受半径
     FVector MoveDestination;
     float AcceptanceRadius;
 
     if (bTargetIsMainCity)
     {
-        // ========== 🔧 核心修复 - 主城目标处理 ==========
+        // ========== 主城目标处理 ==========
         
-        // 🔧 第一步：计算到主城表面的实际距离
         float CurrentDistanceToSurface = CalculateDistanceToMainCitySurface(UnitLocation, TargetMainCity);
         
-        UE_LOG(LogSGGameplay, Log, TEXT("========== [%s] 主城移动检查 =========="), *UnitName);
-        UE_LOG(LogSGGameplay, Log, TEXT("  攻击范围：%.0f"), AttackRange);
-        UE_LOG(LogSGGameplay, Log, TEXT("  到主城表面距离：%.0f"), CurrentDistanceToSurface);
+        FVector BoxExtent = FVector::ZeroVector;
+        FVector BoxCenter = FVector::ZeroVector;
+        if (UBoxComponent* DetectionBox = TargetMainCity->GetAttackDetectionBox())
+        {
+            BoxExtent = DetectionBox->GetScaledBoxExtent();
+            BoxCenter = DetectionBox->GetComponentLocation();
+        }
         
-        // 🔧 第二步：如果已在攻击范围内，直接返回成功
+        UE_LOG(LogSGGameplay, Log, TEXT("========== [%s] 主城移动检查 =========="), *UnitName);
+        UE_LOG(LogSGGameplay, Log, TEXT("  单位位置：%s"), *UnitLocation.ToString());
+        UE_LOG(LogSGGameplay, Log, TEXT("  检测盒中心：%s"), *BoxCenter.ToString());
+        UE_LOG(LogSGGameplay, Log, TEXT("  检测盒尺寸：%s"), *BoxExtent.ToString());
+        UE_LOG(LogSGGameplay, Log, TEXT("  攻击范围：%.0f"), AttackRange);
+        UE_LOG(LogSGGameplay, Log, TEXT("  到检测盒表面距离：%.0f"), CurrentDistanceToSurface);
+        
+        // 🔧 核心修复：使用精确的攻击范围判断
         if (CurrentDistanceToSurface <= AttackRange)
         {
-            UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 已在攻击范围内！设置为 Engaged 状态"));
+            UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 已在攻击范围内（距离 %.0f <= 范围 %.0f）！"), 
+                CurrentDistanceToSurface, AttackRange);
             
-            // 设置为 Engaged 状态
             if (SGAIController)
             {
                 SGAIController->SetTargetEngagementState(ESGTargetEngagementState::Engaged);
             }
             
-            // 停止移动（如果正在移动）
             AIController->StopMovement();
-            
             UE_LOG(LogSGGameplay, Log, TEXT("========================================"));
             return EBTNodeResult::Succeeded;
         }
         
-        // 🔧 第三步：不在攻击范围内，需要移动
-        UE_LOG(LogSGGameplay, Log, TEXT("  需要移动（距离 %.0f > 攻击范围 %.0f）"), CurrentDistanceToSurface, AttackRange);
+        UE_LOG(LogSGGameplay, Log, TEXT("  需要移动（距离 %.0f > 攻击范围 %.0f）"), 
+            CurrentDistanceToSurface, AttackRange);
         
-        // 获取主城信息
-        FVector CityLocation = TargetMainCity->GetActorLocation();
-        float CityRadius = 576.0f;  // 默认值
+        // 获取检测盒表面最近点
+        FVector ClosestPointOnSurface = CalculateClosestPointOnMainCitySurface(UnitLocation, TargetMainCity);
         
-        if (UBoxComponent* DetectionBox = TargetMainCity->GetAttackDetectionBox())
+        // 计算方向
+        FVector DirectionFromSurface = (UnitLocation - ClosestPointOnSurface).GetSafeNormal2D();
+        
+        if (DirectionFromSurface.IsNearlyZero())
         {
-            FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
-            CityRadius = FMath::Max(BoxExtent.X, BoxExtent.Y);
+            FVector CityCenter = TargetMainCity->GetActorLocation();
+            DirectionFromSurface = (UnitLocation - CityCenter).GetSafeNormal2D();
+            
+            if (DirectionFromSurface.IsNearlyZero())
+            {
+                DirectionFromSurface = FVector(1.0f, 0.0f, 0.0f);
+            }
         }
         
-        // 🔧 计算移动方向：从单位指向主城
-        FVector DirectionToCity = (CityLocation - UnitLocation);
-        DirectionToCity.Z = 0.0f;
-        DirectionToCity.Normalize();
-        
-        if (DirectionToCity.IsNearlyZero())
-        {
-            DirectionToCity = FVector(1.0f, 0.0f, 0.0f);
-        }
-        
-        // 🔧 核心修复：计算目标位置
-        // 目标 = 主城中心 - 方向 * (主城半径 + 攻击范围 * 0.7)
-        // 这样单位到达后，距主城表面约为 AttackRange * 0.7
-        float TargetDistanceFromCenter = CityRadius + (AttackRange * 0.7f);
-        MoveDestination = CityLocation - DirectionToCity * TargetDistanceFromCenter;
+        // 🔧 核心修复：移动目标 = 表面最近点 + 方向 * (攻击范围 * 0.8)
+        // 目标距离表面 = 攻击范围 * 0.8，确保在攻击范围内
+        float StandOffDistance = AttackRange * 0.6f;
+        MoveDestination = ClosestPointOnSurface + DirectionFromSurface * StandOffDistance;
         MoveDestination.Z = UnitLocation.Z;
         
-        // 接受半径
-        AcceptanceRadius = AttackRange * 0.3f;
+        // 🔧 修复：接受半径设置为较小的值
+        AcceptanceRadius = 1.0f;
         
-        UE_LOG(LogSGGameplay, Log, TEXT("  主城中心：%s"), *CityLocation.ToString());
-        UE_LOG(LogSGGameplay, Log, TEXT("  主城半径：%.0f"), CityRadius);
-        UE_LOG(LogSGGameplay, Log, TEXT("  目标距离中心：%.0f"), TargetDistanceFromCenter);
+        UE_LOG(LogSGGameplay, Log, TEXT("  表面最近点：%s"), *ClosestPointOnSurface.ToString());
+        UE_LOG(LogSGGameplay, Log, TEXT("  站位距离（从表面）：%.0f"), StandOffDistance);
         UE_LOG(LogSGGameplay, Log, TEXT("  移动目标：%s"), *MoveDestination.ToString());
         UE_LOG(LogSGGameplay, Log, TEXT("  接受半径：%.0f"), AcceptanceRadius);
+        
+        // 🔧 验证计算结果
+        float ExpectedDistanceAfterMove = CalculateDistanceToMainCitySurface(MoveDestination, TargetMainCity);
+        UE_LOG(LogSGGameplay, Log, TEXT("  预计到达后距表面：%.0f（应 <= 攻击范围 %.0f）"), 
+            ExpectedDistanceAfterMove, AttackRange);
     }
     else if (bShouldOccupySlot)
     {
@@ -215,7 +246,7 @@ EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent&
     }
     else
     {
-        // ========== 远程单位 - 移动到攻击范围边缘 ==========
+        // ========== 远程单位 ==========
         float DistanceToTarget = FVector::Dist(UnitLocation, Target->GetActorLocation());
 
         if (DistanceToTarget <= AttackRange)
@@ -228,17 +259,17 @@ EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent&
         AcceptanceRadius = 50.0f;
     }
 
-    // 🔧 发起移动请求
+    // 发起移动请求
     UE_LOG(LogSGGameplay, Log, TEXT("  🚶 发起移动请求..."));
     
     EPathFollowingRequestResult::Type Result = AIController->MoveToLocation(
         MoveDestination,
         AcceptanceRadius,
-        true,   // bStopOnOverlap
-        true,   // bUsePathfinding
-        true,   // bProjectDestinationToNavigation
-        true,   // bCanStrafe
-        nullptr // FilterClass
+        true,
+        true,
+        true,
+        true,
+        nullptr
     );
 
     FString ResultStr;
@@ -267,74 +298,26 @@ EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent&
     }
     else if (Result == EPathFollowingRequestResult::AlreadyAtGoal)
     {
-        // 🔧 修复：AlreadyAtGoal 时检查主城攻击范围
         if (bTargetIsMainCity)
         {
             float DistToSurface = CalculateDistanceToMainCitySurface(UnitLocation, TargetMainCity);
             
+            // 🔧 修复：使用精确攻击范围判断
             if (DistToSurface <= AttackRange)
             {
-                // 在攻击范围内
                 if (SGAIController)
                 {
                     SGAIController->SetTargetEngagementState(ESGTargetEngagementState::Engaged);
                 }
-                UE_LOG(LogSGGameplay, Log, TEXT("  ✓ AlreadyAtGoal 且在攻击范围内"));
+                UE_LOG(LogSGGameplay, Log, TEXT("  ✓ AlreadyAtGoal 且在攻击范围内（距离: %.0f <= 范围: %.0f）"), 
+                    DistToSurface, AttackRange);
                 return EBTNodeResult::Succeeded;
             }
             else
             {
-                // 🔧 关键修复：不在攻击范围内，但导航认为已到达
-                // 这意味着导航网格可能不允许更靠近主城
-                // 尝试直接移动到主城边缘
+                // 导航无法更靠近，返回失败让行为树重试
                 UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ AlreadyAtGoal 但不在攻击范围内（距离: %.0f > 范围: %.0f）"), 
                     DistToSurface, AttackRange);
-                UE_LOG(LogSGGameplay, Warning, TEXT("  尝试简单移动..."));
-                
-                // 🔧 尝试不使用导航的直接移动
-                FVector CityLocation = TargetMainCity->GetActorLocation();
-                float CityRadius = 576.0f;
-                if (UBoxComponent* DetectionBox = TargetMainCity->GetAttackDetectionBox())
-                {
-                    FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
-                    CityRadius = FMath::Max(BoxExtent.X, BoxExtent.Y);
-                }
-                
-                FVector DirectionToCity = (CityLocation - UnitLocation).GetSafeNormal2D();
-                FVector SimpleTarget = CityLocation - DirectionToCity * (CityRadius + AttackRange * 0.5f);
-                SimpleTarget.Z = UnitLocation.Z;
-                
-                // 使用 SimpleMoveToLocation（不使用导航）
-                // 但这可能导致穿墙，所以还是用 MoveToLocation
-                Result = AIController->MoveToLocation(
-                    SimpleTarget,
-                    AttackRange * 0.3f,
-                    false,  // bStopOnOverlap
-                    false,  // bUsePathfinding - 关闭导航！
-                    false,  // bProjectDestinationToNavigation
-                    true,   // bCanStrafe
-                    nullptr
-                );
-                
-                if (Result == EPathFollowingRequestResult::RequestSuccessful)
-                {
-                    return EBTNodeResult::InProgress;
-                }
-                
-                // 如果还是失败，就认为已经尽可能靠近了
-                UE_LOG(LogSGGameplay, Warning, TEXT("  直接移动也失败，认为已尽可能靠近"));
-                
-                // 🔧 最后的处理：如果距离差距不大，就认为可以攻击
-                if (DistToSurface <= AttackRange * 1.5f)
-                {
-                    if (SGAIController)
-                    {
-                        SGAIController->SetTargetEngagementState(ESGTargetEngagementState::Engaged);
-                    }
-                    UE_LOG(LogSGGameplay, Warning, TEXT("  距离在 1.5 倍攻击范围内，允许攻击"));
-                    return EBTNodeResult::Succeeded;
-                }
-                
                 return EBTNodeResult::Failed;
             }
         }
@@ -350,6 +333,10 @@ EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent&
 
 /**
  * @brief Tick 更新
+ * @details
+ * 🔧 核心修复：
+ * - 使用精确攻击范围判断
+ * - 不再扩大 1.3 倍
  */
 void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds)
 {
@@ -418,7 +405,7 @@ void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
                 Distance = FVector::Dist(UnitLocation, Target->GetActorLocation());
             }
             
-            // 如果已经在攻击范围内
+            // 🔧 修复：使用精确攻击范围，不扩大
             if (Distance <= AttackRange)
             {
                 if (SGAIController)
@@ -428,7 +415,7 @@ void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
                 
                 AIController->StopMovement();
                 
-                UE_LOG(LogSGGameplay, Log, TEXT("✓ [%s] 到达攻击范围（距离: %.0f, 范围: %.0f）"), 
+                UE_LOG(LogSGGameplay, Log, TEXT("✓ [%s] 到达攻击范围（距离: %.0f <= 范围: %.0f）"), 
                     *ControlledUnit->GetName(), Distance, AttackRange);
                 
                 FinishLatentTask(OwnerComp, EBTNodeResult::Succeeded);
@@ -442,7 +429,6 @@ void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
 
     if (Status == EPathFollowingStatus::Idle)
     {
-        // 移动结束后再次检查
         UBlackboardComponent* BB = OwnerComp.GetBlackboardComponent();
         if (BB)
         {
@@ -454,14 +440,14 @@ void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
                 float AttackRange = ControlledUnit->GetAttackRangeForAI();
                 float Distance = CalculateDistanceToMainCitySurface(ControlledUnit->GetActorLocation(), MainCity);
                 
-                // 🔧 修复：使用 1.2 倍攻击范围作为容差
-                if (Distance <= AttackRange * 1.5f)
+                // 🔧 修复：使用精确攻击范围
+                if (Distance <= AttackRange)
                 {
                     if (SGAIController)
                     {
                         SGAIController->SetTargetEngagementState(ESGTargetEngagementState::Engaged);
                     }
-                    UE_LOG(LogSGGameplay, Log, TEXT("✓ [%s] 移动结束，进入攻击状态（距离: %.0f, 范围: %.0f）"), 
+                    UE_LOG(LogSGGameplay, Log, TEXT("✓ [%s] 移动结束，进入攻击状态（距离: %.0f <= 范围: %.0f）"), 
                         *ControlledUnit->GetName(), Distance, AttackRange);
                     FinishLatentTask(OwnerComp, EBTNodeResult::Succeeded);
                     return;

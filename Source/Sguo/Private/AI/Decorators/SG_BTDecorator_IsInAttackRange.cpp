@@ -1,5 +1,5 @@
 ﻿// 📄 文件：Source/Sguo/Private/AI/Decorators/SG_BTDecorator_IsInAttackRange.cpp
-// 🔧 修改 - 修复主城攻击范围检测
+// 🔧 修复 - 使用精确攻击范围判断
 // ✅ 这是完整文件
 
 #include "AI/Decorators/SG_BTDecorator_IsInAttackRange.h"
@@ -27,12 +27,39 @@ USG_BTDecorator_IsInAttackRange::USG_BTDecorator_IsInAttackRange()
 }
 
 /**
+ * @brief 计算单位到主城检测盒表面的距离
+ */
+static float CalculateDistanceToMainCitySurface(const FVector& UnitLocation, ASG_MainCityBase* MainCity)
+{
+    if (!MainCity)
+    {
+        return FLT_MAX;
+    }
+    
+    UBoxComponent* DetectionBox = MainCity->GetAttackDetectionBox();
+    if (DetectionBox)
+    {
+        FVector BoxCenter = DetectionBox->GetComponentLocation();
+        FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
+        
+        FVector ClosestPoint;
+        ClosestPoint.X = FMath::Clamp(UnitLocation.X, BoxCenter.X - BoxExtent.X, BoxCenter.X + BoxExtent.X);
+        ClosestPoint.Y = FMath::Clamp(UnitLocation.Y, BoxCenter.Y - BoxExtent.Y, BoxCenter.Y + BoxExtent.Y);
+        ClosestPoint.Z = UnitLocation.Z;
+        
+        float Distance = FVector::Dist2D(UnitLocation, ClosestPoint);
+        return FMath::Max(0.0f, Distance);
+    }
+    
+    float DefaultRadius = 800.0f;
+    float DistanceToCenter = FVector::Dist2D(UnitLocation, MainCity->GetActorLocation());
+    return FMath::Max(0.0f, DistanceToCenter - DefaultRadius);
+}
+
+/**
  * @brief 计算条件
  * @details
- * 🔧 核心修改：
- * - 主城使用检测盒表面距离计算
- * - 普通单位使用中心点距离计算
- * - 修复进入/离开攻击范围的状态切换
+ * 🔧 修复：使用精确的攻击范围判断
  */
 bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) const
 {
@@ -60,7 +87,7 @@ bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeCo
     FName KeyName = TargetKey.SelectedKeyName;
     if (KeyName.IsNone())
     {
-        return false;
+        KeyName = FName("CurrentTarget");
     }
     
     AActor* Target = Cast<AActor>(BlackboardComp->GetValueAsObject(KeyName));
@@ -89,7 +116,6 @@ bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeCo
     }
     else
     {
-        // 未知目标类型
         return false;
     }
     
@@ -102,51 +128,20 @@ bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeCo
     
     if (TargetMainCity)
     {
-        // ========== 🔧 修复 - 主城距离计算 ==========
-        if (UBoxComponent* DetectionBox = TargetMainCity->GetAttackDetectionBox())
-        {
-            FVector BoxCenter = DetectionBox->GetComponentLocation();
-            FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
-            
-            // 计算到检测盒表面的距离
-            // 使用简化的轴对齐包围盒距离计算
-            FVector ClosestPoint;
-            
-            // 计算最近点
-            ClosestPoint.X = FMath::Clamp(UnitLocation.X, BoxCenter.X - BoxExtent.X, BoxCenter.X + BoxExtent.X);
-            ClosestPoint.Y = FMath::Clamp(UnitLocation.Y, BoxCenter.Y - BoxExtent.Y, BoxCenter.Y + BoxExtent.Y);
-            ClosestPoint.Z = UnitLocation.Z;  // 忽略 Z 轴
-            
-            // 计算到最近点的距离
-            ActualDistance = FVector::Dist2D(UnitLocation, ClosestPoint);
-            
-            // 如果单位在检测盒内部，距离为 0
-            if (ActualDistance < 0.0f)
-            {
-                ActualDistance = 0.0f;
-            }
-        }
-        else
-        {
-            // 没有检测盒，使用默认计算
-            float CityRadius = 800.0f;
-            float DistanceToCenter = FVector::Dist(UnitLocation, TargetMainCity->GetActorLocation());
-            ActualDistance = FMath::Max(0.0f, DistanceToCenter - CityRadius);
-        }
+        ActualDistance = CalculateDistanceToMainCitySurface(UnitLocation, TargetMainCity);
     }
     else
     {
-        // ========== 普通单位距离计算 ==========
         ActualDistance = FVector::Dist(UnitLocation, Target->GetActorLocation());
     }
     
-    // ========== 步骤5：判断是否在攻击范围内 ==========
-    // 🔧 修改 - 主城使用更大的容差
-    float EffectiveTolerance = TargetMainCity ? (DistanceTolerance + 100.0f) : DistanceTolerance;
-    bool bInRange = ActualDistance <= (AttackRange + EffectiveTolerance);
+    // ========== 🔧 修复 - 步骤5：使用精确攻击范围判断 ==========
+    // 不再扩大 1.3 倍，只加上距离容差
+    float EffectiveRange = AttackRange + DistanceTolerance;
+    
+    bool bInRange = ActualDistance <= EffectiveRange;
     
     // ========== 步骤6：更新战斗状态 ==========
-    // 使用实例内存或静态变量缓存上次状态
     static TMap<ASG_UnitsBase*, bool> LastInRangeStatus;
     bool bWasInRange = LastInRangeStatus.FindOrAdd(ControlledUnit, false);
     
@@ -156,7 +151,6 @@ bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeCo
         
         if (bInRange)
         {
-            // 刚进入攻击范围
             AIController->StopMovement();
             
             if (SGAIController)
@@ -164,25 +158,23 @@ bool USG_BTDecorator_IsInAttackRange::CalculateRawConditionValue(UBehaviorTreeCo
                 SGAIController->SetTargetEngagementState(ESGTargetEngagementState::Engaged);
             }
             
-            UE_LOG(LogSGGameplay, Verbose, TEXT("🔒 %s 进入攻击范围（目标: %s, 距离: %.0f, 范围: %.0f）"),
+            UE_LOG(LogSGGameplay, Log, TEXT("🔒 %s 进入攻击范围（目标: %s, 距离: %.0f, 范围: %.0f）"),
                 *ControlledUnit->GetName(),
                 *Target->GetName(),
                 ActualDistance,
-                AttackRange);
+                EffectiveRange);
         }
         else
         {
-            // 离开攻击范围
             if (SGAIController)
             {
-                // 只有在非攻击状态时才切换到移动状态
                 if (!ControlledUnit->bIsAttacking)
                 {
                     SGAIController->SetTargetEngagementState(ESGTargetEngagementState::Moving);
                 }
             }
             
-            UE_LOG(LogSGGameplay, Verbose, TEXT("🔓 %s 离开攻击范围（目标: %s, 距离: %.0f）"),
+            UE_LOG(LogSGGameplay, Log, TEXT("🔓 %s 离开攻击范围（目标: %s, 距离: %.0f）"),
                 *ControlledUnit->GetName(),
                 *Target->GetName(),
                 ActualDistance);
@@ -206,14 +198,12 @@ void USG_BTDecorator_IsInAttackRange::TickNode(UBehaviorTreeComponent& OwnerComp
         
         bool CurrentConditionResult = CalculateRawConditionValue(OwnerComp, NodeMemory);
         
-        // 更新黑板
         UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
         if (BlackboardComp)
         {
             BlackboardComp->SetValueAsBool(FName("IsInAttackRange"), CurrentConditionResult);
         }
         
-        // 条件变化时请求重新评估
         if (CurrentConditionResult != LastConditionResult)
         {
             LastConditionResult = CurrentConditionResult;

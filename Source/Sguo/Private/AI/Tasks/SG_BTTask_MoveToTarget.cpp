@@ -1,5 +1,5 @@
 ﻿// 📄 文件：Source/Sguo/Private/AI/Tasks/SG_BTTask_MoveToTarget.cpp
-// 🔧 修改 - 添加远程单位支持
+// 🔧 修改 - 修复主城移动逻辑
 // ✅ 这是完整文件
 
 #include "AI/Tasks/SG_BTTask_MoveToTarget.h"
@@ -18,39 +18,23 @@
 
 /**
  * @brief 构造函数
- * @details
- * 功能说明：
- * - 设置任务名称
- * - 配置黑板键过滤器
- * - 启用 Tick 通知
  */
 USG_BTTask_MoveToTarget::USG_BTTask_MoveToTarget()
 {
-    // 设置任务名称（在行为树编辑器中显示）
     NodeName = TEXT("移动到目标");
     
-    // 配置黑板键过滤器（只接受 Actor 类型的对象）
     TargetKey.AddObjectFilter(this, GET_MEMBER_NAME_CHECKED(USG_BTTask_MoveToTarget, TargetKey), AActor::StaticClass());
     
-    // 设置为异步任务（等待移动完成，需要 Tick 通知）
     bNotifyTick = true;
 }
 
 /**
  * @brief 执行任务
- * @param OwnerComp 行为树组件
- * @param NodeMemory 节点内存
- * @return 任务执行结果
  * @details
- * 功能说明：
- * - 🔧 修改 - 根据单位类型决定是否使用槽位系统
- * - 远程单位直接移动到攻击范围内，不使用槽位
- * - 近战单位使用槽位系统，移动到预约的槽位位置
- * 详细流程：
- * 1. 获取 AI 控制器和被控单位
- * 2. 从黑板获取目标
- * 3. 根据单位类型计算移动目标位置
- * 4. 执行移动请求
+ * 🔧 核心修改：
+ * - 主城目标不使用槽位系统
+ * - 主城目标直接计算到边缘的攻击位置
+ * - 修复到达判定逻辑
  */
 EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
 {
@@ -61,7 +45,6 @@ EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent&
         return EBTNodeResult::Failed;
     }
 
-    // ✨ 新增 - 转换为我们的 AI 控制器（用于检查槽位占用配置）
     ASG_AIControllerBase* SGAIController = Cast<ASG_AIControllerBase>(AIController);
     
     // 获取被控单位
@@ -85,62 +68,109 @@ EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent&
         return EBTNodeResult::Failed;
     }
 
-    // ✨ 新增 - 检查是否需要占用槽位
-    bool bShouldOccupySlot = SGAIController ? SGAIController->ShouldOccupyAttackSlot() : true;
+    // ========== 检查目标类型 ==========
+    ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(Target);
+    bool bTargetIsMainCity = (TargetMainCity != nullptr);
+    
+    // 检查是否需要占用槽位（只有非主城目标才检查）
+    bool bShouldOccupySlot = false;
+    if (!bTargetIsMainCity && SGAIController)
+    {
+        bShouldOccupySlot = SGAIController->ShouldOccupyAttackSlot();
+    }
+
+    // 获取攻击范围
+    float AttackRange = ControlledUnit->GetAttackRangeForAI();
+    FVector UnitLocation = ControlledUnit->GetActorLocation();
 
     // 初始化移动目标和接受半径
-    FVector MoveDestination = Target->GetActorLocation();
-    float AcceptanceRadius = 50.0f;
+    FVector MoveDestination;
+    float AcceptanceRadius;
 
-    if (bShouldOccupySlot)
+    if (bTargetIsMainCity)
+    {
+        // ========== 🔧 修复 - 主城目标移动逻辑 ==========
+        FVector CityLocation = TargetMainCity->GetActorLocation();
+        
+        // 计算主城碰撞半径
+        float CityRadius = 800.0f;  // 默认值
+        if (UBoxComponent* DetectionBox = TargetMainCity->GetAttackDetectionBox())
+        {
+            FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
+            CityRadius = FMath::Max(BoxExtent.X, BoxExtent.Y);
+        }
+        
+        // 计算从主城到单位的方向
+        FVector DirectionToUnit = (UnitLocation - CityLocation);
+        DirectionToUnit.Z = 0.0f;  // 忽略 Z 轴
+        DirectionToUnit.Normalize();
+        
+        // 如果方向无效（单位在主城正中心），使用默认方向
+        if (DirectionToUnit.IsNearlyZero())
+        {
+            DirectionToUnit = FVector(1.0f, 0.0f, 0.0f);
+        }
+        
+        // 计算站位距离：主城边缘 + 攻击范围的 70%
+        float StandDistance = CityRadius + (AttackRange * 0.7f);
+        
+        // 计算移动目标位置
+        MoveDestination = CityLocation + (DirectionToUnit * StandDistance);
+        MoveDestination.Z = UnitLocation.Z;
+        
+        // 接受半径设置得较大，避免频繁调整
+        AcceptanceRadius = AttackRange * 0.3f;
+        
+        // 检查是否已经在攻击范围内
+        float CurrentDistanceToSurface = FVector::Dist2D(UnitLocation, CityLocation) - CityRadius;
+        if (CurrentDistanceToSurface <= AttackRange)
+        {
+            UE_LOG(LogSGGameplay, Verbose, TEXT("🏰 %s 已在主城攻击范围内"), *ControlledUnit->GetName());
+            return EBTNodeResult::Succeeded;
+        }
+        
+        UE_LOG(LogSGGameplay, Verbose, TEXT("🏰 %s 移动到主城边缘：距离表面=%.0f，攻击范围=%.0f"),
+            *ControlledUnit->GetName(),
+            CurrentDistanceToSurface,
+            AttackRange);
+    }
+    else if (bShouldOccupySlot)
     {
         // ========== 近战单位 - 使用槽位系统 ==========
+        MoveDestination = Target->GetActorLocation();
+        AcceptanceRadius = 30.0f;
+        
         if (UWorld* World = GetWorld())
         {
-            USG_CombatTargetManager* CombatManager = World->GetSubsystem<USG_CombatTargetManager>();
-            if (CombatManager)
+            if (USG_CombatTargetManager* CombatManager = World->GetSubsystem<USG_CombatTargetManager>())
             {
                 FVector SlotPosition;
                 if (CombatManager->GetReservedSlotPosition(ControlledUnit, Target, SlotPosition))
                 {
-                    // 使用槽位位置作为目的地
                     MoveDestination = SlotPosition;
-                    // 槽位位置需要更精确的到达判定
-                    AcceptanceRadius = 30.0f;
-
-                    UE_LOG(LogSGGameplay, Verbose, TEXT("%s 移动到槽位位置：%s"),
-                        *ControlledUnit->GetName(), *SlotPosition.ToString());
                 }
             }
         }
     }
     else
     {
-        // ========== ✨ 新增 - 远程单位 - 移动到攻击范围边缘 ==========
-        float AttackRange = ControlledUnit->GetAttackRangeForAI();
-        float DistanceToTarget = FVector::Dist(ControlledUnit->GetActorLocation(), Target->GetActorLocation());
+        // ========== 远程单位 - 移动到攻击范围边缘 ==========
+        float DistanceToTarget = FVector::Dist(UnitLocation, Target->GetActorLocation());
 
         // 如果已经在攻击范围内，不需要移动
         if (DistanceToTarget <= AttackRange)
         {
-            UE_LOG(LogSGGameplay, Log, TEXT("🏹 %s 已在攻击范围内，无需移动"),
-                *ControlledUnit->GetName());
             return EBTNodeResult::Succeeded;
         }
 
         // 计算移动到攻击范围边缘的位置
-        FVector DirectionToTarget = (Target->GetActorLocation() - ControlledUnit->GetActorLocation()).GetSafeNormal();
-        
-        // 目标位置 = 目标 - 攻击范围 * 0.9（留一点余量）
+        FVector DirectionToTarget = (Target->GetActorLocation() - UnitLocation).GetSafeNormal();
         MoveDestination = Target->GetActorLocation() - DirectionToTarget * (AttackRange * 0.9f);
         AcceptanceRadius = 50.0f;
-
-        UE_LOG(LogSGGameplay, Verbose, TEXT("🏹 %s 移动到攻击范围边缘：%s"),
-            *ControlledUnit->GetName(), *MoveDestination.ToString());
     }
 
     // 检查是否已经在目的地附近
-    float CurrentDistance = FVector::Dist(ControlledUnit->GetActorLocation(), MoveDestination);
+    float CurrentDistance = FVector::Dist(UnitLocation, MoveDestination);
     if (CurrentDistance <= AcceptanceRadius + 20.0f)
     {
         return EBTNodeResult::Succeeded;
@@ -150,48 +180,39 @@ EBTNodeResult::Type USG_BTTask_MoveToTarget::ExecuteTask(UBehaviorTreeComponent&
     EPathFollowingRequestResult::Type Result = AIController->MoveToLocation(
         MoveDestination,
         AcceptanceRadius,
-        true,   // bStopOnOverlap - 到达时停止
-        true,   // bUsePathfinding - 使用导航系统
-        true,   // bProjectDestinationToNavigation - 将目标投射到导航网格
-        true,   // bCanStrafe - 允许侧移
+        true,   // bStopOnOverlap
+        true,   // bUsePathfinding
+        true,   // bProjectDestinationToNavigation
+        true,   // bCanStrafe
         nullptr // FilterClass
     );
 
-    // 根据移动请求结果返回任务状态
     if (Result == EPathFollowingRequestResult::RequestSuccessful)
     {
-        // 移动请求成功，任务进行中
         return EBTNodeResult::InProgress;
     }
     else if (Result == EPathFollowingRequestResult::AlreadyAtGoal)
     {
-        // 已经在目标位置，任务成功
         return EBTNodeResult::Succeeded;
     }
     else
     {
-        // 移动请求失败
-        UE_LOG(LogSGGameplay, Warning, TEXT("%s 移动失败"), *ControlledUnit->GetName());
+        UE_LOG(LogSGGameplay, Warning, TEXT("%s 移动请求失败"), *ControlledUnit->GetName());
         return EBTNodeResult::Failed;
     }
 }
 
 /**
  * @brief Tick 更新
- * @param OwnerComp 行为树组件
- * @param NodeMemory 节点内存
- * @param DeltaSeconds 帧间隔
  * @details
- * 功能说明：
- * - 检测是否卡住，卡住时标记目标不可达并切换目标
- * - 检测是否已进入攻击范围
- * - 检测移动状态是否完成
+ * 🔧 修改：
+ * - 修复主城攻击范围检测
+ * - 优化到达判定
  */
 void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds)
 {
     Super::TickTask(OwnerComp, NodeMemory, DeltaSeconds);
 
-    // 获取 AI 控制器
     AAIController* AIController = OwnerComp.GetAIOwner();
     if (!AIController)
     {
@@ -199,10 +220,8 @@ void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
         return;
     }
 
-    // 转换为我们的 AI 控制器
     ASG_AIControllerBase* SGAIController = Cast<ASG_AIControllerBase>(AIController);
     
-    // 获取被控单位
     ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
     if (!ControlledUnit)
     {
@@ -210,42 +229,40 @@ void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
         return;
     }
 
-    // ========== 检测是否卡住 ==========
+    // 检测是否卡住
     if (SGAIController && SGAIController->IsStuck())
     {
         AActor* CurrentTarget = SGAIController->GetCurrentTarget();
-
-        UE_LOG(LogSGGameplay, Warning, TEXT("🚧 %s 移动卡住 (目标: %s)，正在尝试切换目标..."),
-            *ControlledUnit->GetName(),
-            CurrentTarget ? *CurrentTarget->GetName() : TEXT("None"));
         
-        // 1. 标记当前目标不可达（加入黑名单）
+        // 主城目标不标记为不可达，而是尝试调整位置
+        if (CurrentTarget && CurrentTarget->IsA(ASG_MainCityBase::StaticClass()))
+        {
+            // 主城目标，尝试随机偏移
+            SGAIController->ResetMovementTimer();
+            
+            // 重新执行任务
+            FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
+            return;
+        }
+        
         SGAIController->MarkCurrentTargetUnreachable();
-        
-        // 2. 停止当前移动
         AIController->StopMovement();
         
-        // 3. 查找新的可达目标
         AActor* NewTarget = SGAIController->FindNearestReachableTarget();
         
         if (NewTarget && NewTarget != CurrentTarget)
         {
-            // 找到新目标，切换
             SGAIController->SetCurrentTarget(NewTarget);
-            UE_LOG(LogSGGameplay, Log, TEXT("  ✓ 成功切换到新目标：%s"), *NewTarget->GetName());
-            
-            // 任务失败，让行为树重置并重新执行 MoveTo
             FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
         }
         else
         {
-            UE_LOG(LogSGGameplay, Warning, TEXT("  ⚠️ 没有其他可达目标，只能待机"));
             FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
         }
         return;
     }
 
-    // ========== 检查是否已进入攻击范围 ==========
+    // 检查是否已进入攻击范围
     UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
     if (BlackboardComp)
     {
@@ -253,46 +270,55 @@ void USG_BTTask_MoveToTarget::TickTask(UBehaviorTreeComponent& OwnerComp, uint8*
         if (Target)
         {
             float AttackRange = ControlledUnit->GetAttackRangeForAI();
-            float Distance = FVector::Dist(ControlledUnit->GetActorLocation(), Target->GetActorLocation());
+            FVector UnitLocation = ControlledUnit->GetActorLocation();
+            float Distance = 0.0f;
             
-            // 主城特殊处理（考虑主城体积）
+            // ========== 🔧 修复 - 主城距离计算 ==========
             ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(Target);
-            if (TargetMainCity && TargetMainCity->GetAttackDetectionBox())
+            if (TargetMainCity)
             {
-                UBoxComponent* DetectionBox = TargetMainCity->GetAttackDetectionBox();
-                
-                // 获取检测盒中心和范围
-                FVector BoxCenter = DetectionBox->GetComponentLocation();
-                FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
-                float BoxRadius = FMath::Max3(BoxExtent.X, BoxExtent.Y, BoxExtent.Z);
-                
-                // 计算到主城边缘的距离
-                Distance = FMath::Max(0.0f, FVector::Dist(ControlledUnit->GetActorLocation(), BoxCenter) - BoxRadius);
+                if (UBoxComponent* DetectionBox = TargetMainCity->GetAttackDetectionBox())
+                {
+                    FVector BoxCenter = DetectionBox->GetComponentLocation();
+                    FVector BoxExtent = DetectionBox->GetScaledBoxExtent();
+                    
+                    // 计算到检测盒表面的 2D 距离
+                    FVector ClosestPoint;
+                    ClosestPoint.X = FMath::Clamp(UnitLocation.X, BoxCenter.X - BoxExtent.X, BoxCenter.X + BoxExtent.X);
+                    ClosestPoint.Y = FMath::Clamp(UnitLocation.Y, BoxCenter.Y - BoxExtent.Y, BoxCenter.Y + BoxExtent.Y);
+                    ClosestPoint.Z = UnitLocation.Z;
+                    
+                    Distance = FVector::Dist2D(UnitLocation, ClosestPoint);
+                }
+                else
+                {
+                    float CityRadius = 800.0f;
+                    Distance = FMath::Max(0.0f, FVector::Dist(UnitLocation, TargetMainCity->GetActorLocation()) - CityRadius);
+                }
+            }
+            else
+            {
+                Distance = FVector::Dist(UnitLocation, Target->GetActorLocation());
             }
             
             // 如果已经在攻击范围内
             if (Distance <= AttackRange)
             {
-                // 设置状态为战斗锁定
                 if (SGAIController)
                 {
                     SGAIController->SetTargetEngagementState(ESGTargetEngagementState::Engaged);
                 }
                 
-                // 停止移动
                 AIController->StopMovement();
-                
-                // 任务成功
                 FinishLatentTask(OwnerComp, EBTNodeResult::Succeeded);
                 return;
             }
         }
     }
 
-    // ========== 检测移动状态 ==========
+    // 检测移动状态
     EPathFollowingStatus::Type Status = AIController->GetMoveStatus();
 
-    // 如果状态是 Idle，说明移动已经结束
     if (Status == EPathFollowingStatus::Idle)
     {
         FinishLatentTask(OwnerComp, EBTNodeResult::Succeeded);

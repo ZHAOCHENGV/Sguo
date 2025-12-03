@@ -221,6 +221,16 @@ protected:
      */
     void CheckForBetterTargetWhileMoving();
 
+    // ✨ 新增 - 攻击主城时检测敌方单位
+    /**
+     * @brief 攻击主城时检测敌方单位
+     * @details
+     * 功能说明：
+     * - 仅在 Engaged 状态且目标是主城时调用
+     * - 如果视野内有敌方单位，切换目标
+     */
+    void CheckForEnemyUnitsWhileAttackingMainCity();
+
 private:
     TWeakObjectPtr<ASG_UnitsBase> CurrentListenedTarget;
 

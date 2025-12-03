@@ -887,57 +887,60 @@ AActor* USG_CombatTargetManager::FindBestTargetWithSlot(ASG_UnitsBase* Querier)
  * @param OutSlotPosition 输出：预约成功后的槽位世界坐标
  * @return 是否预约成功
  * @details
- * 功能说明：
- * - ✨ 新增 - 检查攻击者是否需要占用槽位
- * - 远程单位不占用槽位，计算攻击范围边缘位置
+ * 🔧 核心修改：
+ * - 主城目标直接计算攻击位置，不使用槽位系统
+ * - 远程单位不占用槽位
  */
 bool USG_CombatTargetManager::TryReserveAttackSlot(ASG_UnitsBase* Attacker, AActor* Target, FVector& OutSlotPosition)
 {
-    if (!Attacker || !Target)
+     if (!Attacker || !Target)
     {
         return false;
     }
 
-    // ✨ 新增 - 检查攻击者是否需要占用槽位
-    if (!ShouldUnitOccupySlot(Attacker))
-    {
-        // 远程单位不占用槽位，计算攻击范围边缘位置
-        float AttackRange = Attacker->GetAttackRangeForAI();
-        FVector AttackerLocation = Attacker->GetActorLocation();
-        FVector TargetLocation = Target->GetActorLocation();
-        FVector Direction = (TargetLocation - AttackerLocation).GetSafeNormal();
-        
-        // 目标位置 - 攻击范围 * 0.9（留一点余量）
-        OutSlotPosition = TargetLocation - Direction * (AttackRange * 0.9f);
-        OutSlotPosition.Z = AttackerLocation.Z;
-        
-        UE_LOG(LogSGGameplay, Verbose, TEXT("🏹 %s 是远程单位，不占用槽位"),
-            *Attacker->GetName());
-        return true;
-    }
-
     float AttackerAttackRange = Attacker->GetAttackRangeForAI();
+    FVector AttackerLocation = Attacker->GetActorLocation();
 
-    // 主城特殊处理
+    // ========== 🔧 修复 - 主城特殊处理（不使用槽位系统） ==========
     if (ASG_MainCityBase* MainCity = Cast<ASG_MainCityBase>(Target))
     {
         FVector CityLocation = MainCity->GetActorLocation();
-        FVector AttackerLocation = Attacker->GetActorLocation();
-        FVector Direction = (AttackerLocation - CityLocation).GetSafeNormal();
+        FVector Direction = (AttackerLocation - CityLocation);
+        Direction.Z = 0.0f;
+        Direction.Normalize();
+        
+        if (Direction.IsNearlyZero())
+        {
+            Direction = FVector(1.0f, 0.0f, 0.0f);
+        }
 
         float CityRadius = GetTargetCollisionRadius(MainCity);
-        float StandDistance = CityRadius + (AttackerAttackRange * SlotDistanceRatio);
+        float StandDistance = CityRadius + (AttackerAttackRange * 0.7f);
 
         OutSlotPosition = CityLocation + (Direction * StandDistance);
         OutSlotPosition.Z = AttackerLocation.Z;
 
-        UE_LOG(LogSGGameplay, Verbose, TEXT("🏰 %s 主城槽位：攻击范围=%.0f, 主城半径=%.0f, 站位距离=%.0f"),
+        UE_LOG(LogSGGameplay, Verbose, TEXT("🏰 %s 主城攻击位置：攻击范围=%.0f, 主城半径=%.0f, 站位距离=%.0f"),
             *Attacker->GetName(), AttackerAttackRange, CityRadius, StandDistance);
 
+        // 主城不使用槽位系统，直接返回 true
         return true;
     }
 
-    // 普通单位的槽位逻辑
+    // ========== 检查攻击者是否需要占用槽位 ==========
+    if (!ShouldUnitOccupySlot(Attacker))
+    {
+        // 远程单位不占用槽位，计算攻击范围边缘位置
+        FVector TargetLocation = Target->GetActorLocation();
+        FVector Direction = (TargetLocation - AttackerLocation).GetSafeNormal();
+        
+        OutSlotPosition = TargetLocation - Direction * (AttackerAttackRange * 0.9f);
+        OutSlotPosition.Z = AttackerLocation.Z;
+        
+        return true;
+    }
+
+    // ========== 普通单位的槽位逻辑 ==========
     FSGTargetCombatInfo& CombatInfo = GetOrCreateCombatInfo(Target);
 
     // 检查是否已经预约了槽位
@@ -951,7 +954,7 @@ bool USG_CombatTargetManager::TryReserveAttackSlot(ASG_UnitsBase* Attacker, AAct
     }
 
     // 查找最近的可用槽位
-    int32 SlotIndex = FindNearestAvailableSlot(Target, Attacker->GetActorLocation(), AttackerAttackRange);
+    int32 SlotIndex = FindNearestAvailableSlot(Target, AttackerLocation, AttackerAttackRange);
     if (SlotIndex == INDEX_NONE)
     {
         UE_LOG(LogSGGameplay, Warning, TEXT("❌ %s 无法预约 %s 的槽位：已满"),
@@ -963,8 +966,8 @@ bool USG_CombatTargetManager::TryReserveAttackSlot(ASG_UnitsBase* Attacker, AAct
     CombatInfo.AttackSlots[SlotIndex].OccupyingUnit = Attacker;
     OutSlotPosition = CombatInfo.AttackSlots[SlotIndex].GetWorldPosition(Target, AttackerAttackRange, CombatInfo.TargetRadius);
 
-    UE_LOG(LogSGGameplay, Verbose, TEXT("✅ %s 预约了 %s 的槽位 #%d (攻击范围: %.0f, 目标半径: %.0f)"),
-        *Attacker->GetName(), *Target->GetName(), SlotIndex, AttackerAttackRange, CombatInfo.TargetRadius);
+    UE_LOG(LogSGGameplay, Verbose, TEXT("✅ %s 预约了 %s 的槽位 #%d"),
+        *Attacker->GetName(), *Target->GetName(), SlotIndex);
 
     return true;
 }

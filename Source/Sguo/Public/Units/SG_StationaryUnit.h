@@ -1,5 +1,6 @@
 // 📄 文件：Source/Sguo/Public/Units/SG_StationaryUnit.h
-// 🔧 修改 - 添加火矢计相关功能
+// 🔧 修改 - 添加计谋技能执行支持
+// ✅ 这是完整文件
 
 #pragma once
 
@@ -8,6 +9,16 @@
 #include "SG_StationaryUnit.generated.h"
 
 class UAnimMontage;
+class UGameplayAbility;
+
+// ✨ 新增 - 计谋技能执行状态
+UENUM(BlueprintType)
+enum class ESGStrategySkillState : uint8
+{
+    None        UMETA(DisplayName = "无"),
+    Executing   UMETA(DisplayName = "执行中"),
+    Cooldown    UMETA(DisplayName = "冷却中")
+};
 
 /**
  * @brief 站桩单位类
@@ -15,125 +26,226 @@ class UAnimMontage;
 UCLASS(BlueprintType, Blueprintable)
 class SGUO_API ASG_StationaryUnit : public ASG_UnitsBase
 {
-	GENERATED_BODY()
+    GENERATED_BODY()
 
 public:
-	ASG_StationaryUnit();
+    ASG_StationaryUnit();
 
 protected:
-	virtual void BeginPlay() override;
+    virtual void BeginPlay() override;
+    virtual void Tick(float DeltaTime) override;
 
 public:
-	// ========== 站桩配置 ==========
-	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stationary Unit", 
-		meta = (DisplayName = "启用浮空模式"))
-	bool bEnableHover = false;
+    // ========== 站桩配置 ==========
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stationary Unit", 
+        meta = (DisplayName = "启用浮空模式"))
+    bool bEnableHover = false;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stationary Unit", 
-		meta = (DisplayName = "浮空高度(厘米)", EditCondition = "bEnableHover", EditConditionHides, ClampMin = "-500.0", ClampMax = "1000.0"))
-	float HoverHeight = 100.0f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stationary Unit", 
+        meta = (DisplayName = "浮空高度(厘米)", EditCondition = "bEnableHover", EditConditionHides, ClampMin = "-500.0", ClampMax = "1000.0"))
+    float HoverHeight = 100.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stationary Unit", 
-		meta = (DisplayName = "禁用重力"))
-	bool bDisableGravity = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stationary Unit", 
+        meta = (DisplayName = "禁用重力"))
+    bool bDisableGravity = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stationary Unit", 
-		meta = (DisplayName = "可被选为目标"))
-	bool bCanBeTargeted = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stationary Unit", 
+        meta = (DisplayName = "可被选为目标"))
+    bool bCanBeTargeted = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stationary Unit", 
-		meta = (DisplayName = "禁用移动"))
-	bool bDisableMovement = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stationary Unit", 
+        meta = (DisplayName = "禁用移动"))
+    bool bDisableMovement = true;
 
-	// ========== ✨ 新增 - 火矢计配置 ==========
-	
-	/**
-	 * @brief 火矢计攻击蒙太奇
-	 * @details 火矢计发射时播放的动画
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stationary Unit|Fire Arrow", 
-		meta = (DisplayName = "火矢攻击蒙太奇"))
-	TObjectPtr<UAnimMontage> FireArrowMontage;
+    // ========== 火矢计配置（兼容旧代码） ==========
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stationary Unit|Fire Arrow", 
+        meta = (DisplayName = "火矢攻击蒙太奇"))
+    TObjectPtr<UAnimMontage> FireArrowMontage;
 
-	/**
-	 * @brief 火矢计投射物类
-	 * @details 火矢计使用的投射物类，如果为空则使用默认投射物
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stationary Unit|Fire Arrow", 
-		meta = (DisplayName = "火矢投射物类"))
-	TSubclassOf<AActor> FireArrowProjectileClass;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stationary Unit|Fire Arrow", 
+        meta = (DisplayName = "火矢投射物类"))
+    TSubclassOf<AActor> FireArrowProjectileClass;
 
-	/**
-	 * @brief 是否正在执行火矢技能
-	 */
-	UPROPERTY(BlueprintReadWrite, Category = "Stationary Unit|Fire Arrow", 
-		meta = (DisplayName = "正在执行火矢计"))
-	bool bIsExecutingFireArrow = false;
+    UPROPERTY(BlueprintReadWrite, Category = "Stationary Unit|Fire Arrow", 
+        meta = (DisplayName = "正在执行火矢计"))
+    bool bIsExecutingFireArrow = false;
 
-	// ========== 查询接口 ==========
-	
-	virtual bool CanBeTargeted() const;
+    // ========== ✨ 新增 - 计谋技能执行系统 ==========
 
-	UFUNCTION(BlueprintPure, Category = "Stationary Unit", meta = (DisplayName = "是否浮空"))
-	bool IsHovering() const { return bEnableHover; }
+    /**
+     * @brief 当前计谋技能状态
+     */
+    UPROPERTY(BlueprintReadOnly, Category = "Stationary Unit|Strategy Skill", 
+        meta = (DisplayName = "计谋技能状态"))
+    ESGStrategySkillState StrategySkillState = ESGStrategySkillState::None;
 
-	UFUNCTION(BlueprintPure, Category = "Stationary Unit", meta = (DisplayName = "获取浮空高度"))
-	float GetHoverHeight() const { return HoverHeight; }
+    /**
+     * @brief 计谋技能持续时间剩余
+     */
+    UPROPERTY(BlueprintReadOnly, Category = "Stationary Unit|Strategy Skill", 
+        meta = (DisplayName = "技能剩余时间"))
+    float StrategySkillRemainingTime = 0.0f;
 
-	// ========== ✨ 新增 - 火矢计接口 ==========
-	
-	/**
-	 * @brief 开始火矢技能
-	 * @details
-	 * 功能说明：
-	 * - 打断当前普通攻击
-	 * - 设置火矢技能状态
-	 * - 保存原始投射物类（如果有的话）
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Stationary Unit|Fire Arrow", 
-		meta = (DisplayName = "开始火矢技能"))
-	void StartFireArrowSkill();
+    /**
+     * @brief 计谋技能射击间隔计时器
+     */
+    UPROPERTY(BlueprintReadOnly, Category = "Stationary Unit|Strategy Skill", 
+        meta = (DisplayName = "射击间隔计时器"))
+    float StrategySkillFireTimer = 0.0f;
 
-	/**
-	 * @brief 结束火矢技能
-	 * @details
-	 * 功能说明：
-	 * - 清除火矢技能状态
-	 * - 恢复原始投射物类
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Stationary Unit|Fire Arrow", 
-		meta = (DisplayName = "结束火矢技能"))
-	void EndFireArrowSkill();
+    /**
+     * @brief 当前计谋技能的射击间隔
+     */
+    UPROPERTY(BlueprintReadOnly, Category = "Stationary Unit|Strategy Skill", 
+        meta = (DisplayName = "当前射击间隔"))
+    float CurrentFireInterval = 0.0f;
 
-	/**
-	 * @brief 发射火矢
-	 * @param TargetLocation 目标位置
-	 * @param ProjectileClassOverride 投射物类覆盖（可选）
-	 * @return 生成的投射物
-	 * @details
-	 * 功能说明：
-	 * - 播放火矢攻击动画
-	 * - 生成火矢投射物
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Stationary Unit|Fire Arrow", 
-		meta = (DisplayName = "发射火矢"))
-	AActor* FireArrow(const FVector& TargetLocation, TSubclassOf<AActor> ProjectileClassOverride = nullptr);
+    /**
+     * @brief 当前计谋技能的目标位置
+     */
+    UPROPERTY(BlueprintReadOnly, Category = "Stationary Unit|Strategy Skill", 
+        meta = (DisplayName = "技能目标位置"))
+    FVector StrategySkillTargetLocation = FVector::ZeroVector;
 
-	/**
-	 * @brief 获取火矢投射物类
-	 * @return 投射物类
-	 */
-	UFUNCTION(BlueprintPure, Category = "Stationary Unit|Fire Arrow", 
-		meta = (DisplayName = "获取火矢投射物类"))
-	TSubclassOf<AActor> GetFireArrowProjectileClass() const;
+    /**
+     * @brief 当前计谋技能的区域半径
+     */
+    UPROPERTY(BlueprintReadOnly, Category = "Stationary Unit|Strategy Skill", 
+        meta = (DisplayName = "技能区域半径"))
+    float StrategySkillAreaRadius = 0.0f;
+
+    /**
+     * @brief 当前计谋技能每轮发射数量
+     */
+    UPROPERTY(BlueprintReadOnly, Category = "Stationary Unit|Strategy Skill", 
+        meta = (DisplayName = "每轮发射数量"))
+    int32 StrategySkillArrowsPerRound = 1;
+
+    /**
+     * @brief 当前使用的投射物类
+     */
+    UPROPERTY(BlueprintReadOnly, Category = "Stationary Unit|Strategy Skill")
+    TSubclassOf<AActor> CurrentProjectileClass;
+
+    /**
+     * @brief 当前使用的攻击蒙太奇
+     */
+    UPROPERTY(BlueprintReadOnly, Category = "Stationary Unit|Strategy Skill")
+    TObjectPtr<UAnimMontage> CurrentAttackMontage;
+
+    // ========== 查询接口 ==========
+    
+    virtual bool CanBeTargeted() const override;
+
+    UFUNCTION(BlueprintPure, Category = "Stationary Unit", meta = (DisplayName = "是否浮空"))
+    bool IsHovering() const { return bEnableHover; }
+
+    UFUNCTION(BlueprintPure, Category = "Stationary Unit", meta = (DisplayName = "获取浮空高度"))
+    float GetHoverHeight() const { return HoverHeight; }
+
+    // ========== ✨ 新增 - 计谋技能接口 ==========
+
+    /**
+     * @brief 开始执行计谋技能
+     * @param TargetLocation 目标位置
+     * @param AreaRadius 区域半径
+     * @param Duration 持续时间
+     * @param FireInterval 射击间隔
+     * @param ArrowsPerRound 每轮发射数量
+     * @param ProjectileClass 投射物类（可选）
+     * @param AttackMontage 攻击蒙太奇（可选，为空则使用 DataTable 配置）
+     * @details
+     * 功能说明：
+     * - 打断当前普通攻击
+     * - 设置计谋技能参数
+     * - 开始持续射击
+     */
+    UFUNCTION(BlueprintCallable, Category = "Stationary Unit|Strategy Skill", 
+        meta = (DisplayName = "开始计谋技能"))
+    void StartStrategySkill(
+        const FVector& TargetLocation,
+        float AreaRadius,
+        float Duration,
+        float FireInterval,
+        int32 ArrowsPerRound,
+        TSubclassOf<AActor> ProjectileClass = nullptr,
+        UAnimMontage* AttackMontage = nullptr
+    );
+
+    /**
+     * @brief 停止计谋技能
+     * @details
+     * 功能说明：
+     * - 清除计谋技能状态
+     * - 恢复普通攻击
+     */
+    UFUNCTION(BlueprintCallable, Category = "Stationary Unit|Strategy Skill", 
+        meta = (DisplayName = "停止计谋技能"))
+    void StopStrategySkill();
+
+    /**
+     * @brief 检查是否正在执行计谋技能
+     */
+    UFUNCTION(BlueprintPure, Category = "Stationary Unit|Strategy Skill", 
+        meta = (DisplayName = "是否正在执行计谋技能"))
+    bool IsExecutingStrategySkill() const { return StrategySkillState == ESGStrategySkillState::Executing; }
+
+    /**
+     * @brief 执行一次计谋技能射击
+     * @details
+     * 功能说明：
+     * - 播放攻击蒙太奇（根据射击间隔调整播放速度）
+     * - 在区域内随机位置发射投射物
+     */
+    UFUNCTION(BlueprintCallable, Category = "Stationary Unit|Strategy Skill", 
+        meta = (DisplayName = "执行计谋射击"))
+    void ExecuteStrategyFire();
+
+    // ========== 旧版火矢接口（保持兼容） ==========
+    
+    UFUNCTION(BlueprintCallable, Category = "Stationary Unit|Fire Arrow", 
+        meta = (DisplayName = "开始火矢技能"))
+    void StartFireArrowSkill();
+
+    UFUNCTION(BlueprintCallable, Category = "Stationary Unit|Fire Arrow", 
+        meta = (DisplayName = "结束火矢技能"))
+    void EndFireArrowSkill();
+
+    UFUNCTION(BlueprintCallable, Category = "Stationary Unit|Fire Arrow", 
+        meta = (DisplayName = "发射火矢"))
+    AActor* FireArrow(const FVector& TargetLocation, TSubclassOf<AActor> ProjectileClassOverride = nullptr);
+
+    UFUNCTION(BlueprintPure, Category = "Stationary Unit|Fire Arrow", 
+        meta = (DisplayName = "获取火矢投射物类"))
+    TSubclassOf<AActor> GetFireArrowProjectileClass() const;
 
 protected:
-	void ApplyStationarySettings();
-	void DisableMovementCapability();
-	void ApplyHoverEffect();
+    void ApplyStationarySettings();
+    void DisableMovementCapability();
+    void ApplyHoverEffect();
 
-	// ✨ 新增 - 缓存的原始投射物类
-	UPROPERTY(Transient)
-	TSubclassOf<AActor> CachedOriginalProjectileClass;
+    /**
+     * @brief 更新计谋技能逻辑
+     * @param DeltaTime 帧间隔
+     */
+    void UpdateStrategySkill(float DeltaTime);
+
+    /**
+     * @brief 获取 DataTable 中配置的攻击蒙太奇
+     * @param AbilityIndex 技能索引（默认 0）
+     * @return 攻击蒙太奇
+     */
+    UAnimMontage* GetDataTableAttackMontage(int32 AbilityIndex = 0) const;
+
+    /**
+     * @brief 获取 DataTable 中配置的投射物类
+     * @param AbilityIndex 技能索引（默认 0）
+     * @return 投射物类
+     */
+    TSubclassOf<AActor> GetDataTableProjectileClass(int32 AbilityIndex = 0) const;
+
+    UPROPERTY(Transient)
+    TSubclassOf<AActor> CachedOriginalProjectileClass;
 };

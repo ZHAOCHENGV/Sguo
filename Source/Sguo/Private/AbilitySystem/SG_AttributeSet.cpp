@@ -14,6 +14,7 @@
 #include "GameplayEffectExtension.h"
 #include "Debug/SG_LogCategories.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "Units/SG_UnitsBase.h"
 
 
 // 构造函数
@@ -64,8 +65,15 @@ void USG_AttributeSet::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out
 	DOREPLIFETIME_CONDITION_NOTIFY(USG_AttributeSet, AttackRange, COND_None, REPNOTIFY_Always);
 }
 
-// 属性变化前的处理
-// 在属性即将被修改之前调用，可以Clamp值
+/**
+ * @brief 属性变化前的处理
+ * @param Attribute 变化的属性
+ * @param NewValue 新值（可修改）
+ * @details
+ * 🔧 核心修改：
+ * - 在这里同步移动速度到 CharacterMovementComponent
+ * - 这个函数对所有类型的 GE 都会调用（Instant、Duration、Infinite）
+ */
 void USG_AttributeSet::PreAttributeChange(const FGameplayAttribute& Attribute, float& NewValue)
 {
 	// 调用父类实现
@@ -85,11 +93,27 @@ void USG_AttributeSet::PreAttributeChange(const FGameplayAttribute& Attribute, f
 	{
 		NewValue = FMath::Max(NewValue, 1.0f);
 	}
-	// 处理移动速度变化
-	// 确保移动速度不为负数
+	// 🔧 修改 - 处理移动速度变化
 	else if (Attribute == GetMoveSpeedAttribute())
 	{
+		// Clamp 值
 		NewValue = FMath::Max(NewValue, 0.0f);
+        
+		// ✨ 新增 - 立即同步到 CharacterMovementComponent
+		// 这确保无论 GE 是什么类型，速度都会被正确应用
+		AActor* OwningActor = GetOwningActor();
+		if (OwningActor)
+		{
+			if (ACharacter* OwningChar = Cast<ACharacter>(OwningActor))
+			{
+				if (UCharacterMovementComponent* MoveComp = OwningChar->GetCharacterMovement())
+				{
+					MoveComp->MaxWalkSpeed = NewValue;
+					UE_LOG(LogSGGameplay, Log, TEXT("🚀 %s 移动速度同步：%.1f"), 
+						*OwningActor->GetName(), NewValue);
+				}
+			}
+		}
 	}
 	// 处理攻击速度变化
 	// 确保攻击速度不低于0.1（避免除零错误和过慢的攻击）
@@ -110,6 +134,50 @@ void USG_AttributeSet::PreAttributeChange(const FGameplayAttribute& Attribute, f
 void USG_AttributeSet::PostGameplayEffectExecute(const FGameplayEffectModCallbackData& Data)
 {
 	Super::PostGameplayEffectExecute(Data);
+
+	// 获取上下文信息（用于后续可能的逻辑扩展）
+	FGameplayEffectContextHandle Context = Data.EffectSpec.GetContext();
+	UAbilitySystemComponent* Source = Context.GetOriginalInstigatorAbilitySystemComponent();
+	AActor* TargetActor = nullptr;
+	AController* TargetController = nullptr;
+	ASG_UnitsBase* TargetUnit = nullptr; // 🔧 修正：使用 ASG_UnitsBase
+
+	if (Data.Target.AbilityActorInfo.IsValid() && Data.Target.AbilityActorInfo->AvatarActor.IsValid())
+	{
+		TargetActor = Data.Target.AbilityActorInfo->AvatarActor.Get();
+		TargetController = Data.Target.AbilityActorInfo->PlayerController.Get();
+		TargetUnit = Cast<ASG_UnitsBase>(TargetActor); // 🔧 修正：Cast 到 ASG_UnitsBase
+	}
+
+	// ========== 1. 处理移动速度变化 (服务器端同步) ==========
+	// ✨ 新增逻辑：当 MoveSpeed 属性改变时，直接修改 CharacterMovementComponent
+	if (Data.EvaluatedData.Attribute == GetMoveSpeedAttribute())
+	{
+		if (TargetActor)
+		{
+			// 尝试获取 CharacterMovementComponent
+			UCharacterMovementComponent* MoveComp = nullptr;
+			
+			// 优先通过 ACharacter 接口获取（最快）
+			if (ACharacter* Char = Cast<ACharacter>(TargetActor))
+			{
+				MoveComp = Char->GetCharacterMovement();
+			}
+			// 备选方案：直接查找组件
+			else
+			{
+				MoveComp = TargetActor->FindComponentByClass<UCharacterMovementComponent>();
+			}
+
+			// 应用速度
+			if (MoveComp)
+			{
+				MoveComp->MaxWalkSpeed = GetMoveSpeed();
+				// UE_LOG(LogSGGameplay, Verbose, TEXT("🚀 移速同步 (Server): %.1f"), GetMoveSpeed());
+			}
+		}
+	}
+	
 
 	// 处理即将受到的伤害
 	if (Data.EvaluatedData.Attribute == GetIncomingDamageAttribute())
@@ -213,13 +281,24 @@ void USG_AttributeSet::OnRep_MoveSpeed(const FGameplayAttributeData& OldMoveSpee
 	GAMEPLAYATTRIBUTE_REPNOTIFY(USG_AttributeSet, MoveSpeed, OldMoveSpeed);
 	
 
+	// 🔧 修改 - 保持 OnRep 用于客户端预测修正
+	// 虽然 PostGameplayEffectExecute 处理了服务器，但客户端通过 RepNotify 获取最新值
+	// 可以保证在网络同步时客户端的 CMC 也能被正确修正
 	if (GetOwningActor())
 	{
-	   if (UCharacterMovementComponent* MoveComp = GetOwningActor()->FindComponentByClass<UCharacterMovementComponent>())
-	    {
-	       MoveComp->MaxWalkSpeed = GetMoveSpeed();
-	    }
-	 }
+		// 优先使用 Cast<ACharacter> 获取 CMC，比 FindComponentByClass 更快
+		if (ACharacter* OwningChar = Cast<ACharacter>(GetOwningActor()))
+		{
+			if (UCharacterMovementComponent* MoveComp = OwningChar->GetCharacterMovement())
+			{
+				MoveComp->MaxWalkSpeed = GetMoveSpeed();
+			}
+		}
+		else if (UCharacterMovementComponent* MoveComp = GetOwningActor()->FindComponentByClass<UCharacterMovementComponent>())
+		{
+			MoveComp->MaxWalkSpeed = GetMoveSpeed();
+		}
+	}
 }
 
 // 攻击速度复制回调

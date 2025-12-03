@@ -528,7 +528,11 @@ void USG_CardDeckComponent::DrawCards(int32 Count)
 		DrawnCount, Count, HandCards.Num());
 }
 
-// 抽取单张卡牌
+/**
+ * @brief 抽取单张卡牌（权重随机系统）
+ * @param OutInstance 输出参数，抽到的卡牌实例
+ * @return 是否成功抽取
+ */
 bool USG_CardDeckComponent::DrawSingleCard(FSGCardInstance& OutInstance)
 {
 	// 收集所有可抽取的槽位
@@ -538,7 +542,6 @@ bool USG_CardDeckComponent::DrawSingleCard(FSGCardInstance& OutInstance)
 	// 遍历抽牌池，收集有效槽位并计算总权重
 	for (FSGCardDrawSlot& Slot : DrawPile)
 	{
-		// ✨ NEW - 使用 CanDraw() 检查是否可以抽取
 		// 检查是否为已消耗的唯一卡牌
 		if (ConsumedUniqueCards.Contains(Slot.CardId))
 		{
@@ -551,7 +554,7 @@ bool USG_CardDeckComponent::DrawSingleCard(FSGCardInstance& OutInstance)
 			continue;
 		}
 		
-		// ✨ NEW - 使用 GetEffectiveWeight() 计算实际权重
+		// 获取实际权重 (DrawWeight * 保底系数)
 		float EffectiveWeight = Slot.GetEffectiveWeight();
 		
 		// 累加总权重
@@ -605,7 +608,6 @@ bool USG_CardDeckComponent::DrawSingleCard(FSGCardInstance& OutInstance)
 	FSGCardDrawSlot* SelectedSlot = nullptr;
 	for (FSGCardDrawSlot* Slot : ValidSlots)
 	{
-		// ✨ NEW - 使用 GetEffectiveWeight()
 		float EffectiveWeight = Slot->GetEffectiveWeight();
 		CurrentWeight += EffectiveWeight;
 		
@@ -616,7 +618,7 @@ bool USG_CardDeckComponent::DrawSingleCard(FSGCardInstance& OutInstance)
 		}
 	}
 	
-	// 如果未选中任何槽位，选择最后一个
+	// 如果未选中任何槽位，选择最后一个（兜底防止浮点误差）
 	if (!SelectedSlot && ValidSlots.Num() > 0)
 	{
 		SelectedSlot = ValidSlots.Last();
@@ -629,19 +631,19 @@ bool USG_CardDeckComponent::DrawSingleCard(FSGCardInstance& OutInstance)
 		return false;
 	}
 	
-	// 更新所有槽位的 MissCount
+	// 更新所有槽位的 MissCount 和 OccurrenceCount
 	for (FSGCardDrawSlot* Slot : ValidSlots)
 	{
 		if (Slot == SelectedSlot)
 		{
 			// 抽到的槽位重置 MissCount
 			Slot->MissCount = 0;
-			// ✨ NEW - 增加出现次数
+			// 增加出现次数
 			Slot->OccurrenceCount++;
 		}
 		else
 		{
-			// 未抽到的槽位增加 MissCount
+			// 未抽到的槽位增加 MissCount (增加下次抽中的概率)
 			Slot->MissCount++;
 		}
 	}
@@ -654,23 +656,20 @@ bool USG_CardDeckComponent::DrawSingleCard(FSGCardInstance& OutInstance)
 		return false;
 	}
 	
-	// 生成实例 ID
+	// 生成实例数据
 	OutInstance.InstanceId = FGuid::NewGuid();
-	// 存储数据资产指针
 	OutInstance.CardData = CardData;
-	// 存储资产 ID
 	OutInstance.CardId = SelectedSlot->CardId;
-	// 记录是否唯一
 	OutInstance.bIsUnique = CardData->bIsUnique;
 	
-	// ✨ NEW - 记录详细的抽卡日志
-	UE_LOG(LogSGCard, Verbose, TEXT("    抽中卡牌 - 名称: %s, 基础权重: %.2f, 实际权重: %.2f, MissCount: %d, 出现次数: %d/%d"), 
+	// 记录详细的抽卡日志 (包含概率)
+	UE_LOG(LogSGCard, Log, TEXT("    🎲 抽中: %s (权重: %.1f/%.1f, 概率: %.1f%%, Miss: %d, Count: %d)"), 
 		*CardData->CardName.ToString(), 
-		SelectedSlot->DrawWeight,
 		SelectedSlot->GetEffectiveWeight(),
+		TotalWeight,
+		(TotalWeight > 0.0f) ? (SelectedSlot->GetEffectiveWeight() / TotalWeight * 100.0f) : 0.0f,
 		SelectedSlot->MissCount,
-		SelectedSlot->OccurrenceCount,
-		SelectedSlot->MaxOccurrences > 0 ? SelectedSlot->MaxOccurrences : 999);
+		SelectedSlot->OccurrenceCount);
 	
 	// 如果是唯一卡牌，加入消耗列表
 	if (OutInstance.bIsUnique)
@@ -1053,105 +1052,114 @@ TArray<FPrimaryAssetId> USG_CardDeckComponent::GatherCardAssetIds() const
 	
 	return Result;
 }
-
+/**
+ * @brief 抽取保证初始手牌的卡牌
+ * @param OutInstances 输出的卡牌实例数组
+ * @return 成功抽取的卡牌数量
+ */
 int32 USG_CardDeckComponent::DrawGuaranteedCards(TArray<FSGCardInstance>& OutInstances)
 {
-	 // 清空输出数组
-    OutInstances.Empty();
+	OutInstances.Empty();
     
-    // 检查配置有效性
-    if (!ResolvedDeckConfig)
-    {
-        UE_LOG(LogSGCard, Warning, TEXT("DrawGuaranteedCards：配置无效"));
-        return 0;
-    }
+	// 检查配置有效性
+	if (!ResolvedDeckConfig)
+	{
+		UE_LOG(LogSGCard, Warning, TEXT("DrawGuaranteedCards：配置无效"));
+		return 0;
+	}
     
-    // 获取初始手牌数量限制
-    int32 MaxGuaranteed = ResolvedDeckConfig->InitialHand;
+	// 获取初始手牌数量限制
+	int32 MaxGuaranteed = ResolvedDeckConfig->InitialHand;
     
-    UE_LOG(LogSGCard, Log, TEXT("========== 抽取保证卡牌 =========="));
+	UE_LOG(LogSGCard, Log, TEXT("========== 抽取保证卡牌 =========="));
     
-    // 遍历所有配置槽位，找出标记为保证初始手牌的卡牌
-    for (int32 i = 0; i < ResolvedDeckConfig->AllowedCards.Num(); ++i)
-    {
-        const FSGCardConfigSlot& ConfigSlot = ResolvedDeckConfig->AllowedCards[i];
+	// 遍历所有配置槽位，找出标记为保证初始手牌的卡牌
+	for (int32 i = 0; i < ResolvedDeckConfig->AllowedCards.Num(); ++i)
+	{
+		const FSGCardConfigSlot& ConfigSlot = ResolvedDeckConfig->AllowedCards[i];
         
-        // 检查是否标记为保证初始手牌
-        if (!ConfigSlot.bGuaranteedInInitialHand)
-        {
-            continue;
-        }
+		// 检查是否标记为保证初始手牌
+		if (!ConfigSlot.bGuaranteedInInitialHand)
+		{
+			continue;
+		}
         
-        // 检查是否已达到上限
-        if (OutInstances.Num() >= MaxGuaranteed)
-        {
-            UE_LOG(LogSGCard, Warning, TEXT("  ⚠️ 保证卡牌数量已达到初始手牌上限 %d，跳过剩余保证卡牌"), MaxGuaranteed);
-            break;
-        }
+		// 检查是否已达到上限
+		if (OutInstances.Num() >= MaxGuaranteed)
+		{
+			UE_LOG(LogSGCard, Warning, TEXT("  ⚠️ 保证卡牌数量已达到初始手牌上限 %d，跳过剩余保证卡牌"), MaxGuaranteed);
+			break;
+		}
         
-        // 加载卡牌数据
-        USG_CardDataBase* CardData = ConfigSlot.CardData.IsValid() 
-            ? ConfigSlot.CardData.Get() 
-            : ConfigSlot.CardData.LoadSynchronous();
+		// 加载卡牌数据
+		USG_CardDataBase* CardData = ConfigSlot.CardData.IsValid() 
+			? ConfigSlot.CardData.Get() 
+			: ConfigSlot.CardData.LoadSynchronous();
         
-        if (!CardData)
-        {
-            UE_LOG(LogSGCard, Warning, TEXT("  ⚠️ 槽位 %d 的卡牌数据加载失败"), i);
-            continue;
-        }
+		if (!CardData)
+		{
+			UE_LOG(LogSGCard, Warning, TEXT("  ⚠️ 槽位 %d 的卡牌数据加载失败"), i);
+			continue;
+		}
         
-        // 检查唯一卡牌是否已被消耗
-        FPrimaryAssetId CardId = CardData->GetPrimaryAssetId();
-        if (CardData->bIsUnique && ConsumedUniqueCards.Contains(CardId))
-        {
-            UE_LOG(LogSGCard, Log, TEXT("  跳过已消耗的唯一卡牌：%s"), *CardData->CardName.ToString());
-            continue;
-        }
+		// 检查唯一卡牌是否已被消耗
+		FPrimaryAssetId CardId = CardData->GetPrimaryAssetId();
+		if (CardData->bIsUnique && ConsumedUniqueCards.Contains(CardId))
+		{
+			UE_LOG(LogSGCard, Log, TEXT("  跳过已消耗的唯一卡牌：%s"), *CardData->CardName.ToString());
+			continue;
+		}
         
-        // 创建卡牌实例
-        FSGCardInstance NewInstance;
-        NewInstance.InstanceId = FGuid::NewGuid();
-        NewInstance.CardData = CardData;
-        NewInstance.CardId = CardId;
-        NewInstance.bIsUnique = CardData->bIsUnique;
+		// 创建卡牌实例
+		FSGCardInstance NewInstance;
+		NewInstance.InstanceId = FGuid::NewGuid();
+		NewInstance.CardData = CardData;
+		NewInstance.CardId = CardId;
+		NewInstance.bIsUnique = CardData->bIsUnique;
         
-        // 添加到输出数组
-        OutInstances.Add(NewInstance);
+		// 添加到输出数组
+		OutInstances.Add(NewInstance);
         
-        UE_LOG(LogSGCard, Log, TEXT("  ✓ 保证卡牌：%s (唯一: %s)"), 
-            *CardData->CardName.ToString(),
-            CardData->bIsUnique ? TEXT("是") : TEXT("否"));
+		UE_LOG(LogSGCard, Log, TEXT("  ✓ 保证抽取: %s (唯一: %s)"), 
+			*CardData->CardName.ToString(),
+			CardData->bIsUnique ? TEXT("是") : TEXT("否"));
         
-        // 如果是唯一卡牌，标记为已消耗
-        if (CardData->bIsUnique)
-        {
-            ConsumedUniqueCards.Add(CardId);
-            UE_LOG(LogSGCard, Log, TEXT("    已标记为已消耗"));
-        }
+		// 如果是唯一卡牌，标记为已消耗
+		if (CardData->bIsUnique)
+		{
+			ConsumedUniqueCards.Add(CardId);
+		}
         
-        // 从抽牌池中移除对应槽位（避免重复抽到）
-        // 查找并移除
-        for (int32 j = DrawPile.Num() - 1; j >= 0; --j)
-        {
-            if (DrawPile[j].CardId == CardId)
-            {
-                // 如果是唯一卡牌，直接移除
-                // 如果不是唯一卡牌，只移除一个槽位
-                DrawPile.RemoveAt(j);
-                UE_LOG(LogSGCard, Verbose, TEXT("    从抽牌池移除槽位"));
-                
-                // 非唯一卡牌只移除一个
-                if (!CardData->bIsUnique)
-                {
-                    break;
-                }
-            }
-        }
-    }
+		// 🔧 修改核心逻辑：处理抽牌池中的槽位
+		// 查找对应的抽牌槽位
+		for (int32 j = DrawPile.Num() - 1; j >= 0; --j)
+		{
+			if (DrawPile[j].CardId == CardId)
+			{
+				// 分支 A：如果是唯一卡牌，直接从抽牌池移除槽位（防止后续 DrawCards 再次抽到）
+				if (CardData->bIsUnique)
+				{
+					DrawPile.RemoveAt(j);
+					UE_LOG(LogSGCard, Verbose, TEXT("    [唯一] 从抽牌池移除槽位"));
+				}
+				// 分支 B：如果是普通卡牌（非唯一），保留槽位，但增加出现计数
+				// 这样后续的 DrawCards 仍然可以从这个槽位抽卡，从而填满手牌
+				else
+				{
+					DrawPile[j].OccurrenceCount++;
+					DrawPile[j].MissCount = 0; // 重置 MissCount，因为它被“选中”了
+					UE_LOG(LogSGCard, Verbose, TEXT("    [普通] 保留槽位，计数+1"));
+					
+					// 假设每个 ID 在 DrawPile 中只有一个槽位，找到后即可退出内层循环
+					break; 
+				}
+			}
+		}
+	}
     
-    UE_LOG(LogSGCard, Log, TEXT("  共抽取 %d 张保证卡牌"), OutInstances.Num());
-    UE_LOG(LogSGCard, Log, TEXT("========================================"));
+	UE_LOG(LogSGCard, Log, TEXT("  共抽取 %d 张保证卡牌"), OutInstances.Num());
+	UE_LOG(LogSGCard, Log, TEXT("========================================"));
     
-    return OutInstances.Num();
+	return OutInstances.Num();
 }
 

@@ -35,14 +35,11 @@ USG_BTService_UpdateTarget::USG_BTService_UpdateTarget()
 
 /**
  * @brief Tick 更新
- * @param OwnerComp 行为树组件
- * @param NodeMemory 节点内存
- * @param DeltaSeconds 时间间隔
  * @details
- * 功能说明：
- * - 🔧 修改 - 增加攻击状态检测
- * - 检查目标有效性
- * - 目标无效时查找新目标
+ * 核心逻辑优化：
+ * 1. 验证当前目标有效性。
+ * 2. ✨ 动态择优：只要单位**未处于攻击动作中**（包含移动、发呆、被阻挡），就持续寻找更佳目标。
+ * 这能解决单位被友军阻挡无法攻击当前目标时，自动切换到旁边没人打的敌人。
  */
 void USG_BTService_UpdateTarget::TickNode(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds)
 {
@@ -51,13 +48,13 @@ void USG_BTService_UpdateTarget::TickNode(UBehaviorTreeComponent& OwnerComp, uin
     ASG_AIControllerBase* AIController = Cast<ASG_AIControllerBase>(OwnerComp.GetAIOwner());
     if (!AIController) return;
     
+    // 获取控制的单位
     ASG_UnitsBase* ControlledUnit = Cast<ASG_UnitsBase>(AIController->GetPawn());
     if (!ControlledUnit) return;
     
     UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
     if (!BlackboardComp) return;
     
-    // 获取当前黑板中的目标
     AActor* CurrentTarget = Cast<AActor>(BlackboardComp->GetValueAsObject(TargetKey.SelectedKeyName));
     
     // ========== 1. 验证当前目标是否有效 ==========
@@ -67,7 +64,7 @@ void USG_BTService_UpdateTarget::TickNode(UBehaviorTreeComponent& OwnerComp, uin
         ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(CurrentTarget);
         if (TargetUnit)
         {
-            // 检查生命值、是否死亡、是否可被选取
+            // 目标必须：未死亡 + 可被选取 + 血量 > 0
             bIsTargetValid = !TargetUnit->bIsDead && 
                              TargetUnit->CanBeTargeted() && 
                              (!TargetUnit->AttributeSet || TargetUnit->AttributeSet->GetHealth() > 0.0f);
@@ -83,43 +80,49 @@ void USG_BTService_UpdateTarget::TickNode(UBehaviorTreeComponent& OwnerComp, uin
         }
     }
 
-    // ========== 2. ✨ 新增：移动过程中的动态择优 ==========
-    // 如果当前目标有效，但我们还没开始攻击（说明还在路上），我们看看有没有更近的倒霉蛋
+    // ========== 2. ✨ 动态择优 (涵盖：移动中 / 站立不动 / 被阻挡) ==========
+    // 只要单位没有在播放攻击动画/执行攻击逻辑 (!bIsAttacking)，它就有资格切换目标。
+    // 场景举例：
+    // - 单位正在前往目标 A（移动中）-> 发现路边有个更近的 B -> 切换。
+    // - 单位被友军卡住走不到 A（被阻挡/原地踏步）-> 发现 B 就在脸前 -> 切换。
+    // - 单位刚杀完人发呆（站立）-> 立即寻找最近的 B -> 切换。
     if (bIsTargetValid && !ControlledUnit->bIsAttacking)
     {
-        // 调用 Controller 的寻敌（底层应调用 Subsystem->FindBestTarget）
-        // FindBestTarget 会根据距离和拥挤度评分，返回当前这一刻的最佳目标
+        // 调用底层寻敌逻辑（已包含拥挤度评分和距离权重）
         AActor* BetterTarget = AIController->FindNearestTarget();
 
-        // 如果找到了目标，且这个目标不是当前目标 -> 说明它是“更好”的目标（通常意味着更近）
+        // 如果找到了目标，且这个目标不是当前目标，说明它是评分更高的“更优解”
         if (BetterTarget && BetterTarget != CurrentTarget)
         {
-            // 切换目标！
-            UE_LOG(LogSGGameplay, Log, TEXT("⚡ [动态索敌] %s 在移动途中发现更好目标: %s -> %s"), 
-                *ControlledUnit->GetName(),
-                *CurrentTarget->GetName(),
-                *BetterTarget->GetName());
+            // 获取当前和新目标的距离，仅用于日志显示
+            float OldDist = ControlledUnit->GetDistanceTo(CurrentTarget);
+            float NewDist = ControlledUnit->GetDistanceTo(BetterTarget);
 
+            UE_LOG(LogSGGameplay, Log, TEXT("⚡ [动态索敌] %s 切换目标 (状态: %s): %s(%.0f) -> %s(%.0f)"), 
+                *ControlledUnit->GetName(),
+                ControlledUnit->GetVelocity().IsZero() ? TEXT("静止/阻挡") : TEXT("移动"), // 区分显示是卡住了还是在跑路
+                *CurrentTarget->GetName(), OldDist,
+                *BetterTarget->GetName(), NewDist);
+
+            // 执行切换
             BlackboardComp->SetValueAsObject(TargetKey.SelectedKeyName, BetterTarget);
             AIController->SetCurrentTarget(BetterTarget);
             
-            // 更新本地变量，防止进入下方的无效处理逻辑
+            // 更新本地引用，直接跳过后续逻辑
             CurrentTarget = BetterTarget;
-            
-            // 只要切换了目标，就不需要继续执行下面的无效处理了
             return; 
         }
     }
     
-    // ========== 3. 如果目标无效，查找新目标 ==========
+    // ========== 3. 如果当前目标彻底失效（死亡/消失），查找新目标 ==========
     if (!bIsTargetValid)
     {
         bool bIsAttacking = ControlledUnit->bIsAttacking;
         
-        // 只有当之前有目标且正在攻击时才输出详细日志，避免空闲时刷屏
+        // 仅在之前有目标时输出日志，避免空闲时刷屏
         if (CurrentTarget)
         {
-            UE_LOG(LogSGGameplay, Log, TEXT("🔄 目标无效/死亡，查找新目标 (曾攻击: %s)"), 
+            UE_LOG(LogSGGameplay, Log, TEXT("🔄 目标失效，重新寻敌 (曾攻击: %s)"), 
                 bIsAttacking ? TEXT("是") : TEXT("否"));
         }
         
@@ -131,21 +134,21 @@ void USG_BTService_UpdateTarget::TickNode(UBehaviorTreeComponent& OwnerComp, uin
             
             UE_LOG(LogSGGameplay, Log, TEXT("✓ 找到新目标：%s"), *NewTarget->GetName());
             
-            // 如果处于攻击状态但目标没了，重置攻击状态以便重新寻路
+            // 如果之前在攻击状态（比如站桩输出打死人了），重置攻击状态以便让单位动起来
             if (bIsAttacking)
             {
                 BlackboardComp->SetValueAsBool(FName("IsInAttackRange"), false);
-                ControlledUnit->bIsAttacking = false; // 确保状态复位
+                ControlledUnit->bIsAttacking = false; 
             }
         }
         else
         {
-            // 真没目标了（全清空了）
+            // 确实没目标了，清空数据
             if (CurrentTarget != nullptr)
             {
                 BlackboardComp->ClearValue(TargetKey.SelectedKeyName);
                 AIController->SetCurrentTarget(nullptr);
-                UE_LOG(LogSGGameplay, Log, TEXT("⚠️ 视野内无有效目标"));
+                UE_LOG(LogSGGameplay, Log, TEXT("⚠️ 视野内无有效目标，进入待机"));
             }
         }
     }

@@ -7,6 +7,7 @@
 
 #include "AI/Decorators/SG_BTDecorator_IsInAttackRange.h"
 #include "AI/SG_AIControllerBase.h"
+#include "AI/SG_CombatTargetManager.h"
 #include "Units/SG_UnitsBase.h"
 #include "Buildings/SG_MainCityBase.h"  // ✨ 新增
 #include "BehaviorTree/BlackboardComponent.h"

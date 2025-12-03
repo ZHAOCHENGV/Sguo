@@ -1,11 +1,12 @@
 ﻿// 📄 文件：Source/Sguo/Public/AI/SG_CombatTargetManager.h
-// 🔧 修改 - 添加调试可视化和标签过滤功能
+// 🔧 修改 - 修复 Tick 接口问题，使用 FTickableGameObject
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "GameplayTagContainer.h"
+#include "Tickable.h"  // ✨ 新增 - 包含 Tickable 接口
 #include "Units/SG_UnitsBase.h"
 #include "SG_CombatTargetManager.generated.h"
 
@@ -117,9 +118,10 @@ struct FSGTargetCombatInfo
  * - 槽位满了，单位必须选择其他目标
  * - ✨ 新增：调试可视化系统
  * - ✨ 新增：基于标签的槽位占用控制
+ * 🔧 修改：继承 FTickableGameObject 以支持 Tick
  */
 UCLASS()
-class SGUO_API USG_CombatTargetManager : public UWorldSubsystem
+class SGUO_API USG_CombatTargetManager : public UWorldSubsystem, public FTickableGameObject
 {
     GENERATED_BODY()
 
@@ -128,9 +130,44 @@ public:
     virtual void Deinitialize() override;
     virtual bool ShouldCreateSubsystem(UObject* Outer) const override { return true; }
 
-    // ✨ 新增 - Tick 用于调试绘制
+    // ========== 🔧 修改 - FTickableGameObject 接口实现 ==========
+    
+    /**
+     * @brief Tick 函数
+     * @param DeltaTime 帧间隔
+     * @details 用于调试绘制
+     */
     virtual void Tick(float DeltaTime) override;
+    
+    /**
+     * @brief 获取统计 ID
+     * @return 统计 ID
+     */
     virtual TStatId GetStatId() const override;
+    
+    /**
+     * @brief 是否可以 Tick
+     * @return 是否启用 Tick
+     */
+    virtual bool IsTickable() const override;
+    
+    /**
+     * @brief 是否在游戏世界暂停时 Tick
+     * @return 是否在暂停时 Tick
+     */
+    virtual bool IsTickableWhenPaused() const override { return false; }
+    
+    /**
+     * @brief 是否在编辑器中 Tick
+     * @return 是否在编辑器中 Tick
+     */
+    virtual bool IsTickableInEditor() const override { return false; }
+    
+    /**
+     * @brief 获取 Tick 的世界
+     * @return 世界指针
+     */
+    virtual UWorld* GetTickableGameObjectWorld() const override { return GetWorld(); }
 
     // ========== 核心接口 ==========
 
@@ -219,6 +256,10 @@ public:
     /** 普通单位的攻击槽位数量 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Config", meta = (DisplayName = "单位槽位数量"))
     int32 UnitSlotCount = 8;
+
+    /** 主城的攻击槽位数量 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Config", meta = (DisplayName = "主城槽位数量"))
+    int32 MainCitySlotCount = 20;
 
     /** 槽位距离目标的距离（攻击范围内） */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Config", meta = (DisplayName = "槽位距离"))

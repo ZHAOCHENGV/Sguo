@@ -1,5 +1,5 @@
 ﻿// 📄 文件：Source/Sguo/Private/AI/SG_CombatTargetManager.cpp
-// 🔧 修改 - 添加调试可视化和标签过滤功能完整实现
+// 🔧 修改 - 修复 Tick 接口和 FColor::Gray 问题
 
 #include "AI/SG_CombatTargetManager.h"
 #include "Units/SG_UnitsBase.h"
@@ -10,7 +10,7 @@
 #include "Engine/OverlapResult.h"
 #include "TimerManager.h"
 #include "Components/BoxComponent.h"
-#include "DrawDebugHelpers.h"  // ✨ 新增
+#include "DrawDebugHelpers.h"
 
 void USG_CombatTargetManager::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -60,17 +60,16 @@ void USG_CombatTargetManager::Deinitialize()
     Super::Deinitialize();
 }
 
-// ✨ 新增 - Tick 函数用于调试绘制
+// ========== 🔧 修改 - FTickableGameObject 接口实现 ==========
+
 /**
- * @brief Tick 更新
+ * @brief Tick 函数
  * @param DeltaTime 帧间隔
- * @details
- * 功能说明：
- * - 每帧绘制调试可视化
+ * @details 用于调试绘制
  */
 void USG_CombatTargetManager::Tick(float DeltaTime)
 {
-    Super::Tick(DeltaTime);
+    // 🔧 修改 - 不调用 Super::Tick，因为 FTickableGameObject 没有这个函数
     
     // 绘制调试槽位
     if (bShowAttackSlots)
@@ -79,11 +78,27 @@ void USG_CombatTargetManager::Tick(float DeltaTime)
     }
 }
 
-// ✨ 新增 - 获取统计 ID
+/**
+ * @brief 获取统计 ID
+ * @return 统计 ID
+ */
 TStatId USG_CombatTargetManager::GetStatId() const
 {
     RETURN_QUICK_DECLARE_CYCLE_STAT(USG_CombatTargetManager, STATGROUP_Tickables);
 }
+
+/**
+ * @brief 是否可以 Tick
+ * @return 是否启用 Tick
+ * @details 只有在需要显示调试信息时才 Tick
+ */
+bool USG_CombatTargetManager::IsTickable() const
+{
+    // 只有当需要显示调试信息时才 Tick
+    return bShowAttackSlots;
+}
+
+// ========== 核心功能实现 ==========
 
 // ✨ 新增 - 检查单位是否需要占用槽位
 /**
@@ -860,7 +875,8 @@ void USG_CombatTargetManager::DrawDebugSlotsForTarget(AActor* Target, const FSGT
                 OccupiedCount++;
                 break;
             default:
-                SlotColor = FColor::Gray;
+                // 🔧 修复 - FColor::Gray 不存在，使用 FColor(128, 128, 128)
+                SlotColor = FColor(128, 128, 128);
                 StatusText = TEXT("未知");
                 break;
         }

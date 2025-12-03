@@ -1,8 +1,6 @@
-﻿// ✨ 新增 - 目标有效性检查装饰器实现
-/**
- * @file SG_BTDecorator_IsTargetValid.cpp
- * @brief 行为树装饰器：检查目标是否有效实现
- */
+﻿// 📄 文件：Source/Sguo/Private/AI/Decorators/SG_BTDecorator_IsTargetValid.cpp
+// 🔧 修改 - 完整修复主城目标有效性检查
+// ✅ 这是完整文件
 
 #include "AI/Decorators/SG_BTDecorator_IsTargetValid.h"
 
@@ -12,29 +10,23 @@
 #include "BehaviorTree/BlackboardComponent.h"
 #include "Buildings/SG_MainCityBase.h"
 #include "Debug/SG_LogCategories.h"
-#include "BehaviorTree/BehaviorTreeComponent.h"  // ✨ 新增
+#include "BehaviorTree/BehaviorTreeComponent.h"
+
 /**
  * @brief 构造函数
- * @details
- * 功能说明：
- * - 设置装饰器名称
- * - 配置观察者中断模式
  */
 USG_BTDecorator_IsTargetValid::USG_BTDecorator_IsTargetValid()
 {
-	// 设置装饰器名称
-	NodeName = TEXT("目标是否有效");
+    NodeName = TEXT("目标是否有效");
     
-	// 🔧 修改 - 启用 Tick 以便实时检测目标状态变化
-	bNotifyTick = true;
-	bNotifyBecomeRelevant = true;
-	bNotifyCeaseRelevant = true;
+    bNotifyTick = true;
+    bNotifyBecomeRelevant = true;
+    bNotifyCeaseRelevant = true;
     
-	// ✨ 新增 - 设置中断模式，当条件变化时中断子节点
-	FlowAbortMode = EBTFlowAbortMode::Self;
+    FlowAbortMode = EBTFlowAbortMode::Self;
     
-	// 配置黑板键过滤器
-	TargetKey.AddObjectFilter(this, GET_MEMBER_NAME_CHECKED(USG_BTDecorator_IsTargetValid, TargetKey), AActor::StaticClass());
+    TargetKey.AddObjectFilter(this, GET_MEMBER_NAME_CHECKED(USG_BTDecorator_IsTargetValid, TargetKey), AActor::StaticClass());
+    TargetKey.SelectedKeyName = FName("CurrentTarget");
 }
 
 /**
@@ -43,98 +35,116 @@ USG_BTDecorator_IsTargetValid::USG_BTDecorator_IsTargetValid()
  * @param NodeMemory 节点内存
  * @return 条件是否满足
  * @details
- * 功能说明：
- * - 检查目标是否有效
- * - 返回 true 或 false
+ * 🔧 核心修复：
+ * 1. 先检查主城类型（主城不是 ASG_UnitsBase 的子类）
+ * 2. 增加 IsValid() 检查确保 Actor 未被销毁
+ * 3. 增加详细日志便于调试
  */
 bool USG_BTDecorator_IsTargetValid::CalculateRawConditionValue(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) const
 {
-	// 获取 AI Controller
-	ASG_AIControllerBase* AIController = Cast<ASG_AIControllerBase>(OwnerComp.GetAIOwner());
-	if (!AIController)
-	{
-		return false;
-	}
+    // ========== 步骤1：获取基础组件 ==========
+    AAIController* AIController = OwnerComp.GetAIOwner();
+    if (!AIController)
+    {
+        return false;
+    }
     
-	// 获取黑板组件
-	UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
-	if (!BlackboardComp)
-	{
-		return false;
-	}
+    UBlackboardComponent* BlackboardComp = OwnerComp.GetBlackboardComponent();
+    if (!BlackboardComp)
+    {
+        return false;
+    }
     
-	// 获取目标
-	AActor* Target = Cast<AActor>(BlackboardComp->GetValueAsObject(TargetKey.SelectedKeyName));
-	if (!Target)
-	{
-		return false;
-	}
+    // ========== 步骤2：获取目标 ==========
+    FName KeyName = TargetKey.SelectedKeyName;
+    if (KeyName.IsNone())
+    {
+        KeyName = FName("CurrentTarget");
+    }
     
-	// 检查单位是否已死亡
-	ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(Target);
-	if (TargetUnit)
-	{
-		// 检查死亡状态
-		if (TargetUnit->bIsDead)
-		{
-			UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位已死亡：%s"), *TargetUnit->GetName());
-			return false;
-		}
+    UObject* TargetObject = BlackboardComp->GetValueAsObject(KeyName);
+    if (!TargetObject)
+    {
+        return false;
+    }
+    
+    AActor* Target = Cast<AActor>(TargetObject);
+    if (!Target)
+    {
+        return false;
+    }
+    
+    // ========== 🔧 修复 - 步骤3：检查 Actor 基础有效性 ==========
+    // 使用 IsValid() 检查 Actor 是否被标记为 PendingKill
+    if (!IsValid(Target))
+    {
+        UE_LOG(LogSGGameplay, Verbose, TEXT("目标有效性检查：Actor 已失效（PendingKill）"));
+        return false;
+    }
+    
+    // ========== 🔧 修复 - 步骤4：优先检查主城类型 ==========
+    // 主城不是 ASG_UnitsBase 的子类，必须单独检查
+    if (ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(Target))
+    {
+        // 检查主城是否存活
+        if (!TargetMainCity->IsAlive())
+        {
+            UE_LOG(LogSGGameplay, Log, TEXT("✗ 目标主城已被摧毁：%s"), *TargetMainCity->GetName());
+            return false;
+        }
         
-		// 检查生命值
-		if (TargetUnit->AttributeSet && TargetUnit->AttributeSet->GetHealth() <= 0.0f)
-		{
-			UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位生命值为 0：%s"), *TargetUnit->GetName());
-			return false;
-		}
+        // ✨ 主城有效
+        UE_LOG(LogSGGameplay, Verbose, TEXT("✓ 目标主城有效：%s"), *TargetMainCity->GetName());
+        return true;
+    }
+    
+    // ========== 步骤5：检查单位类型 ==========
+    if (ASG_UnitsBase* TargetUnit = Cast<ASG_UnitsBase>(Target))
+    {
+        // 检查死亡状态
+        if (TargetUnit->bIsDead)
+        {
+            UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位已死亡：%s"), *TargetUnit->GetName());
+            return false;
+        }
         
-		// ✨ 新增 - 检查是否可被选为目标
-		if (!TargetUnit->CanBeTargeted())
-		{
-			UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位不可被选中：%s"), *TargetUnit->GetName());
-			return false;
-		}
-	}
+        // 检查生命值
+        if (TargetUnit->AttributeSet && TargetUnit->AttributeSet->GetHealth() <= 0.0f)
+        {
+            UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位生命值为 0：%s"), *TargetUnit->GetName());
+            return false;
+        }
+        
+        // 检查是否可被选为目标
+        if (!TargetUnit->CanBeTargeted())
+        {
+            UE_LOG(LogSGGameplay, Verbose, TEXT("目标单位不可被选中：%s"), *TargetUnit->GetName());
+            return false;
+        }
+        
+        return true;
+    }
     
-	// 检查主城是否被摧毁
-	ASG_MainCityBase* TargetMainCity = Cast<ASG_MainCityBase>(Target);
-	if (TargetMainCity)
-	{
-		if (!TargetMainCity->IsAlive())
-		{
-			UE_LOG(LogSGGameplay, Log, TEXT("✗ 目标主城已被摧毁：%s"), *TargetMainCity->GetName());
-			return false;
-		}
-	}
+    // ========== 步骤6：未知类型，默认有效 ==========
+    // 支持未来扩展的其他目标类型
+    UE_LOG(LogSGGameplay, Warning, TEXT("⚠️ 未知目标类型：%s（%s）"), 
+        *Target->GetName(), *Target->GetClass()->GetName());
     
-	return true;
+    return true;
 }
 
-
-// ✨ 新增 - Tick 函数，实时检测目标状态
 /**
  * @brief Tick 更新
- * @param OwnerComp 行为树组件
- * @param NodeMemory 节点内存
- * @param DeltaSeconds 时间间隔
- * @details
- * 功能说明：
- * - 实时检测目标是否死亡
- * - 目标死亡时立即中断当前节点
  */
 void USG_BTDecorator_IsTargetValid::TickNode(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds)
 {
-	Super::TickNode(OwnerComp, NodeMemory, DeltaSeconds);
+    Super::TickNode(OwnerComp, NodeMemory, DeltaSeconds);
     
-	// 计算当前条件
-	bool bCurrentCondition = CalculateRawConditionValue(OwnerComp, NodeMemory);
+    bool bCurrentCondition = CalculateRawConditionValue(OwnerComp, NodeMemory);
     
-	// 如果条件变为 false（目标死亡或不可选中），请求重新评估
-	if (!bCurrentCondition)
-	{
-		// 请求行为树重新评估此节点
-		OwnerComp.RequestExecution(this);
-        
-		UE_LOG(LogSGGameplay, Log, TEXT("🎯 目标无效，请求行为树重新评估"));
-	}
+    if (!bCurrentCondition)
+    {
+        OwnerComp.RequestExecution(this);
+        UE_LOG(LogSGGameplay, Log, TEXT("🎯 目标无效，请求行为树重新评估"));
+    }
 }

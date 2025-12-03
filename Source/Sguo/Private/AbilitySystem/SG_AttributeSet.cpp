@@ -13,6 +13,7 @@
 #include "Net/UnrealNetwork.h"
 #include "GameplayEffectExtension.h"
 #include "Debug/SG_LogCategories.h"
+#include "GameFramework/CharacterMovementComponent.h"
 
 
 // 构造函数
@@ -211,15 +212,14 @@ void USG_AttributeSet::OnRep_MoveSpeed(const FGameplayAttributeData& OldMoveSpee
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(USG_AttributeSet, MoveSpeed, OldMoveSpeed);
 	
-	// 可以在这里更新角色的移动组件速度
-	// 例如：
-	// if (GetOwningActor())
-	// {
-	//     if (UCharacterMovementComponent* MoveComp = GetOwningActor()->FindComponentByClass<UCharacterMovementComponent>())
-	//     {
-	//         MoveComp->MaxWalkSpeed = GetMoveSpeed();
-	//     }
-	// }
+
+	if (GetOwningActor())
+	{
+	   if (UCharacterMovementComponent* MoveComp = GetOwningActor()->FindComponentByClass<UCharacterMovementComponent>())
+	    {
+	       MoveComp->MaxWalkSpeed = GetMoveSpeed();
+	    }
+	 }
 }
 
 // 攻击速度复制回调
